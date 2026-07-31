@@ -9,6 +9,7 @@
  *   node render.js <designer-url> [out.jpg] [width] [height]
  */
 const fs = require("fs");
+const path = require("path");
 const { chromium } = require("playwright");
 const nativeWidgets = require("./nativeWidgets");
 
@@ -110,7 +111,12 @@ if (!url) {
     if (portalFrame) {
       for (const handler of nativeWidgets.handlers) {
         try {
-          const found = await handler.extract(portalFrame);
+          let found = await handler.extract(portalFrame);
+          if (found.length && handler.process) {
+            // process may drop entries (e.g. non-animated GIFs) - only
+            // survivors get hidden, so nothing leaves a blank hole
+            found = await handler.process(found, { outDir: path.dirname(path.resolve(out)) });
+          }
           if (found.length) {
             await handler.hide(portalFrame, found);
             overlays.push(...found);

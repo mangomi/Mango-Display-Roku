@@ -57,7 +57,7 @@ Adding a native widget type touches exactly two registries:
 | Todo | In image | ✅ | Auto-scroll of long lists is lost (static crop). |
 | Chores | In image | ✅ | Badge shine/star animations lost (static). |
 | Meal plan | In image | ✅ | |
-| GIFs & stickers | In image (static frame) | ✅ | Animated GIFs freeze; native animated overlay possible later via Roku's animated Poster support. |
+| GIFs & stickers | **Native overlay** (film strip) | ✅ built | Render service decodes the GIF into a vertical PNG strip (alpha preserved, ≤36 frames, texture-capped, cached by URL+size hash); `GifOverlay` steps it through a clipped window. Any number animate at once. Non-animated GIFs stay in the image. MP4 conversion was rejected: one-Video-node platform limit + no alpha. |
 | Browser snapshot | In image | ✅ | Already a screenshot upstream. |
 | Marketwatch (TradingView) | In image | ✅ | Live tickers become render-cadence snapshots. |
 | Power BI | In image | ✅ | Render-cadence snapshots. |

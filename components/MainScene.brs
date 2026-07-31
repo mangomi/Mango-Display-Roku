@@ -22,7 +22,8 @@ sub init()
 
     ' native-widget registry: manifest overlay type -> SceneGraph component
     ' (add future types here AND in render-service/nativeWidgets.js)
-    m.overlayRegistry = { clock: "ClockOverlay" }
+    m.overlayRegistry = { clock: "ClockOverlay", gif: "GifOverlay" }
+    m.assetBaseUrl = "http://10.0.0.74:8090/"
     m.overlayGroup = m.top.findNode("overlayGroup")
     m.pendingManifest = invalid
 
@@ -105,6 +106,8 @@ sub applyOverlays(manifest as object)
         compName = m.overlayRegistry.Lookup(ov.type)
         if compName <> invalid
             node = CreateObject("roSGNode", compName)
+            ' assetBase before config: config observers build asset URLs
+            if node.hasField("assetBase") then node.assetBase = m.assetBaseUrl
             node.config = ov
             m.overlayGroup.appendChild(node)
         end if

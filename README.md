@@ -60,6 +60,18 @@ Sideloaded apps need no Roku account, store listing, or certification.
 Only one sideloaded app can exist at a time; re-uploading replaces it
 but keeps the registry (so the device code survives updates).
 
+## TV setup for always-on use
+
+Roku offers no API for an app to block the screensaver, so each TV needs
+a one-time setting (same instruction commercial signage apps give):
+
+**Home → Settings → Theme → Screensaver wait time → Disable screensaver**
+(older Roku models: Settings → Screensaver)
+
+Future phase: ship a companion Mango Display *screensaver channel* so the
+dashboard appears automatically whenever the TV idles — turns the
+constraint into an auto-start feature.
+
 ## Debugging
 
 BrightScript console (prints, crashes) streams over telnet:

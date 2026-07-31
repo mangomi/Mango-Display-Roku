@@ -151,6 +151,137 @@ const clockHandler = {
   },
 };
 
+// ---- GIF / stickers: animated as alpha-preserving film strips ----------
+// (MP4 conversion is the wrong tool here: Roku allows ONE active Video
+// node per channel and H.264 has no alpha, which kills transparent
+// stickers. See NATIVE_WIDGETS.md.)
+const crypto = require("crypto");
+const fsHandlers = require("fs");
+const pathHandlers = require("path");
+
+const GIF_MAX_FRAMES = 36;
+const GIF_MAX_STRIP_PIXELS = 4000000; // ~16MB RGBA texture budget per widget
+
+const gifHandler = {
+  type: "gif",
+
+  async extract(frame) {
+    return await frame.evaluate(() => {
+      const out = [];
+      document.querySelectorAll('[id^="gif_"]').forEach((container) => {
+        const m = container.id.match(/^gif_(\d+)_(\d+)$/);
+        if (!m) return;
+        const img = container.querySelector("img");
+        if (!img || !img.src || img.offsetParent === null) return;
+        const box = img.getBoundingClientRect();
+        // object-fit: contain -> the drawn content rect inside the box
+        let rect = { x: box.x, y: box.y, w: box.width, h: box.height };
+        if (img.naturalWidth > 0 && img.naturalHeight > 0 && box.width > 0 && box.height > 0) {
+          const scale = Math.min(box.width / img.naturalWidth, box.height / img.naturalHeight);
+          const w = img.naturalWidth * scale;
+          const h = img.naturalHeight * scale;
+          rect = { x: box.x + (box.width - w) / 2, y: box.y + (box.height - h) / 2, w, h };
+        }
+        out.push({
+          type: "gif",
+          widgetSettingId: parseInt(m[1], 10),
+          page: parseInt(m[2], 10),
+          src: img.src,
+          rect,
+        });
+      });
+      return out;
+    });
+  },
+
+  async hide(frame, overlays) {
+    await frame.evaluate((list) => {
+      list.forEach((o) => {
+        const el = document.getElementById("gif_" + o.widgetSettingId + "_" + o.page);
+        if (el) el.style.opacity = "0";
+      });
+    }, overlays);
+  },
+
+  // after extract/hide: fetch each GIF, decode, and write a vertical PNG
+  // film strip (frames stacked) sized exactly to the on-screen rect
+  async process(overlays, ctx) {
+    const sharp = require("sharp");
+    for (const o of overlays) {
+      try {
+        const frameW = Math.max(1, Math.round(o.rect.w));
+        const frameH = Math.max(1, Math.round(o.rect.h));
+        const cacheKey = crypto
+          .createHash("md5")
+          .update(o.src + "|" + frameW + "x" + frameH)
+          .digest("hex");
+        const fileName = "overlay_gif_" + cacheKey + ".png";
+        const filePath = pathHandlers.join(ctx.outDir, fileName);
+
+        if (!fsHandlers.existsSync(filePath)) {
+          const resp = await fetch(o.src);
+          if (!resp.ok) throw new Error("fetch " + resp.status);
+          const buf = Buffer.from(await resp.arrayBuffer());
+          const meta = await sharp(buf, { animated: true }).metadata();
+          const total = meta.pages || 1;
+          if (total < 2) {
+            // not animated - leave it in the image (undo nothing; the
+            // overlay entry is dropped below)
+            o.skip = true;
+            continue;
+          }
+          // frame budget: subsample long GIFs, respect texture ceiling
+          let maxFrames = Math.min(GIF_MAX_FRAMES, Math.floor(GIF_MAX_STRIP_PIXELS / (frameW * frameH)));
+          if (maxFrames < 2) maxFrames = 2;
+          const step = Math.max(1, Math.ceil(total / maxFrames));
+          const indices = [];
+          for (let i = 0; i < total; i += step) indices.push(i);
+
+          const delays = Array.isArray(meta.delay) ? meta.delay : [];
+          const avgDelay =
+            delays.length > 0
+              ? delays.reduce((a, b) => a + (b > 0 ? b : 80), 0) / delays.length
+              : 80;
+
+          const frames = [];
+          for (const idx of indices) {
+            frames.push(
+              await sharp(buf, { page: idx })
+                .resize(frameW, frameH, { fit: "fill" })
+                .png()
+                .toBuffer(),
+            );
+          }
+          const strip = sharp({
+            create: {
+              width: frameW,
+              height: frameH * frames.length,
+              channels: 4,
+              background: { r: 0, g: 0, b: 0, alpha: 0 },
+            },
+          }).composite(frames.map((f, i) => ({ input: f, top: i * frameH, left: 0 })));
+          await strip.png().toFile(filePath);
+          o.frameMs = Math.round(avgDelay * step);
+          o.frameCount = frames.length;
+        } else {
+          // cached strip: recover frame count from the file dimensions
+          const meta = await sharp(filePath).metadata();
+          o.frameCount = Math.max(1, Math.round(meta.height / frameH));
+          o.frameMs = o.frameMs || 80;
+        }
+        o.stripFile = fileName;
+        o.frameW = frameW;
+        o.frameH = frameH;
+        delete o.src;
+      } catch (e) {
+        console.error("gif strip failed (" + (o.src || "").slice(0, 80) + "):", e.message);
+        o.skip = true;
+      }
+    }
+    return overlays.filter((o) => !o.skip);
+  },
+};
+
 // Add future handlers here (countdown, photos, video) - one object each,
 // and a matching entry in the Roku app's m.overlayRegistry.
-module.exports = { handlers: [clockHandler] };
+module.exports = { handlers: [clockHandler, gifHandler] };

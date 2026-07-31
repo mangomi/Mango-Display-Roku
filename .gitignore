@@ -2,3 +2,5 @@ MangoDisplayRoku.zip
 .DS_Store
 node_modules/
 render-service/display.jpg
+render-service/display.manifest.json
+render-service/overlay_gif_*.png

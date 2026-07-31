@@ -35,7 +35,7 @@ sub init()
 
     ' native-widget registry: manifest overlay type -> SceneGraph component
     ' (add future types here AND in render-service/nativeWidgets.js)
-    m.overlayRegistry = { clock: "ClockOverlay", gif: "GifOverlay", slideshow: "SlideshowOverlay" }
+    m.overlayRegistry = { clock: "ClockOverlay", gif: "GifOverlay", slideshow: "SlideshowOverlay", countdown: "CountdownOverlay" }
 
     m.slots.slotA.poster.observeField("loadStatus", "onPosterLoad")
     m.slots.slotB.poster.observeField("loadStatus", "onPosterLoad")

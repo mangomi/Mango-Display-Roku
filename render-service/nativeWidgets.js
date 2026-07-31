@@ -587,6 +587,106 @@ const slideshowHandler = {
   },
 };
 
-// Add future handlers here (countdown, video) - one object each, and a
-// matching entry in the Roku app's m.overlayRegistry.
-module.exports = { handlers: [clockHandler, gifHandler, weatherIconHandler, slideshowHandler] };
+// ---- countdown: numbers ticked natively, chrome stays baked ------------
+// Box backgrounds, unit labels and the event name are static - they stay
+// in the image. Only the .value numbers are hidden and re-rendered on
+// device. The target is shipped as an absolute epoch computed in the
+// render browser (matches how the portal parses eventTime in device-local
+// time), so the Roku only does timezone-free epoch math.
+const countdownHandler = {
+  type: "countdown",
+
+  async extract(frame) {
+    return await frame.evaluate(() => {
+      const out = [];
+      // event times live in the scope's page/widget tree
+      const eventTimeByWidget = {};
+      if (window.angular) {
+        const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
+        for (const r of roots) {
+          if (!r) continue;
+          const inj = window.angular.element(r).injector();
+          if (!inj) continue;
+          let groups = null;
+          const walk = (s) => {
+            if (!s || groups) return;
+            if (s.groups && s.groups.length) {
+              groups = s.groups;
+              return;
+            }
+            walk(s.$$childHead);
+            walk(s.$$nextSibling);
+          };
+          walk(inj.get("$rootScope"));
+          (groups || []).forEach((g) => {
+            (g.widgets || []).forEach((w) => {
+              const cd = w.data && w.data.countDownWidget;
+              if (cd && cd.eventTime) eventTimeByWidget[w.widgetSettingId] = cd.eventTime;
+            });
+          });
+          break;
+        }
+      }
+
+      document.querySelectorAll('[id^="countdown_"]').forEach((container) => {
+        const m = container.id.match(/^countdown_(\d+)_(\d+)$/);
+        if (!m) return;
+        const wid = parseInt(m[1], 10);
+        const eventTime = eventTimeByWidget[wid];
+        if (!eventTime) return;
+        const target = Date.parse(String(eventTime).replace(" ", "T"));
+        if (!target) return;
+
+        const elements = {};
+        container.querySelectorAll(".count-down-box").forEach((box) => {
+          const section = box.getAttribute("data-countdown-section");
+          const value = box.querySelector(".value");
+          if (!section || !value || value.offsetParent === null) return;
+          const r = value.getBoundingClientRect();
+          const cs = getComputedStyle(value);
+          elements[section] = {
+            rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+            fontSizePx: parseFloat(cs.fontSize),
+            bold: parseInt(cs.fontWeight, 10) >= 600,
+            align: cs.textAlign,
+            color: (() => {
+              const mm = cs.color.match(/rgba?\(([^)]+)\)/);
+              if (!mm) return "#FFFFFFFF";
+              const p = mm[1].split(",").map((s) => parseFloat(s.trim()));
+              const h = (n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+              const a = p.length > 3 ? Math.round(p[3] * 255) : 255;
+              return ("#" + h(p[0]) + h(p[1]) + h(p[2]) + h(a)).toUpperCase();
+            })(),
+          };
+        });
+        if (Object.keys(elements).length === 0) return;
+        out.push({
+          type: "countdown",
+          widgetSettingId: wid,
+          page: parseInt(m[2], 10),
+          targetEpochSeconds: Math.floor(target / 1000),
+          elements,
+        });
+      });
+      return out;
+    });
+  },
+
+  async hide(frame, overlays) {
+    await frame.evaluate((list) => {
+      list.forEach((o) => {
+        const container = document.getElementById("countdown_" + o.widgetSettingId + "_" + o.page);
+        if (!container) return;
+        container.querySelectorAll(".count-down-box .value").forEach((el) => {
+          el.style.opacity = "0";
+        });
+      });
+    }, overlays);
+  },
+};
+
+// Add future handlers here (video, background slideshow) - one object
+// each, and a matching entry in the Roku app's m.overlayRegistry.
+module.exports = {
+  handlers: [clockHandler, gifHandler, weatherIconHandler, slideshowHandler, countdownHandler],
+};

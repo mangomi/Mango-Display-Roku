@@ -21,7 +21,7 @@ const ENV = {
 const DISPLAY = {
   major: 1,
   minor: 2336,
-  deviceId: "RK127621134",
+  deviceId: "RK569557324",
   page: 0,
   canvasW: 1920, // layout coordinate space - portal has no responsive reflow
   canvasH: 1080,

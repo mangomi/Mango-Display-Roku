@@ -15,6 +15,10 @@ const nativeWidgets = require("./nativeWidgets");
 
 const url = process.argv[2];
 const out = process.argv[3] || "display.jpg";
+// --meta: load + extract page metadata only (no screenshot/overlays) -
+// the watcher polls this to catch page-setting changes the backend
+// doesn't push socket events for
+const metaOnly = out === "--meta";
 // canvas = the coordinate space layouts are authored in (portal has no
 // responsive reflow, so this must stay the design resolution)
 const width = parseInt(process.argv[4] || "1920", 10);
@@ -25,8 +29,52 @@ const outWidth = parseInt(process.argv[6] || String(width), 10);
 const outHeight = parseInt(process.argv[7] || String(height), 10);
 
 if (!url) {
-  console.error("usage: node render.js <designer-url> [out.jpg] [canvasW] [canvasH] [outW] [outH]");
+  console.error("usage: node render.js <designer-url> [out.jpg|--meta] [canvasW] [canvasH] [outW] [outH]");
   process.exit(1);
+}
+
+// `groups` lives on the MainCtrl child scope, so walk the scope tree
+// from $rootScope (works even with Angular debug info off)
+async function extractPageMeta(page) {
+  const portalFrame = page.frames().find((f) => f.url().includes("designer=true"));
+  if (!portalFrame) return null;
+  try {
+    return await portalFrame.evaluate(() => {
+      if (!window.angular) return null;
+      const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
+      for (const r of roots) {
+        if (!r) continue;
+        const inj = window.angular.element(r).injector();
+        if (!inj) continue;
+        let found = null;
+        const walk = (s) => {
+          if (!s || found) return;
+          if (s.groups && s.groups.length) {
+            found = s.groups;
+            return;
+          }
+          walk(s.$$childHead);
+          walk(s.$$nextSibling);
+        };
+        walk(inj.get("$rootScope"));
+        if (found) {
+          return {
+            pageCount: found.length,
+            pages: found.map((g) => ({
+              delaySeconds: parseInt(g.delay, 10) || 60,
+              transition: g.transition || "fade",
+              autoRotate: g.isAutoPageRotation === true,
+            })),
+          };
+        }
+        break;
+      }
+      return null;
+    });
+  } catch (e) {
+    console.error("page meta extraction failed:", e.message);
+    return null;
+  }
 }
 
 (async () => {
@@ -107,16 +155,28 @@ if (!url) {
     // is needed after the ready signal
     await page.waitForTimeout(400);
 
+    if (metaOnly) {
+      const meta = await extractPageMeta(page);
+      console.log("META:" + JSON.stringify(meta));
+      return;
+    }
+
     // native-widget pass (see NATIVE_WIDGETS.md): measure overlays, hide
     // their dynamic elements, screenshot, then run live captures (which
     // need animations running again), and publish the manifest last
     const outDir = path.dirname(path.resolve(out));
+    // designer mode keeps every page in the DOM (hidden pages use
+    // visibility:hidden), so extractors see all pages' widgets - keep
+    // only the rendered page's
+    const pageIdxMatch = url.match(/[?&]page=(\d+)/);
+    const pageIdx = pageIdxMatch ? parseInt(pageIdxMatch[1], 10) : 0;
     const groups = [];
     const portalFrame = page.frames().find((f) => f.url().includes("designer=true"));
     if (portalFrame) {
       for (const handler of nativeWidgets.handlers) {
         try {
           let found = await handler.extract(portalFrame);
+          found = found.filter((o) => o.page === undefined || o.page === pageIdx);
           if (found.length && handler.process) {
             // process may drop entries (e.g. non-animated GIFs) - only
             // survivors get hidden, so nothing leaves a blank hole
@@ -155,12 +215,21 @@ if (!url) {
       }
     }
 
+    // page metadata (count, per-page delay/transition/rotation) straight
+    // from the portal's Angular scope - drives multi-page rendering and
+    // the Roku's page carousel
+    const pageMeta = await extractPageMeta(page);
+
     const overlays = groups.flatMap((g) => g.items);
     fs.writeFileSync(
       out.replace(/\.jpe?g$/i, "") + ".manifest.json",
-      JSON.stringify({ canvas: { width, height }, overlays }, null, 1),
+      JSON.stringify({ canvas: { width, height }, overlays, pageMeta }, null, 1),
     );
-    console.log("manifest:", overlays.length, "overlay(s)");
+    console.log(
+      "manifest:",
+      overlays.length,
+      "overlay(s)" + (pageMeta ? ", " + pageMeta.pageCount + " page(s)" : ""),
+    );
     console.log("saved", out, outWidth + "x" + outHeight + " (canvas " + width + "x" + height + ")");
   } finally {
     await browser.close();

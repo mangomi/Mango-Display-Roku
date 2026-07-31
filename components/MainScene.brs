@@ -9,32 +9,47 @@ sub init()
 
     m.codeLabel = m.top.findNode("codeLabel")
     m.pairingGroup = m.top.findNode("pairingGroup")
-    m.imageA = m.top.findNode("imageA")
-    m.imageB = m.top.findNode("imageB")
+    m.pageHost = m.top.findNode("pageHost")
     m.refreshTimer = m.top.findNode("refreshTimer")
+    m.pageTimer = m.top.findNode("pageTimer")
     m.top.findNode("instructionsLabel").text = "Setup at " + m.env.setupHost + " using any browser"
 
-    ' Rendered by render-service (watch.js re-renders on socket pushes);
-    ' production swaps this for a CDN URL from a manifest
-    m.imageBaseUrl = "http://10.0.0.74:8090/display.jpg"
-    m.manifestUrl = "http://10.0.0.74:8090/display.manifest.json"
+    ' each slot = page image + that page's overlays, animated as one unit
+    m.slots = {
+        slotA: {
+            slot: m.top.findNode("slotA")
+            poster: m.top.findNode("imageA")
+            overlays: m.top.findNode("overlaysA")
+        }
+        slotB: {
+            slot: m.top.findNode("slotB")
+            poster: m.top.findNode("imageB")
+            overlays: m.top.findNode("overlaysB")
+        }
+    }
+
+    ' render service endpoints; display.json carries pages + overlays
+    m.assetBaseUrl = "http://10.0.0.74:8090/"
+    m.pagesUrl = m.assetBaseUrl + "display.json"
     m.versionBaseUrl = "http://10.0.0.74:8091"
 
     ' native-widget registry: manifest overlay type -> SceneGraph component
     ' (add future types here AND in render-service/nativeWidgets.js)
     m.overlayRegistry = { clock: "ClockOverlay", gif: "GifOverlay" }
-    m.assetBaseUrl = "http://10.0.0.74:8090/"
-    m.overlayGroup = m.top.findNode("overlayGroup")
-    m.pendingManifest = invalid
 
-    m.imageA.observeField("loadStatus", "onPosterLoad")
-    m.imageB.observeField("loadStatus", "onPosterLoad")
+    m.slots.slotA.poster.observeField("loadStatus", "onPosterLoad")
+    m.slots.slotB.poster.observeField("loadStatus", "onPosterLoad")
     m.refreshTimer.observeField("fire", "onRefreshTick")
-    m.frontId = ""
+    m.pageTimer.observeField("fire", "onPageTimer")
 
-    ' The code is generated on the render thread and put on screen
-    ' synchronously, before the pairing task starts — the task only
-    ' consumes it
+    m.frontKey = ""
+    m.pages = invalid
+    m.latestPages = invalid
+    m.pageIndex = 0
+    m.pendingLoad = invalid
+    m.activeAnim = invalid
+    m.animCtx = invalid
+
     m.deviceCode = getOrCreateCode(false)
     startPairing()
 end sub
@@ -61,11 +76,18 @@ end function
 
 sub startPairing()
     m.refreshTimer.control = "stop"
+    m.pageTimer.control = "stop"
     if m.versionTask <> invalid then m.versionTask.control = "STOP"
-    m.frontId = ""
-    m.imageA.visible = false
-    m.imageB.visible = false
-    m.overlayGroup.visible = false
+    stopActiveAnim()
+    m.frontKey = ""
+    m.pages = invalid
+    m.latestPages = invalid
+    m.pageIndex = 0
+    m.pendingLoad = invalid
+    for each k in m.slots
+        m.slots[k].slot.visible = false
+        clearOverlays(m.slots[k].overlays)
+    end for
     m.pairingGroup.visible = true
     m.codeLabel.text = m.deviceCode
 
@@ -79,80 +101,257 @@ end sub
 sub onPaired()
     r = m.task.result
     if r = invalid then return
-    print "[Mango] paired (major "; r.major; " minor "; r.minor; "), starting image loop"
-    ' primary refresh signal: long-poll notifications from the render service
+    print "[Mango] paired (major "; r.major; " minor "; r.minor; "), waiting for display.json"
     m.versionTask = CreateObject("roSGNode", "VersionTask")
     m.versionTask.waitUrl = m.versionBaseUrl
-    m.versionTask.manifestUrl = m.manifestUrl
+    m.versionTask.manifestUrl = m.pagesUrl
     m.versionTask.observeField("version", "onVersionChange")
     m.versionTask.control = "RUN"
-    ' fallback cadence + retry loop if the first fetch fails
+    ' fallback cadence + retry loop if a fetch fails
     m.refreshTimer.control = "start"
-    loadFreshImage()
 end sub
 
 sub onVersionChange()
-    ' hold the matching manifest until the new image is actually shown
-    m.pendingManifest = m.versionTask.manifest
-    loadFreshImage()
+    man = m.versionTask.manifest
+    if man = invalid or man.pages = invalid or man.pages.Count() = 0 then return
+    print "[Mango] display.json: "; man.pages.Count(); " page(s)"
+    ' never apply mid-transition/mid-load - deferred to finalizeSwap
+    m.latestPages = man.pages
+    maybeApplyPages()
 end sub
 
-sub applyOverlays(manifest as object)
-    while m.overlayGroup.getChildCount() > 0
-        m.overlayGroup.removeChildIndex(0)
+sub maybeApplyPages()
+    if m.latestPages = invalid then return
+    if m.activeAnim <> invalid or m.pendingLoad <> invalid then return
+    m.pages = m.latestPages
+    m.latestPages = invalid
+    if m.pageIndex >= m.pages.Count() then m.pageIndex = 0
+    ' quiet refresh of the current page (no transition)
+    loadPage(m.pageIndex, false)
+end sub
+
+sub onRefreshTick()
+    if m.pages <> invalid and m.pendingLoad = invalid and m.activeAnim = invalid
+        loadPage(m.pageIndex, false)
+    end if
+end sub
+
+sub onPageTimer()
+    if m.pages = invalid or m.pages.Count() < 2 then return
+    loadPage((m.pageIndex + 1) mod m.pages.Count(), true)
+end sub
+
+function frontEntry() as object
+    if m.frontKey = "" then return invalid
+    return m.slots[m.frontKey]
+end function
+
+function backKey() as string
+    if m.frontKey = "slotA" then return "slotB"
+    return "slotA"
+end function
+
+sub resetSlotTransforms(slot as object)
+    slot.translation = [0, 0]
+    slot.scale = [1.0, 1.0]
+    slot.opacity = 1.0
+    slot.rotation = 0.0
+    slot.scaleRotateCenter = [960, 540]
+end sub
+
+sub loadPage(index as integer, animated as boolean)
+    if m.pages = invalid then return
+    if index >= m.pages.Count() then index = 0
+    pg = m.pages[index]
+    bk = backKey()
+    entry = m.slots[bk]
+    ' incoming slot draws on top during transitions
+    m.pageHost.removeChild(entry.slot)
+    m.pageHost.appendChild(entry.slot)
+    resetSlotTransforms(entry.slot)
+    ' the page's overlays ride inside the slot, so they move/fade with it
+    applyOverlays(pg.overlays, entry.overlays)
+    m.pendingLoad = { index: index, animated: animated, transition: pg.transition, slotKey: bk }
+    ts = CreateObject("roDateTime").AsSeconds().ToStr()
+    entry.poster.uri = m.assetBaseUrl + pg.image + "?t=" + ts
+end sub
+
+sub onPosterLoad(ev as object)
+    node = ev.getRoSGNode()
+    if m.pendingLoad = invalid then return
+    entry = m.slots[m.pendingLoad.slotKey]
+    if node.id <> entry.poster.id then return
+    status = node.loadStatus
+    if status = "failed"
+        print "[Mango] image load failed: "; node.uri
+        m.pendingLoad = invalid
+        maybeApplyPages()
+        return
+    end if
+    if status <> "ready" then return
+    pl = m.pendingLoad
+    m.pendingLoad = invalid
+    if pl.animated and m.frontKey <> ""
+        startTransition(pl.transition, pl.slotKey, pl.index)
+    else
+        entry.slot.visible = true
+        finalizeSwap(pl.slotKey, pl.index)
+    end if
+end sub
+
+sub finalizeSwap(newKey as string, index as integer)
+    old = frontEntry()
+    if old <> invalid and m.frontKey <> newKey
+        old.slot.visible = false
+        clearOverlays(old.overlays)
+        resetSlotTransforms(old.slot)
+    end if
+    m.frontKey = newKey
+    entry = m.slots[newKey]
+    resetSlotTransforms(entry.slot)
+    entry.slot.visible = true
+    m.pairingGroup.visible = false
+    m.pageIndex = index
+    armPageTimer()
+    ' apply any manifest that arrived while a transition/load was running
+    maybeApplyPages()
+end sub
+
+sub armPageTimer()
+    m.pageTimer.control = "stop"
+    if m.pages = invalid or m.pages.Count() < 2 then return
+    pg = m.pages[m.pageIndex]
+    if pg.autoRotate <> true then return
+    d = 60
+    if pg.delaySeconds <> invalid then d = Int(pg.delaySeconds)
+    if d < 3 then d = 3
+    m.pageTimer.duration = d
+    m.pageTimer.control = "start"
+end sub
+
+' ---- transitions (portal parity: 3s ease; see NATIVE_WIDGETS.md) -------
+
+sub stopActiveAnim()
+    if m.activeAnim <> invalid
+        m.activeAnim.control = "stop"
+        m.top.removeChild(m.activeAnim)
+        m.activeAnim = invalid
+        m.animCtx = invalid
+    end if
+end sub
+
+sub addVec(anim as object, field as string, keyValue as object)
+    i = CreateObject("roSGNode", "Vector2DFieldInterpolator")
+    i.key = [0.0, 1.0]
+    i.keyValue = keyValue
+    i.fieldToInterp = field
+    anim.appendChild(i)
+end sub
+
+sub addFloat(anim as object, field as string, keyValue as object)
+    i = CreateObject("roSGNode", "FloatFieldInterpolator")
+    i.key = [0.0, 1.0]
+    i.keyValue = keyValue
+    i.fieldToInterp = field
+    anim.appendChild(i)
+end sub
+
+function buildTransition(name as string, frontSlotId as string, back as object) as object
+    d = 3.0
+    bid = back.id
+    if name = "flip"
+        ' Roku has no 3D transforms; approximate the card flip with a
+        ' horizontal squash-and-expand (whole slot, overlays included)
+        back.scale = [0.0001, 1.0]
+        seq = CreateObject("roSGNode", "SequentialAnimation")
+        a1 = CreateObject("roSGNode", "Animation")
+        a1.duration = d / 2
+        a1.easeFunction = "inQuad"
+        addVec(a1, frontSlotId + ".scale", [[1.0, 1.0], [0.0001, 1.0]])
+        a2 = CreateObject("roSGNode", "Animation")
+        a2.duration = d / 2
+        a2.easeFunction = "outQuad"
+        addVec(a2, bid + ".scale", [[0.0001, 1.0], [1.0, 1.0]])
+        seq.appendChild(a1)
+        seq.appendChild(a2)
+        return seq
+    end if
+
+    a = CreateObject("roSGNode", "Animation")
+    a.duration = d
+    a.easeFunction = "inOutCubic"
+    if name = "slideleft"
+        back.translation = [1920, 0]
+        addVec(a, bid + ".translation", [[1920, 0], [0, 0]])
+    else if name = "slideright"
+        back.translation = [-1920, 0]
+        addVec(a, bid + ".translation", [[-1920, 0], [0, 0]])
+    else if name = "slideup"
+        back.translation = [0, 1080]
+        addVec(a, bid + ".translation", [[0, 1080], [0, 0]])
+    else if name = "slidedown"
+        back.translation = [0, -1080]
+        addVec(a, bid + ".translation", [[0, -1080], [0, 0]])
+    else if name = "pop"
+        back.scale = [0.3, 0.3]
+        back.opacity = 0.0
+        addVec(a, bid + ".scale", [[0.3, 0.3], [1.0, 1.0]])
+        addFloat(a, bid + ".opacity", [0.0, 1.0])
+    else if name = "rotate"
+        back.rotation = 3.14159
+        back.opacity = 0.0
+        back.scale = [0.3, 0.3]
+        addFloat(a, bid + ".rotation", [3.14159, 0.0])
+        addFloat(a, bid + ".opacity", [0.0, 1.0])
+        addVec(a, bid + ".scale", [[0.3, 0.3], [1.0, 1.0]])
+    else ' fade + unknown names
+        back.opacity = 0.0
+        addFloat(a, bid + ".opacity", [0.0, 1.0])
+    end if
+    return a
+end function
+
+sub startTransition(name as string, slotKey as string, index as integer)
+    stopActiveAnim()
+    entry = m.slots[slotKey]
+    anim = buildTransition(name, m.frontKey, entry.slot)
+    entry.slot.visible = true
+    m.top.appendChild(anim)
+    m.activeAnim = anim
+    m.animCtx = { slotKey: slotKey, index: index }
+    anim.observeField("state", "onAnimState")
+    anim.control = "start"
+end sub
+
+sub onAnimState()
+    if m.activeAnim = invalid then return
+    if m.activeAnim.state <> "stopped" then return
+    ctx = m.animCtx
+    stopActiveAnim()
+    finalizeSwap(ctx.slotKey, ctx.index)
+end sub
+
+' ---- overlays ----------------------------------------------------------
+
+sub clearOverlays(container as object)
+    while container.getChildCount() > 0
+        container.removeChildIndex(0)
     end while
-    if manifest = invalid or manifest.overlays = invalid then return
-    for each ov in manifest.overlays
+end sub
+
+sub applyOverlays(overlays as object, container as object)
+    clearOverlays(container)
+    if overlays = invalid then return
+    for each ov in overlays
         compName = m.overlayRegistry.Lookup(ov.type)
         if compName <> invalid
             node = CreateObject("roSGNode", compName)
             ' assetBase before config: config observers build asset URLs
             if node.hasField("assetBase") then node.assetBase = m.assetBaseUrl
             node.config = ov
-            m.overlayGroup.appendChild(node)
+            container.appendChild(node)
         end if
     end for
-end sub
-
-' the poster that is NOT currently showing
-function backPoster() as object
-    if m.frontId = "imageA"
-        return m.imageB
-    end if
-    return m.imageA
-end function
-
-sub loadFreshImage()
-    ts = CreateObject("roDateTime").AsSeconds().ToStr()
-    backPoster().uri = m.imageBaseUrl + "?t=" + ts
-end sub
-
-sub onRefreshTick()
-    loadFreshImage()
-end sub
-
-sub onPosterLoad(ev as object)
-    node = ev.getRoSGNode()
-    if node.id = m.frontId then return
-    status = node.loadStatus
-    if status = "ready"
-        node.visible = true
-        if m.frontId = "imageA"
-            m.imageA.visible = false
-        else if m.frontId = "imageB"
-            m.imageB.visible = false
-        end if
-        m.frontId = node.id
-        m.pairingGroup.visible = false
-        ' swap overlays in lockstep with the image they were measured from
-        if m.pendingManifest <> invalid
-            applyOverlays(m.pendingManifest)
-            m.pendingManifest = invalid
-        end if
-        m.overlayGroup.visible = true
-    else if status = "failed"
-        print "[Mango] image load failed: "; node.uri
-    end if
 end sub
 
 ' Hidden dev helper (no on-screen hint): * discards the code and starts

@@ -66,6 +66,31 @@ Adding a native widget type touches exactly two registries:
 | Seasonal overlays (snow, hearts, …) | Dropped on Roku v1 | ⬜ decide | Animated by nature; either disable for Roku displays or accept static frame. |
 | Touch/remote interactivity | Not supported on Roku | — | Display-side editing (calendar/todo modals) is off; Roku remote can't do it meaningfully. |
 
+## Pages & transitions
+
+Every page renders as its own image + overlay set; `display.json` is the
+Roku's single source of truth: `{ pages: [{ image, delaySeconds,
+transition, autoRotate, overlays }] }`. Page metadata (count, per-page
+delay/transition/rotation flag) is read from the portal's Angular scope
+during the page-0 render (scope-tree walk from `$rootScope` — works with
+debug info off). The Roku rotates pages on each page's own delay and
+animates between them with SceneGraph.
+
+| Portal transition | Roku | Notes |
+|---|---|---|
+| fade | ✅ native | opacity crossfade |
+| slideleft / slideright / slideup / slidedown | ✅ native | position animation |
+| pop | ✅ native | scale + fade from center |
+| rotate | ✅ native | 2-D spin + fade (portal's is 2-D too) |
+| flip | ⚠️ approximated | Roku has no 3-D transforms; horizontal squash-and-expand card flip |
+
+All transitions run at the portal's 3 s ease. Unknown names fall back to
+fade. Each page's image and its native overlays live in one "slot" group
+and the slot is what animates — so the clock fades/slides/squashes in
+lockstep with its page, and the incoming page's overlays ride in live. Designer mode keeps every page in the DOM (hidden pages are
+`visibility:hidden`), so extractors filter overlays by the rendered
+page's index — widget element ids carry it (`clock_<id>_<page>`).
+
 ## Freshness model (who updates what, when)
 
 | Source of change | Mechanism | Latency |

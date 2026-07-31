@@ -8,6 +8,7 @@
  *   node watch.js
  */
 const { execFile } = require("child_process");
+const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const WebSocket = require("ws");
@@ -27,7 +28,6 @@ const DISPLAY = {
   outW: 1280, // device's native resolution (from roDeviceInfo / mirror record)
   outH: 720,
 };
-const OUT_FILE = path.join(__dirname, "display.jpg");
 const DEBOUNCE_MS = 2500;
 const KEEPALIVE_MS = 60000;
 const RECONNECT_MS = 10000;
@@ -93,51 +93,92 @@ function log(...args) {
   console.log(new Date().toISOString(), ...args);
 }
 
-function designerUrl() {
+function designerUrl(pageIndex) {
   return (
     ENV.portalBase +
     "?major=" + DISPLAY.major +
     "&minor=" + DISPLAY.minor +
     "&macaddress=" + DISPLAY.deviceId +
-    "&designer=true&page=" + DISPLAY.page +
+    "&designer=true&page=" + pageIndex +
     "&r=" + Date.now()
   );
 }
 
-function doRender(reason) {
+const pageFile = (i) => path.join(__dirname, "display_p" + i + ".jpg");
+const manifestFor = (f) => f.replace(/\.jpg$/, ".manifest.json");
+
+function renderPage(pageIndex) {
+  return new Promise((resolve) => {
+    execFile(
+      process.execPath,
+      [
+        path.join(__dirname, "render.js"),
+        designerUrl(pageIndex),
+        pageFile(pageIndex),
+        String(DISPLAY.canvasW),
+        String(DISPLAY.canvasH),
+        String(DISPLAY.outW),
+        String(DISPLAY.outH),
+      ],
+      { timeout: 120000 },
+      (err, stdout, stderr) => {
+        if (err) {
+          log("page", pageIndex, "render FAILED:", err.message, (stderr || "").slice(0, 200));
+          resolve(false);
+        } else {
+          log("page", pageIndex, "done:", stdout.trim().split("\n").pop());
+          resolve(true);
+        }
+      },
+    );
+  });
+}
+
+// renders page 0, learns the page list from its manifest, renders the
+// rest, then publishes display.json (the Roku's single source of truth)
+async function doRender(reason) {
   if (rendering) {
     pendingRender = true;
     return;
   }
   rendering = true;
   log("rendering (" + reason + ")...");
-  execFile(
-    process.execPath,
-    [
-      path.join(__dirname, "render.js"),
-      designerUrl(),
-      OUT_FILE,
-      String(DISPLAY.canvasW),
-      String(DISPLAY.canvasH),
-      String(DISPLAY.outW),
-      String(DISPLAY.outH),
-    ],
-    { timeout: 60000 },
-    (err, stdout, stderr) => {
-      rendering = false;
-      if (err) log("render FAILED:", err.message, stderr.slice(0, 300));
-      else {
-        log("render done:", stdout.trim().split("\n").pop());
-        version = Math.max(version + 1, Math.floor(Date.now() / 1000));
-        log("version ->", version);
-        flushWaiters();
-      }
-      if (pendingRender) {
-        pendingRender = false;
-        doRender("queued change");
-      }
-    },
-  );
+  try {
+    if (!(await renderPage(0))) throw new Error("page 0 failed");
+    const man0 = JSON.parse(fs.readFileSync(manifestFor(pageFile(0)), "utf8"));
+    const meta = man0.pageMeta || { pageCount: 1, pages: [] };
+    lastMetaJson = JSON.stringify(man0.pageMeta || null);
+    const manifests = [man0];
+    for (let i = 1; i < meta.pageCount; i++) {
+      manifests.push((await renderPage(i)) ? JSON.parse(fs.readFileSync(manifestFor(pageFile(i)), "utf8")) : null);
+    }
+    const pages = [];
+    for (let i = 0; i < meta.pageCount; i++) {
+      if (!manifests[i]) continue; // failed page: drop from this cycle
+      const mp = meta.pages[i] || {};
+      pages.push({
+        image: path.basename(pageFile(i)),
+        delaySeconds: mp.delaySeconds || 60,
+        transition: mp.transition || "fade",
+        autoRotate: mp.autoRotate === true,
+        overlays: manifests[i].overlays || [],
+      });
+    }
+    fs.writeFileSync(
+      path.join(__dirname, "display.json"),
+      JSON.stringify({ canvas: { width: DISPLAY.canvasW, height: DISPLAY.canvasH }, pages }, null, 1),
+    );
+    version = Math.max(version + 1, Math.floor(Date.now() / 1000));
+    log("display.json:", pages.length, "page(s); version ->", version);
+    flushWaiters();
+  } catch (e) {
+    log("render FAILED:", e.message);
+  }
+  rendering = false;
+  if (pendingRender) {
+    pendingRender = false;
+    doRender("queued change");
+  }
 }
 
 function scheduleRender(reason) {
@@ -147,6 +188,35 @@ function scheduleRender(reason) {
     doRender(reason);
   }, DEBOUNCE_MS);
 }
+
+// ---- page-settings probe -----------------------------------------------
+// The backend does NOT push a socket event when page settings (transition,
+// delay, page add/remove) change, so poll just the metadata every 2 min
+// and re-render when it differs from what was last rendered. TODO(backend):
+// emit a display push on page-setting saves, then this probe can go.
+const META_PROBE_MS = 120000;
+let lastMetaJson = null;
+
+function probePageSettings() {
+  if (rendering) return;
+  execFile(
+    process.execPath,
+    [path.join(__dirname, "render.js"), designerUrl(0), "--meta"],
+    { timeout: 60000 },
+    (err, stdout) => {
+      if (err || rendering) return;
+      const line = (stdout || "").split("\n").find((l) => l.startsWith("META:"));
+      if (!line) return;
+      const metaJson = line.slice(5).trim();
+      if (metaJson === "null") return;
+      if (lastMetaJson !== null && metaJson !== lastMetaJson) {
+        log("page settings changed (probe)");
+        scheduleRender("page settings changed");
+      }
+    },
+  );
+}
+setInterval(probePageSettings, META_PROBE_MS);
 
 // ---- scheduled renders (see NATIVE_WIDGETS.md freshness model) ---------
 // data widgets (weather, calendar, ...) only refresh when a render happens,

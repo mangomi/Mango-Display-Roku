@@ -6,3 +6,6 @@ render-service/display.manifest.json
 render-service/overlay_gif_*.png
 render-service/overlay_wx_*.png
 render-service/overlay_gif_*.json
+render-service/display_p*.jpg
+render-service/display_p*.manifest.json
+render-service/display.json

@@ -35,7 +35,7 @@ sub init()
 
     ' native-widget registry: manifest overlay type -> SceneGraph component
     ' (add future types here AND in render-service/nativeWidgets.js)
-    m.overlayRegistry = { clock: "ClockOverlay", gif: "GifOverlay" }
+    m.overlayRegistry = { clock: "ClockOverlay", gif: "GifOverlay", slideshow: "SlideshowOverlay" }
 
     m.slots.slotA.poster.observeField("loadStatus", "onPosterLoad")
     m.slots.slotB.poster.observeField("loadStatus", "onPosterLoad")
@@ -49,6 +49,8 @@ sub init()
     m.pendingLoad = invalid
     m.activeAnim = invalid
     m.animCtx = invalid
+    m.overlayState = {}
+    m.lastVersionSeconds = 0
 
     m.deviceCode = getOrCreateCode(false)
     startPairing()
@@ -112,6 +114,7 @@ sub onPaired()
 end sub
 
 sub onVersionChange()
+    m.lastVersionSeconds = CreateObject("roDateTime").AsSeconds()
     man = m.versionTask.manifest
     if man = invalid or man.pages = invalid or man.pages.Count() = 0 then return
     print "[Mango] display.json: "; man.pages.Count(); " page(s)"
@@ -131,6 +134,11 @@ sub maybeApplyPages()
 end sub
 
 sub onRefreshTick()
+    ' fallback only: when the long-poll is healthy (a version event in the
+    ' last 90s), reloading would just rebuild live overlays mid-dwell and
+    ' visibly interrupt slideshows - skip
+    now = CreateObject("roDateTime").AsSeconds()
+    if m.lastVersionSeconds > 0 and now - m.lastVersionSeconds < 90 then return
     if m.pages <> invalid and m.pendingLoad = invalid and m.activeAnim = invalid
         loadPage(m.pageIndex, false)
     end if
@@ -333,8 +341,20 @@ end sub
 
 ' ---- overlays ----------------------------------------------------------
 
+function overlayStateKey(cfg as object) as string
+    if cfg = invalid or cfg.widgetSettingId = invalid then return ""
+    return "ov_" + Int(cfg.widgetSettingId).ToStr() + "_" + Int(cfg.page).ToStr()
+end function
+
 sub clearOverlays(container as object)
     while container.getChildCount() > 0
+        child = container.getChild(0)
+        ' stateful overlays (slideshows) remember their position across
+        ' page rotations, so each visit continues instead of restarting
+        if child.hasField("lastIndex")
+            key = overlayStateKey(child.config)
+            if key <> "" then m.overlayState[key] = child.lastIndex
+        end if
         container.removeChildIndex(0)
     end while
 end sub
@@ -348,6 +368,10 @@ sub applyOverlays(overlays as object, container as object)
             node = CreateObject("roSGNode", compName)
             ' assetBase before config: config observers build asset URLs
             if node.hasField("assetBase") then node.assetBase = m.assetBaseUrl
+            if node.hasField("lastIndex")
+                key = overlayStateKey(ov)
+                if key <> "" and m.overlayState.DoesExist(key) then ov.startIndex = m.overlayState[key]
+            end if
             node.config = ov
             container.appendChild(node)
         end if

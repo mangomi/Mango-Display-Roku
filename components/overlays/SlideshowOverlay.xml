@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="SlideshowOverlay" extends="Group">
+    <interface>
+        <field id="config" type="assocarray" />
+        <!-- last shown list position; MainScene persists it across page
+             rotations so each visit continues the album -->
+        <field id="lastIndex" type="integer" value="0" />
+    </interface>
+    <children>
+        <Timer id="slideTimer" repeat="true" duration="60" />
+    </children>
+    <script type="text/brightscript" uri="pkg:/components/overlays/SlideshowOverlay.brs" />
+</component>

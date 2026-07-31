@@ -511,6 +511,82 @@ const weatherIconHandler = {
   },
 };
 
-// Add future handlers here (countdown, photos, video) - one object each,
-// and a matching entry in the Roku app's m.overlayRegistry.
-module.exports = { handlers: [clockHandler, gifHandler, weatherIconHandler] };
+// ---- photo slideshow (image widget) ------------------------------------
+// The portal resolves every source (Unsplash/Google Photos/iCloud/S3)
+// into $scope.imageWidgetList[n].images - a plain URL array. The overlay
+// just carries that list + interval; the Roku crossfades through it
+// natively. The currently-baked photo stays in the image as fallback.
+// Single-image widgets stay baked (no overlay needed).
+const slideshowHandler = {
+  type: "slideshow",
+
+  async extract(frame) {
+    const raw = await frame.evaluate(() => {
+      if (!window.angular) return [];
+      const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
+      let list = null;
+      for (const r of roots) {
+        if (!r) continue;
+        const inj = window.angular.element(r).injector();
+        if (!inj) continue;
+        const walk = (s) => {
+          if (!s || list) return;
+          if (s.imageWidgetList) {
+            list = s.imageWidgetList;
+            return;
+          }
+          walk(s.$$childHead);
+          walk(s.$$nextSibling);
+        };
+        walk(inj.get("$rootScope"));
+        break;
+      }
+      const out = [];
+      (list || []).forEach((d) => {
+        try {
+          const ws = d.widgetSetting || {};
+          const iws = (ws.data && ws.data.imageWidgetSetting) || {};
+          (d.pagenumber || []).forEach((pg) => {
+            const el = document.getElementById("img_" + d.widgetId + "_" + pg + "_1");
+            if (!el) return;
+            const r = el.getBoundingClientRect();
+            if (r.width < 20 || r.height < 20) return;
+            out.push({
+              type: "slideshow",
+              widgetSettingId: d.widgetId,
+              page: parseInt(pg, 10),
+              rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+              images: (d.images || []).slice(0, 60),
+              intervalSeconds: parseInt(iws.imageDelayTime, 10) || 60,
+              cropToFill: iws.isCropToFill === true,
+              transition: iws.transition || "fade",
+            });
+          });
+        } catch (e) {}
+      });
+      return out;
+    });
+    return raw.filter((o) => o.images && o.images.length > 1);
+  },
+
+  // photos are FULLY hidden from the render (Dave's call): with crop
+  // off, a baked photo of a different aspect ratio peeks around the
+  // overlay's contain-fit photos. The widget panel stays baked; the
+  // overlay is the single source of photo pixels. Also hides the
+  // "image is loading" placeholder text so it can't get baked.
+  async hide(frame, overlays) {
+    await frame.evaluate((list) => {
+      list.forEach((o) => {
+        const suffix = o.widgetSettingId + "_" + o.page;
+        ["img_" + suffix + "_1", "img_" + suffix + "_2", "img_loading_" + suffix].forEach((id) => {
+          const el = document.getElementById(id);
+          if (el) el.style.opacity = "0";
+        });
+      });
+    }, overlays);
+  },
+};
+
+// Add future handlers here (countdown, video) - one object each, and a
+// matching entry in the Roku app's m.overlayRegistry.
+module.exports = { handlers: [clockHandler, gifHandler, weatherIconHandler, slideshowHandler] };

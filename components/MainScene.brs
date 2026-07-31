@@ -9,14 +9,19 @@ sub init()
 
     m.codeLabel = m.top.findNode("codeLabel")
     m.pairingGroup = m.top.findNode("pairingGroup")
-    m.displayImage = m.top.findNode("displayImage")
+    m.imageA = m.top.findNode("imageA")
+    m.imageB = m.top.findNode("imageB")
+    m.refreshTimer = m.top.findNode("refreshTimer")
     m.top.findNode("instructionsLabel").text = "Setup at " + m.env.setupHost + " using any browser"
 
-    ' Phase 2 prototype: the display page rendered by render-service/render.js,
-    ' served from the dev Mac (serve.py). Production swaps this for a CDN URL.
-    m.testImageUrl = "http://10.0.0.74:8090/display.jpg"
+    ' Rendered by render-service (watch.js re-renders on socket pushes);
+    ' production swaps this for a CDN URL from a manifest
+    m.imageBaseUrl = "http://10.0.0.74:8090/display.jpg"
 
-    m.displayImage.observeField("loadStatus", "onImageLoad")
+    m.imageA.observeField("loadStatus", "onPosterLoad")
+    m.imageB.observeField("loadStatus", "onPosterLoad")
+    m.refreshTimer.observeField("fire", "onRefreshTick")
+    m.frontId = ""
 
     ' The code is generated on the render thread and put on screen
     ' synchronously, before the pairing task starts — the task only
@@ -46,7 +51,10 @@ function getOrCreateCode(forceNew as boolean) as string
 end function
 
 sub startPairing()
-    m.displayImage.visible = false
+    m.refreshTimer.control = "stop"
+    m.frontId = ""
+    m.imageA.visible = false
+    m.imageB.visible = false
     m.pairingGroup.visible = true
     m.codeLabel.text = m.deviceCode
 
@@ -60,17 +68,44 @@ end sub
 sub onPaired()
     r = m.task.result
     if r = invalid then return
-    print "[Mango] paired (major "; r.major; " minor "; r.minor; "), loading image"
-    m.displayImage.uri = m.testImageUrl
+    print "[Mango] paired (major "; r.major; " minor "; r.minor; "), starting image loop"
+    ' the timer doubles as the retry loop if the first fetch fails
+    m.refreshTimer.control = "start"
+    loadFreshImage()
 end sub
 
-sub onImageLoad()
-    status = m.displayImage.loadStatus
+' the poster that is NOT currently showing
+function backPoster() as object
+    if m.frontId = "imageA"
+        return m.imageB
+    end if
+    return m.imageA
+end function
+
+sub loadFreshImage()
+    ts = CreateObject("roDateTime").AsSeconds().ToStr()
+    backPoster().uri = m.imageBaseUrl + "?t=" + ts
+end sub
+
+sub onRefreshTick()
+    loadFreshImage()
+end sub
+
+sub onPosterLoad(ev as object)
+    node = ev.getRoSGNode()
+    if node.id = m.frontId then return
+    status = node.loadStatus
     if status = "ready"
+        node.visible = true
+        if m.frontId = "imageA"
+            m.imageA.visible = false
+        else if m.frontId = "imageB"
+            m.imageB.visible = false
+        end if
+        m.frontId = node.id
         m.pairingGroup.visible = false
-        m.displayImage.visible = true
     else if status = "failed"
-        print "[Mango] test image failed to load: "; m.displayImage.uri
+        print "[Mango] image load failed: "; node.uri
     end if
 end sub
 

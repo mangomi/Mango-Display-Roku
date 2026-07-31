@@ -11,7 +11,11 @@
             <Label id="instructionsLabel" text="" font="font:MediumSystemFont" color="0xCCCCCCFF" />
         </LayoutGroup>
 
-        <Poster id="displayImage" width="1920" height="1080" loadWidth="1920" loadHeight="1080" loadDisplayMode="scaleToFit" visible="false" />
+        <!-- A/B buffered: the hidden poster loads the fresh image, then the
+             pair swaps, so refreshes never blank the screen -->
+        <Poster id="imageA" width="1920" height="1080" loadWidth="1920" loadHeight="1080" loadDisplayMode="scaleToFit" visible="false" />
+        <Poster id="imageB" width="1920" height="1080" loadWidth="1920" loadHeight="1080" loadDisplayMode="scaleToFit" visible="false" />
+        <Timer id="refreshTimer" duration="20" repeat="true" />
     </children>
     <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />
 </component>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="MainScene" extends="Scene">
+    <children>
+        <Rectangle id="bg" color="0x000000FF" width="1920" height="1080" />
+
+        <!-- Mirrors the Tizen pairing screen: logo, heading, code, setup line -->
+        <LayoutGroup id="pairingGroup" translation="[960, 250]" layoutDirection="vert" horizAlignment="center" itemSpacings="[70, 45, 110]">
+            <Poster id="logo" uri="pkg:/images/logo.png" width="560" height="136" />
+            <Label id="headingLabel" text="Display Device Code" font="font:LargeBoldSystemFont" color="0xFFFFFFFF" />
+            <Label id="codeLabel" text="" font="font:LargeSystemFont" color="0xFFFFFFFF" />
+            <Label id="instructionsLabel" text="" font="font:MediumSystemFont" color="0xCCCCCCFF" />
+        </LayoutGroup>
+
+        <Poster id="displayImage" width="1920" height="1080" loadWidth="1920" loadHeight="1080" loadDisplayMode="scaleToFit" visible="false" />
+    </children>
+    <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />
+</component>

@@ -1,0 +1,89 @@
+/*
+ * Phase 2 prototype: renders one page of a Mango Display as a JPEG.
+ *
+ * Loads the portal in designer mode (same URL the webapp Live Preview
+ * underlay uses), waits for the portal's own mm-designer-ready signal
+ * (fires once every image has resolved, 4s internal cap), then
+ * screenshots the viewport.
+ *
+ *   node render.js <designer-url> [out.jpg] [width] [height]
+ */
+const { chromium } = require("playwright");
+
+const url = process.argv[2];
+const out = process.argv[3] || "display.jpg";
+const width = parseInt(process.argv[4] || "1920", 10);
+const height = parseInt(process.argv[5] || "1080", 10);
+
+if (!url) {
+  console.error("usage: node render.js <designer-url> [out.jpg] [w] [h]");
+  process.exit(1);
+}
+
+(async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width, height } });
+    page.on("pageerror", (e) => console.error("[pageerror]", e.message));
+    page.on("requestfailed", (r) =>
+      console.error("[requestfailed]", r.url().slice(0, 140), r.failure() && r.failure().errorText),
+    );
+    page.on("console", (m) => {
+      if (m.type() === "error") console.error("[console]", m.text().slice(0, 200));
+    });
+    page.on("response", (r) => {
+      if (r.status() >= 400) console.error("[http " + r.status() + "]", r.url().slice(0, 140));
+    });
+
+    // The portal only fires mm-designer-ready when embedded in an iframe
+    // (mainController.js: `window.parent !== window` guard), so mirror how
+    // the layout editor embeds it: a harness page with a viewport-sized
+    // iframe, listening for the signal on the top window
+    await page.addInitScript(() => {
+      window.__mmReady = false;
+      window.addEventListener("message", (e) => {
+        if (e && e.data && e.data.type === "mm-designer-ready") window.__mmReady = true;
+      });
+    });
+
+    // the listener lives in an inline <script> so it exists before the
+    // iframe starts loading (addInitScript does not fire for setContent)
+    await page.setContent(
+      '<!doctype html><html><body style="margin:0;background:#000">' +
+        "<script>window.__mmReady=false;window.addEventListener('message',function(e){" +
+        "if(e&&e.data&&e.data.type==='mm-designer-ready'){window.__mmReady=true;}});<\/script>" +
+        '<iframe src="' + url.replace(/"/g, "&quot;") + '"' +
+        ' style="display:block;border:0;width:' + width + "px;height:" + height + 'px"></iframe>' +
+        "</body></html>",
+      { waitUntil: "load", timeout: 30000 },
+    );
+    try {
+      await page.waitForFunction("window.__mmReady === true", null, { timeout: 15000 });
+      console.log("mm-designer-ready received");
+    } catch (e) {
+      console.error("no ready signal within 15s - capturing anyway");
+      try {
+        console.error("[debug] top __mmReady:", await page.evaluate("typeof window.__mmReady + '=' + window.__mmReady"));
+        console.error("[debug] frames:", page.frames().map((f) => f.url().slice(0, 90)));
+        const portalFrame = page.frames().find((f) => f.url().includes("designer=true"));
+        if (portalFrame) {
+          console.error("[debug] portal sees parent!==window:", await portalFrame.evaluate("window.parent !== window"));
+        }
+      } catch (dbgErr) {
+        console.error("[debug] diagnostics failed:", dbgErr.message);
+      }
+    }
+    // mm-designer-ready fires when images have LOADED, but the portal's page
+    // entrance fade (3s CSS transition) is still running - capturing early
+    // yields a uniformly dim frame. TODO(production): poll the page
+    // container's computed opacity instead of a fixed settle.
+    await page.waitForTimeout(3500);
+    await page.screenshot({ path: out, type: "jpeg", quality: 85 });
+    console.log("saved", out, width + "x" + height);
+  } finally {
+    await browser.close();
+  }
+})().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

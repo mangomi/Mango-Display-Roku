@@ -12,9 +12,9 @@ sub init()
     m.displayImage = m.top.findNode("displayImage")
     m.top.findNode("instructionsLabel").text = "Setup at " + m.env.setupHost + " using any browser"
 
-    ' Placeholder until the server-side render pipeline exists. Swap for a
-    ' per-display rendered page URL in the next phase.
-    m.testImageUrl = "https://picsum.photos/id/1015/1920/1080.jpg"
+    ' Phase 2 prototype: the display page rendered by render-service/render.js,
+    ' served from the dev Mac (serve.py). Production swaps this for a CDN URL.
+    m.testImageUrl = "http://10.0.0.74:8090/display.jpg"
 
     m.displayImage.observeField("loadStatus", "onImageLoad")
 

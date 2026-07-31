@@ -70,13 +70,16 @@ if (!url) {
       { waitUntil: "load", timeout: 30000 },
     );
     // freeze the portal's CSS entrance animations — a screenshot robot
-    // doesn't need the 3s fade, and widgets jump straight to final state
+    // doesn't need the 3s fade, and widgets jump straight to final state.
+    // The handle is kept so live-capture handlers can re-enable animation
+    // after the still is taken.
+    let noAnimStyle = null;
     try {
       const iframeEl = await page.waitForSelector("iframe", { timeout: 10000 });
       const frame = await iframeEl.contentFrame();
       if (frame) {
         await frame.waitForLoadState("domcontentloaded");
-        await frame.addStyleTag({
+        noAnimStyle = await frame.addStyleTag({
           content: "*,*::before,*::after{transition:none !important;animation:none !important;}",
         });
       }
@@ -104,9 +107,11 @@ if (!url) {
     // is needed after the ready signal
     await page.waitForTimeout(400);
 
-    // native-widget pass: measure overlays, hide their dynamic elements,
-    // and publish the manifest next to the image (see NATIVE_WIDGETS.md)
-    const overlays = [];
+    // native-widget pass (see NATIVE_WIDGETS.md): measure overlays, hide
+    // their dynamic elements, screenshot, then run live captures (which
+    // need animations running again), and publish the manifest last
+    const outDir = path.dirname(path.resolve(out));
+    const groups = [];
     const portalFrame = page.frames().find((f) => f.url().includes("designer=true"));
     if (portalFrame) {
       for (const handler of nativeWidgets.handlers) {
@@ -115,25 +120,47 @@ if (!url) {
           if (found.length && handler.process) {
             // process may drop entries (e.g. non-animated GIFs) - only
             // survivors get hidden, so nothing leaves a blank hole
-            found = await handler.process(found, { outDir: path.dirname(path.resolve(out)) });
+            found = await handler.process(found, { outDir });
           }
           if (found.length) {
             await handler.hide(portalFrame, found);
-            overlays.push(...found);
+            groups.push({ handler, items: found });
           }
         } catch (e) {
           console.error("native-widget handler '" + handler.type + "' failed:", e.message);
         }
       }
-      if (overlays.length) await page.waitForTimeout(100);
+      if (groups.length) await page.waitForTimeout(100);
     }
+
+    await page.screenshot({ path: out, type: "jpeg", quality: 85 });
+
+    const captureCtx = {
+      outDir,
+      outScale: outWidth / width,
+      reenableAnimations: async () => {
+        if (noAnimStyle) {
+          await noAnimStyle.evaluate((n) => n.remove()).catch(() => {});
+          noAnimStyle = null;
+          await page.waitForTimeout(250);
+        }
+      },
+    };
+    for (const g of groups) {
+      if (!g.handler.captureAfter) continue;
+      try {
+        g.items = await g.handler.captureAfter(page, portalFrame, g.items, captureCtx);
+      } catch (e) {
+        console.error("live capture '" + g.handler.type + "' failed:", e.message);
+      }
+    }
+
+    const overlays = groups.flatMap((g) => g.items);
     fs.writeFileSync(
       out.replace(/\.jpe?g$/i, "") + ".manifest.json",
       JSON.stringify({ canvas: { width, height }, overlays }, null, 1),
     );
     console.log("manifest:", overlays.length, "overlay(s)");
-
-    await page.screenshot({ path: out, type: "jpeg", quality: 85 });
     console.log("saved", out, outWidth + "x" + outHeight + " (canvas " + width + "x" + height + ")");
   } finally {
     await browser.close();

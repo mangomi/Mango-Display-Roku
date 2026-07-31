@@ -18,16 +18,23 @@ sub onConfig()
     cfg = m.top.config
     if cfg = invalid or cfg.stripFile = invalid then return
     m.frameCount = Int(cfg.frameCount)
+    m.frameW = Int(cfg.frameW)
     m.frameH = Int(cfg.frameH)
+    ' frames live in a cols x rows sprite grid (single sheet capped at
+    ' 2048px per side - GPUs reject taller single-column strips)
+    m.cols = 1
+    if cfg.cols <> invalid then m.cols = Int(cfg.cols)
+    rows = Int((m.frameCount + m.cols - 1) / m.cols)
+    if cfg.rows <> invalid then rows = Int(cfg.rows)
 
     win = m.top.createChild("Group")
     win.translation = [cfg.rect.x, cfg.rect.y]
-    win.clippingRect = [0, 0, Int(cfg.frameW), m.frameH]
+    win.clippingRect = [0, 0, m.frameW, m.frameH]
 
     m.strip = win.createChild("Poster")
     m.strip.uri = m.top.assetBase + cfg.stripFile
-    m.strip.width = Int(cfg.frameW)
-    m.strip.height = m.frameH * m.frameCount
+    m.strip.width = m.cols * m.frameW
+    m.strip.height = rows * m.frameH
     m.strip.observeField("loadStatus", "onStripLoad")
 
     ms = 100
@@ -46,5 +53,7 @@ end sub
 
 sub onFrame()
     m.frame = (m.frame + 1) mod m.frameCount
-    m.strip.translation = [0, -m.frame * m.frameH]
+    col = m.frame mod m.cols
+    row = (m.frame - col) / m.cols
+    m.strip.translation = [-col * m.frameW, -row * m.frameH]
 end sub

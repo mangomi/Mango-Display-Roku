@@ -49,7 +49,7 @@ Adding a native widget type touches exactly two registries:
 | Countdown | **Native overlay** (planned next) | ⬜ planned | Same pattern as clock; day/hour/min/sec boxes. Seconds only possible natively. |
 | Photo slideshow (image widget) | Native overlay (planned) | ⬜ planned | Manifest carries photo URL list + interval; Roku crossfades two Posters inside the rect. Until then: shows the photo current at render time. |
 | Video / YouTube (Iframily video) | Native Video node (planned) | ⬜ planned | Roku plays MP4/HLS natively in the rect. YouTube embeds cannot work on Roku — disable in editor for Roku devices. |
-| Weather | In image | ✅ | Data refreshes via scheduled re-renders (20 min). |
+| Weather | In image + **animated icons as native overlays** | ✅ built | Text/temps stay in the image (refresh via scheduled renders). Animated SVG icons (SMIL/CSS — no frames to decode) are **filmed live in the browser** after the still: each icon's animation period is parsed from its SVG source (`dur=`/`animation:`) and exactly one full cycle is captured (capped at 12 s; unknown periods fall back to a 2.6 s window), so loops wrap seamlessly — the sun completes its rotation instead of snapping back. One shared capture burst serves all icons; each keeps the frames spanning its own cycle. Played by `GifOverlay` (emitted as type `gif`, zero Roku changes). Static icon stays in the image as fallback; captures include the underlying background, so they blend seamlessly. Detection fetches each icon URL Node-side (S3 bucket lacks CORS for in-page reads) and skips static icons. |
 | Calendar (all views) | In image | ✅ | Midnight re-render handles date rollover. |
 | News | In image | ✅ | Headline page advances on re-renders, not every 5 min. |
 | Quotes | In image | ✅ | Quirk: portal picks a random quote per render. |
@@ -57,7 +57,7 @@ Adding a native widget type touches exactly two registries:
 | Todo | In image | ✅ | Auto-scroll of long lists is lost (static crop). |
 | Chores | In image | ✅ | Badge shine/star animations lost (static). |
 | Meal plan | In image | ✅ | |
-| GIFs & stickers | **Native overlay** (film strip) | ✅ built | Render service decodes the GIF into a vertical PNG strip (alpha preserved, ≤36 frames, texture-capped, cached by URL+size hash); `GifOverlay` steps it through a clipped window. Any number animate at once. Non-animated GIFs stay in the image. MP4 conversion was rejected: one-Video-node platform limit + no alpha. |
+| GIFs & stickers | **Native overlay** (sprite grid) | ✅ built | Render service decodes the GIF into a cols×rows PNG sprite sheet (alpha preserved, ≤36 frames, sheet capped at 2048×2048 — GPUs reject taller single-column strips; big stickers trade texture resolution for frame count, never below 35%). Timing lives in a sidecar .json so cache hits keep true speed. `GifOverlay` steps the grid 2-D through a clipped window. Any number animate at once. Non-animated GIFs stay in the image. MP4 conversion rejected: one-Video-node limit + no alpha. |
 | Browser snapshot | In image | ✅ | Already a screenshot upstream. |
 | Marketwatch (TradingView) | In image | ✅ | Live tickers become render-cadence snapshots. |
 | Power BI | In image | ✅ | Render-cadence snapshots. |

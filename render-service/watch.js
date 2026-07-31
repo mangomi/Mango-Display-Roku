@@ -44,7 +44,9 @@ let pendingRender = false;
 // render exists, so pickup is ~instant instead of a blind polling interval.
 const VERSION_PORT = 8091;
 const WAIT_HOLD_MS = 50000; // client uses a 55s wait; always answer first
-let version = 1;
+// epoch-seeded so versions stay monotonic across watcher restarts - a
+// client holding last-seen version N must always see new renders as > N
+let version = Math.floor(Date.now() / 1000);
 let waiters = [];
 
 function respondVersion(res) {
@@ -126,7 +128,7 @@ function doRender(reason) {
       if (err) log("render FAILED:", err.message, stderr.slice(0, 300));
       else {
         log("render done:", stdout.trim().split("\n").pop());
-        version++;
+        version = Math.max(version + 1, Math.floor(Date.now() / 1000));
         log("version ->", version);
         flushWaiters();
       }

@@ -4,3 +4,5 @@ node_modules/
 render-service/display.jpg
 render-service/display.manifest.json
 render-service/overlay_gif_*.png
+render-service/overlay_wx_*.png
+render-service/overlay_gif_*.json

@@ -8,6 +8,7 @@
  *   node watch.js
  */
 const { execFile } = require("child_process");
+const http = require("http");
 const path = require("path");
 const WebSocket = require("ws");
 
@@ -37,6 +38,54 @@ const IGNORE_TYPES = new Set(["socket_connection_success", "check_socket_status"
 let renderTimer = null;
 let rendering = false;
 let pendingRender = false;
+
+// ---- render version + long-poll waiters --------------------------------
+// The Roku long-polls GET /wait?since=N and is answered the moment a newer
+// render exists, so pickup is ~instant instead of a blind polling interval.
+const VERSION_PORT = 8091;
+const WAIT_HOLD_MS = 50000; // client uses a 55s wait; always answer first
+let version = 1;
+let waiters = [];
+
+function respondVersion(res) {
+  res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+  res.end(JSON.stringify({ version }));
+}
+
+function flushWaiters() {
+  const flushed = waiters.splice(0);
+  for (const w of flushed) {
+    clearTimeout(w.timer);
+    respondVersion(w.res);
+  }
+  if (flushed.length) log("notified", flushed.length, "long-poll waiter(s)");
+}
+
+http
+  .createServer((req, res) => {
+    const u = new URL(req.url, "http://localhost");
+    if (u.pathname === "/version") return respondVersion(res);
+    if (u.pathname === "/wait") {
+      const since = parseInt(u.searchParams.get("since") || "0", 10);
+      if (version > since) return respondVersion(res);
+      const w = {
+        res,
+        timer: setTimeout(() => {
+          waiters = waiters.filter((x) => x !== w);
+          respondVersion(res); // timeout: answer with current so client re-arms
+        }, WAIT_HOLD_MS),
+      };
+      waiters.push(w);
+      req.on("close", () => {
+        clearTimeout(w.timer);
+        waiters = waiters.filter((x) => x !== w);
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  })
+  .listen(VERSION_PORT, "0.0.0.0", () => log("version server on 0.0.0.0:" + VERSION_PORT));
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -75,7 +124,12 @@ function doRender(reason) {
     (err, stdout, stderr) => {
       rendering = false;
       if (err) log("render FAILED:", err.message, stderr.slice(0, 300));
-      else log("render done:", stdout.trim().split("\n").pop());
+      else {
+        log("render done:", stdout.trim().split("\n").pop());
+        version++;
+        log("version ->", version);
+        flushWaiters();
+      }
       if (pendingRender) {
         pendingRender = false;
         doRender("queued change");

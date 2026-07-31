@@ -15,7 +15,9 @@
              pair swaps, so refreshes never blank the screen -->
         <Poster id="imageA" width="1920" height="1080" loadWidth="1920" loadHeight="1080" loadDisplayMode="scaleToFit" visible="false" />
         <Poster id="imageB" width="1920" height="1080" loadWidth="1920" loadHeight="1080" loadDisplayMode="scaleToFit" visible="false" />
-        <Timer id="refreshTimer" duration="20" repeat="true" />
+        <!-- fallback only: the VersionTask long-poll is the primary refresh
+             signal; this timer just catches the case where it can't connect -->
+        <Timer id="refreshTimer" duration="60" repeat="true" />
     </children>
     <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />
 </component>

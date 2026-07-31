@@ -17,6 +17,7 @@ sub init()
     ' Rendered by render-service (watch.js re-renders on socket pushes);
     ' production swaps this for a CDN URL from a manifest
     m.imageBaseUrl = "http://10.0.0.74:8090/display.jpg"
+    m.versionBaseUrl = "http://10.0.0.74:8091"
 
     m.imageA.observeField("loadStatus", "onPosterLoad")
     m.imageB.observeField("loadStatus", "onPosterLoad")
@@ -52,6 +53,7 @@ end function
 
 sub startPairing()
     m.refreshTimer.control = "stop"
+    if m.versionTask <> invalid then m.versionTask.control = "STOP"
     m.frontId = ""
     m.imageA.visible = false
     m.imageB.visible = false
@@ -69,8 +71,17 @@ sub onPaired()
     r = m.task.result
     if r = invalid then return
     print "[Mango] paired (major "; r.major; " minor "; r.minor; "), starting image loop"
-    ' the timer doubles as the retry loop if the first fetch fails
+    ' primary refresh signal: long-poll notifications from the render service
+    m.versionTask = CreateObject("roSGNode", "VersionTask")
+    m.versionTask.waitUrl = m.versionBaseUrl
+    m.versionTask.observeField("version", "onVersionChange")
+    m.versionTask.control = "RUN"
+    ' fallback cadence + retry loop if the first fetch fails
     m.refreshTimer.control = "start"
+    loadFreshImage()
+end sub
+
+sub onVersionChange()
     loadFreshImage()
 end sub
 

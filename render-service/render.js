@@ -66,6 +66,21 @@ if (!url) {
         "</body></html>",
       { waitUntil: "load", timeout: 30000 },
     );
+    // freeze the portal's CSS entrance animations — a screenshot robot
+    // doesn't need the 3s fade, and widgets jump straight to final state
+    try {
+      const iframeEl = await page.waitForSelector("iframe", { timeout: 10000 });
+      const frame = await iframeEl.contentFrame();
+      if (frame) {
+        await frame.waitForLoadState("domcontentloaded");
+        await frame.addStyleTag({
+          content: "*,*::before,*::after{transition:none !important;animation:none !important;}",
+        });
+      }
+    } catch (e) {
+      console.error("no-anim CSS injection failed (fade will run):", e.message);
+    }
+
     try {
       await page.waitForFunction("window.__mmReady === true", null, { timeout: 15000 });
       console.log("mm-designer-ready received");
@@ -82,11 +97,9 @@ if (!url) {
         console.error("[debug] diagnostics failed:", dbgErr.message);
       }
     }
-    // mm-designer-ready fires when images have LOADED, but the portal's page
-    // entrance fade (3s CSS transition) is still running - capturing early
-    // yields a uniformly dim frame. TODO(production): poll the page
-    // container's computed opacity instead of a fixed settle.
-    await page.waitForTimeout(3500);
+    // entrance animations are disabled above, so only a short paint settle
+    // is needed after the ready signal
+    await page.waitForTimeout(400);
     await page.screenshot({ path: out, type: "jpeg", quality: 85 });
     console.log("saved", out, outWidth + "x" + outHeight + " (canvas " + width + "x" + height + ")");
   } finally {

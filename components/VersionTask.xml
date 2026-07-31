@@ -2,6 +2,8 @@
 <component name="VersionTask" extends="Task">
     <interface>
         <field id="waitUrl" type="string" />
+        <field id="manifestUrl" type="string" />
+        <field id="manifest" type="assocarray" />
         <field id="version" type="integer" value="0" />
     </interface>
     <script type="text/brightscript" uri="pkg:/components/VersionTask.brs" />

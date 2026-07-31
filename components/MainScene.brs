@@ -17,7 +17,14 @@ sub init()
     ' Rendered by render-service (watch.js re-renders on socket pushes);
     ' production swaps this for a CDN URL from a manifest
     m.imageBaseUrl = "http://10.0.0.74:8090/display.jpg"
+    m.manifestUrl = "http://10.0.0.74:8090/display.manifest.json"
     m.versionBaseUrl = "http://10.0.0.74:8091"
+
+    ' native-widget registry: manifest overlay type -> SceneGraph component
+    ' (add future types here AND in render-service/nativeWidgets.js)
+    m.overlayRegistry = { clock: "ClockOverlay" }
+    m.overlayGroup = m.top.findNode("overlayGroup")
+    m.pendingManifest = invalid
 
     m.imageA.observeField("loadStatus", "onPosterLoad")
     m.imageB.observeField("loadStatus", "onPosterLoad")
@@ -57,6 +64,7 @@ sub startPairing()
     m.frontId = ""
     m.imageA.visible = false
     m.imageB.visible = false
+    m.overlayGroup.visible = false
     m.pairingGroup.visible = true
     m.codeLabel.text = m.deviceCode
 
@@ -74,6 +82,7 @@ sub onPaired()
     ' primary refresh signal: long-poll notifications from the render service
     m.versionTask = CreateObject("roSGNode", "VersionTask")
     m.versionTask.waitUrl = m.versionBaseUrl
+    m.versionTask.manifestUrl = m.manifestUrl
     m.versionTask.observeField("version", "onVersionChange")
     m.versionTask.control = "RUN"
     ' fallback cadence + retry loop if the first fetch fails
@@ -82,7 +91,24 @@ sub onPaired()
 end sub
 
 sub onVersionChange()
+    ' hold the matching manifest until the new image is actually shown
+    m.pendingManifest = m.versionTask.manifest
     loadFreshImage()
+end sub
+
+sub applyOverlays(manifest as object)
+    while m.overlayGroup.getChildCount() > 0
+        m.overlayGroup.removeChildIndex(0)
+    end while
+    if manifest = invalid or manifest.overlays = invalid then return
+    for each ov in manifest.overlays
+        compName = m.overlayRegistry.Lookup(ov.type)
+        if compName <> invalid
+            node = CreateObject("roSGNode", compName)
+            node.config = ov
+            m.overlayGroup.appendChild(node)
+        end if
+    end for
 end sub
 
 ' the poster that is NOT currently showing
@@ -115,6 +141,12 @@ sub onPosterLoad(ev as object)
         end if
         m.frontId = node.id
         m.pairingGroup.visible = false
+        ' swap overlays in lockstep with the image they were measured from
+        if m.pendingManifest <> invalid
+            applyOverlays(m.pendingManifest)
+            m.pendingManifest = invalid
+        end if
+        m.overlayGroup.visible = true
     else if status = "failed"
         print "[Mango] image load failed: "; node.uri
     end if

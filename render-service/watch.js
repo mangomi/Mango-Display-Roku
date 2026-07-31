@@ -146,6 +146,22 @@ function scheduleRender(reason) {
   }, DEBOUNCE_MS);
 }
 
+// ---- scheduled renders (see NATIVE_WIDGETS.md freshness model) ---------
+// data widgets (weather, calendar, ...) only refresh when a render happens,
+// so re-render on a cadence + at local midnight for the date rollover
+const SCHEDULE_MS = 20 * 60 * 1000;
+setInterval(() => scheduleRender("scheduled"), SCHEDULE_MS);
+
+function armMidnightRender() {
+  const now = new Date();
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
+  setTimeout(() => {
+    scheduleRender("midnight");
+    armMidnightRender();
+  }, next.getTime() - now.getTime());
+}
+armMidnightRender();
+
 function connect() {
   const url = ENV.socketBase + DISPLAY.major + "/" + DISPLAY.minor + "/" + DISPLAY.deviceId;
   log("connecting", url);
@@ -154,6 +170,9 @@ function connect() {
 
   ws.on("open", () => {
     log("socket open");
+    // always render once on (re)connect: covers service restarts (stale
+    // clock/date on disk) and any pushes missed while offline
+    scheduleRender("startup");
     keepalive = setInterval(() => {
       try {
         ws.send(JSON.stringify({ type: "check_socket_status" }));

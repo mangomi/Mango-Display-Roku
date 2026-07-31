@@ -8,7 +8,9 @@
  *
  *   node render.js <designer-url> [out.jpg] [width] [height]
  */
+const fs = require("fs");
 const { chromium } = require("playwright");
+const nativeWidgets = require("./nativeWidgets");
 
 const url = process.argv[2];
 const out = process.argv[3] || "display.jpg";
@@ -100,6 +102,31 @@ if (!url) {
     // entrance animations are disabled above, so only a short paint settle
     // is needed after the ready signal
     await page.waitForTimeout(400);
+
+    // native-widget pass: measure overlays, hide their dynamic elements,
+    // and publish the manifest next to the image (see NATIVE_WIDGETS.md)
+    const overlays = [];
+    const portalFrame = page.frames().find((f) => f.url().includes("designer=true"));
+    if (portalFrame) {
+      for (const handler of nativeWidgets.handlers) {
+        try {
+          const found = await handler.extract(portalFrame);
+          if (found.length) {
+            await handler.hide(portalFrame, found);
+            overlays.push(...found);
+          }
+        } catch (e) {
+          console.error("native-widget handler '" + handler.type + "' failed:", e.message);
+        }
+      }
+      if (overlays.length) await page.waitForTimeout(100);
+    }
+    fs.writeFileSync(
+      out.replace(/\.jpe?g$/i, "") + ".manifest.json",
+      JSON.stringify({ canvas: { width, height }, overlays }, null, 1),
+    );
+    console.log("manifest:", overlays.length, "overlay(s)");
+
     await page.screenshot({ path: out, type: "jpeg", quality: 85 });
     console.log("saved", out, outWidth + "x" + outHeight + " (canvas " + width + "x" + height + ")");
   } finally {

@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 rm -f MangoDisplayRoku.zip
-zip -r MangoDisplayRoku.zip manifest source components images -x '*.DS_Store'
+zip -r MangoDisplayRoku.zip manifest source components images fonts -x '*.DS_Store'
 echo ""
 echo "Created MangoDisplayRoku.zip"
 echo "Install via browser at http://ROKU_TV_IP (Application Installer), or:"

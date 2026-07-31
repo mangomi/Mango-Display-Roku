@@ -7,6 +7,27 @@ sub init()
     m.top.functionName = "runVersionLoop"
 end sub
 
+sub fetchManifest(ver as integer)
+    url = m.top.manifestUrl
+    if url = "" then return
+    req = CreateObject("roUrlTransfer")
+    port = CreateObject("roMessagePort")
+    req.SetMessagePort(port)
+    req.SetUrl(url + "?t=" + ver.ToStr())
+    if not req.AsyncGetToString() then return
+    msg = wait(8000, port)
+    if type(msg) = "roUrlEvent" and msg.GetResponseCode() = 200
+        json = ParseJson(msg.GetString())
+        if json <> invalid and GetInterface(json, "ifAssociativeArray") <> invalid
+            m.top.manifest = json
+            return
+        end if
+    else
+        req.AsyncCancel()
+    end if
+    print "[Mango] manifest fetch failed"
+end sub
+
 sub runVersionLoop()
     base = m.top.waitUrl
     print "[Mango] version long-poll: "; base
@@ -26,6 +47,8 @@ sub runVersionLoop()
                     if v > ver
                         ver = v
                         print "[Mango] new render version: "; ver
+                        ' manifest first, so it's readable when version fires
+                        fetchManifest(ver)
                         m.top.version = ver
                     end if
                 end if

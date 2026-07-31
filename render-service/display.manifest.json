@@ -1,0 +1,57 @@
+{
+ "canvas": {
+  "width": 1920,
+  "height": 1080
+ },
+ "overlays": [
+  {
+   "type": "clock",
+   "widgetSettingId": 592340,
+   "page": 0,
+   "tzOffsetMinutes": -240,
+   "elements": {
+    "time": {
+     "rect": {
+      "x": 36.171875,
+      "y": 57.234375,
+      "w": 403.46875,
+      "h": 124.328125
+     },
+     "textRect": {
+      "x": 105.921875,
+      "y": 57.234375,
+      "w": 263.96875,
+      "h": 124
+     },
+     "fontSizePx": 106,
+     "bold": false,
+     "align": "center",
+     "color": "#FFFFFFFF",
+     "is24h": true,
+     "padHour": true,
+     "upperMeridiem": false,
+     "sample": "12:16"
+    },
+    "date": {
+     "rect": {
+      "x": 36.171875,
+      "y": 181.5625,
+      "w": 403.46875,
+      "h": 37.296875
+     },
+     "textRect": {
+      "x": 140.5625,
+      "y": 181.5625,
+      "w": 194.6875,
+      "h": 37
+     },
+     "fontSizePx": 31,
+     "bold": false,
+     "align": "center",
+     "color": "#FFFFFFFF",
+     "sample": "Friday, July 31"
+    }
+   }
+  }
+ ]
+}

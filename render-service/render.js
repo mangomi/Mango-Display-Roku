@@ -12,18 +12,24 @@ const { chromium } = require("playwright");
 
 const url = process.argv[2];
 const out = process.argv[3] || "display.jpg";
+// canvas = the coordinate space layouts are authored in (portal has no
+// responsive reflow, so this must stay the design resolution)
 const width = parseInt(process.argv[4] || "1920", 10);
 const height = parseInt(process.argv[5] || "1080", 10);
+// output = the device's actual resolution; the canvas is CSS-scaled down to
+// it inside the browser, so text rasterizes natively at the target size
+const outWidth = parseInt(process.argv[6] || String(width), 10);
+const outHeight = parseInt(process.argv[7] || String(height), 10);
 
 if (!url) {
-  console.error("usage: node render.js <designer-url> [out.jpg] [w] [h]");
+  console.error("usage: node render.js <designer-url> [out.jpg] [canvasW] [canvasH] [outW] [outH]");
   process.exit(1);
 }
 
 (async () => {
   const browser = await chromium.launch();
   try {
-    const page = await browser.newPage({ viewport: { width, height } });
+    const page = await browser.newPage({ viewport: { width: outWidth, height: outHeight } });
     page.on("pageerror", (e) => console.error("[pageerror]", e.message));
     page.on("requestfailed", (r) =>
       console.error("[requestfailed]", r.url().slice(0, 140), r.failure() && r.failure().errorText),
@@ -48,12 +54,15 @@ if (!url) {
 
     // the listener lives in an inline <script> so it exists before the
     // iframe starts loading (addInitScript does not fire for setContent)
+    const scaleX = outWidth / width;
+    const scaleY = outHeight / height;
     await page.setContent(
-      '<!doctype html><html><body style="margin:0;background:#000">' +
+      '<!doctype html><html><body style="margin:0;background:#000;overflow:hidden">' +
         "<script>window.__mmReady=false;window.addEventListener('message',function(e){" +
         "if(e&&e.data&&e.data.type==='mm-designer-ready'){window.__mmReady=true;}});<\/script>" +
         '<iframe src="' + url.replace(/"/g, "&quot;") + '"' +
-        ' style="display:block;border:0;width:' + width + "px;height:" + height + 'px"></iframe>' +
+        ' style="display:block;border:0;width:' + width + "px;height:" + height + "px;" +
+        "transform:scale(" + scaleX + "," + scaleY + ');transform-origin:0 0"></iframe>' +
         "</body></html>",
       { waitUntil: "load", timeout: 30000 },
     );
@@ -79,7 +88,7 @@ if (!url) {
     // container's computed opacity instead of a fixed settle.
     await page.waitForTimeout(3500);
     await page.screenshot({ path: out, type: "jpeg", quality: 85 });
-    console.log("saved", out, width + "x" + height);
+    console.log("saved", out, outWidth + "x" + outHeight + " (canvas " + width + "x" + height + ")");
   } finally {
     await browser.close();
   }

@@ -13,8 +13,12 @@ end sub
 sub runPairing()
     base = m.top.apiBase
     code = m.top.code
+    ' what this device actually renders at (720p on low-end sticks, 1080p on
+    ' most TVs) - reported so the render service can match it per display
+    res = CreateObject("roDeviceInfo").GetUIResolution()
     print "[Mango] API base: "; base
     print "[Mango] display code: "; code
+    print "[Mango] UI resolution: "; res.width; "x"; res.height; " ("; res.name; ")"
 
     registered = false
     while true
@@ -45,6 +49,8 @@ sub runPairing()
                             "deviceMode": "portrait"
                             "deviceType": "Android tablet"
                             "isBeaconEnabled": false
+                            "deviceWidth": res.width
+                            "deviceHeight": res.height
                         })
                         if saveResp <> invalid and saveResp.status >= 200 and saveResp.status < 300
                             print "[Mango] saveMirror ok"

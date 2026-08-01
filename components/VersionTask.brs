@@ -36,12 +36,24 @@ sub runVersionLoop()
         req = CreateObject("roUrlTransfer")
         port = CreateObject("roMessagePort")
         req.SetMessagePort(port)
-        req.SetUrl(base + "/wait?since=" + ver.ToStr())
+        ' report the busy state we currently believe: the server replies
+        ' immediately when it disagrees, so a missed transition (we are
+        ' offline while fetching the manifest and images) self-corrects
+        bp = "0"
+        if m.top.busy then bp = "1"
+        req.SetUrl(base + "/wait?since=" + ver.ToStr() + "&busy=" + bp)
         if req.AsyncGetToString()
             ' server holds up to 50s; give it 55 then re-arm
             msg = wait(55000, port)
             if type(msg) = "roUrlEvent" and msg.GetResponseCode() = 200
                 json = ParseJson(msg.GetString())
+                ' busy updates on every reply, including same-version ones
+                ' (the server flushes waiters when a user edit starts)
+                if json <> invalid and GetInterface(json, "ifAssociativeArray") <> invalid
+                    b = false
+                    if json.busy <> invalid and json.busy = true then b = true
+                    if m.top.busy <> b then m.top.busy = b
+                end if
                 if json <> invalid and GetInterface(json, "ifAssociativeArray") <> invalid and json.version <> invalid
                     v = Int(json.version)
                     if v > ver

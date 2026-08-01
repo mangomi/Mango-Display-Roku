@@ -9,3 +9,4 @@ render-service/overlay_gif_*.json
 render-service/display_p*.jpg
 render-service/display_p*.manifest.json
 render-service/display.json
+render-service/display_p*.png

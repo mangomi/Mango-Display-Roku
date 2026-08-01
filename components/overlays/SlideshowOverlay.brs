@@ -34,15 +34,57 @@ function makePoster(cfg as object, suffix as string) as object
     else
         p.loadDisplayMode = "scaleToFit"
     end if
+    ' portal applies filter:brightness(n); blendColor multiplies, so a
+    ' gray blend reproduces dimming (brightness >= 1 = no change)
+    if cfg.brightness <> invalid and cfg.brightness < 1
+        lvl = Int(255 * cfg.brightness)
+        if lvl < 0 then lvl = 0
+        hex = Right("0" + StrI(lvl, 16).Trim(), 2)
+        p.blendColor = "0x" + hex + hex + hex + "FF"
+    end if
     p.visible = false
     p.observeField("loadStatus", "onPosterLoad")
     return p
+end function
+
+' "#RRGGBB" / "rgb(r,g,b)" -> "0xRRGGBBFF"
+function cssColorToRokuHex(c as string) as string
+    s = c.Trim()
+    if Left(s, 1) = "#"
+        hex = Mid(s, 2)
+        if Len(hex) = 3
+            hex = Mid(hex, 1, 1) + Mid(hex, 1, 1) + Mid(hex, 2, 1) + Mid(hex, 2, 1) + Mid(hex, 3, 1) + Mid(hex, 3, 1)
+        end if
+        if Len(hex) = 6 then return "0x" + hex + "FF"
+        if Len(hex) = 8 then return "0x" + hex
+        return "0x000000FF"
+    end if
+    start = Instr(1, s, "(")
+    fin = Instr(1, s, ")")
+    if start > 0 and fin > start
+        parts = Mid(s, start + 1, fin - start - 1).Split(",")
+        if parts.Count() >= 3
+            out = "0x"
+            for i = 0 to 2
+                v = Int(Val(parts[i].Trim()))
+                if v < 0 then v = 0
+                if v > 255 then v = 255
+                out = out + Right("0" + StrI(v, 16).Trim(), 2)
+            end for
+            return out + "FF"
+        end if
+    end if
+    return "0x000000FF"
 end function
 
 sub onConfig()
     cfg = m.top.config
     if cfg = invalid or cfg.images = invalid or cfg.images.Count() < 2 then return
     m.images = cfg.images
+    ' page backgrounds have no rect - they fill the canvas
+    if cfg.rect = invalid
+        cfg.rect = { x: 0, y: 0, w: 1920, h: 1080 }
+    end if
     m.rectW = cfg.rect.w
     m.rectH = cfg.rect.h
     if cfg.transition <> invalid and cfg.transition <> "" then m.transition = cfg.transition
@@ -51,6 +93,13 @@ sub onConfig()
     m.clip = m.top.createChild("Group")
     m.clip.translation = [cfg.rect.x, cfg.rect.y]
     m.clip.clippingRect = [0, 0, m.rectW, m.rectH]
+    ' page color sits under the photos (the layered render is transparent)
+    if cfg.pageColor <> invalid and cfg.pageColor <> ""
+        rect = m.clip.createChild("Rectangle")
+        rect.width = m.rectW
+        rect.height = m.rectH
+        rect.color = cssColorToRokuHex(cfg.pageColor)
+    end if
     m.posterA = makePoster(cfg, "A")
     m.posterB = makePoster(cfg, "B")
 

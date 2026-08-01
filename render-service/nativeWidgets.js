@@ -402,14 +402,52 @@ const weatherIconHandler = {
     return overlays.filter((o) => !o.skip);
   },
 
-  // nothing hidden: the frozen icon stays in the image as the fallback
-  async hide() {},
+  // The frozen icon is REMOVED from the still (Dave's call): if the
+  // animated frames don't cover it exactly - animation overflowing the
+  // measured box, or a static icon sitting among animated ones - the
+  // baked copy shows through as a stuck ghost. The overlay is the only
+  // source of icon pixels. Elements are matched by geometry because one
+  // widget's icons share an id/class (5-day forecast).
+  async hide(frame, overlays) {
+    await frame.evaluate((list) => {
+      window.__mmWxHidden = [];
+      list.forEach((o) => {
+        const sel = "#icon_" + o.widgetSettingId + "_" + o.page + ", .icon_" + o.widgetSettingId + "_" + o.page;
+        document.querySelectorAll(sel).forEach((el) => {
+          const r = el.getBoundingClientRect();
+          if (Math.abs(r.x - o.rect.x) > 2 || Math.abs(r.y - o.rect.y) > 2) return;
+          el.style.opacity = "0";
+          window.__mmWxHidden.push(el);
+        });
+      });
+    }, overlays);
+  },
 
   async captureAfter(page, frame, items, ctx) {
     const live = items.filter((i) => i.liveCapture);
     if (!live.length) return items;
     const sharp = require("sharp");
     await ctx.reenableAnimations();
+    // The still is already saved, so the page can be stripped to nothing
+    // but the icons: restore them, then blank every background/shadow/
+    // blur so the filmed frames carry ONLY icon pixels with alpha
+    // elsewhere. Compositing icon-only frames over the still (which has
+    // the panel but no icon) avoids double-drawing semi-transparent
+    // panels, which showed as a faint square around each icon.
+    await frame.evaluate(() => {
+      (window.__mmWxHidden || []).forEach((el) => {
+        el.style.opacity = "";
+      });
+      window.__mmWxHidden = [];
+    });
+    await frame.addStyleTag({
+      content:
+        "*,*::before,*::after{background:transparent !important;" +
+        "box-shadow:none !important;backdrop-filter:none !important;" +
+        "-webkit-backdrop-filter:none !important;border-color:transparent !important;}",
+    });
+    await page.addStyleTag({ content: "html,body{background:transparent !important;}" });
+    await page.waitForTimeout(200);
 
     // film long enough to cover the longest icon cycle, sampling finely
     // enough that the shortest cycle still gets ~12 frames
@@ -420,9 +458,12 @@ const weatherIconHandler = {
     const shots = [];
     const stamps = [];
     const t0 = Date.now();
+    // always alpha: the page is stripped to icons-only for filming, in
+    // both layered and normal pages
+    const shotOpts = { type: "png", omitBackground: true };
     while (Date.now() - t0 < windowS * 1000 && shots.length < WX_MAX_SHOTS) {
       stamps.push(Date.now() - t0);
-      shots.push(await page.screenshot({ type: "png" }));
+      shots.push(await page.screenshot(shotOpts));
       await page.waitForTimeout(targetDt * 1000);
     }
     const realGapMs =
@@ -685,8 +726,110 @@ const countdownHandler = {
   },
 };
 
-// Add future handlers here (video, background slideshow) - one object
-// each, and a matching entry in the Roku app's m.overlayRegistry.
+// ---- page background slideshow (layered render) ------------------------
+// A background sits BEHIND the widgets, so it can't be a normal overlay.
+// When a page has a rotating background, the handler hides the portal's
+// bg layers and the render is taken with a transparent page background
+// (render.js switches to alpha PNG), producing a widgets-only layer. The
+// Roku then stacks: page color -> background photos -> widgets PNG ->
+// overlays. Emitted as its own type so MainScene puts it in the slot's
+// UNDER-container; single-photo backgrounds stay baked.
+const backgroundHandler = {
+  type: "background",
+
+  async extract(frame) {
+    return await frame.evaluate(() => {
+      let sc = null;
+      const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
+      for (const r of roots) {
+        if (!r || !window.angular) continue;
+        const inj = window.angular.element(r).injector();
+        if (!inj) continue;
+        const walk = (s) => {
+          if (!s || sc) return;
+          if (s.groups && s.groups.length) {
+            sc = s;
+            return;
+          }
+          walk(s.$$childHead);
+          walk(s.$$nextSibling);
+        };
+        walk(inj.get("$rootScope"));
+        break;
+      }
+      if (!sc) return [];
+      const pageIdx = typeof sc.quoteIndex === "number" ? sc.quoteIndex : 0;
+      const group = sc.groups[pageIdx];
+      if (!group || group.isBackgroundImage !== true) return [];
+      const obj = sc.backgroundImageObj || {};
+
+      // the photo currently painted is no longer in the queue (the portal
+      // splices as it shows), so put it first to keep continuity
+      const images = [];
+      for (const id of ["bg_img_1", "bg_img_2"]) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        const m = (getComputedStyle(el).backgroundImage || "").match(/url\(["']?([^"')]+)["']?\)/);
+        if (m && m[1] && !images.includes(m[1])) images.push(m[1]);
+      }
+      (sc.allPhotos || []).forEach((p) => {
+        if (p && p.regular && !images.includes(p.regular)) images.push(p.regular);
+      });
+      if (images.length < 2) return []; // static background stays baked
+
+      let brightness = 1;
+      if (typeof sc.imageBrightness === "number") brightness = sc.imageBrightness;
+      else if (typeof obj.imageBrightness === "number") brightness = obj.imageBrightness;
+
+      // #main carries the page background color (it is made transparent
+      // for the layered render, so the Roku must paint it underneath)
+      let pageColor = null;
+      const mainEl = document.getElementById("main");
+      if (mainEl) {
+        const c = getComputedStyle(mainEl).backgroundColor;
+        if (c && c !== "rgba(0, 0, 0, 0)") pageColor = c;
+      }
+      if (!pageColor) {
+        const bs = sc.mirrorBackgroundSetting || (sc.mirrorDetail && sc.mirrorDetail.backgroundSetting);
+        if (bs && bs.pageBackgroundColor) pageColor = bs.pageBackgroundColor;
+      }
+
+      return [
+        {
+          type: "background",
+          // page-level, not a widget - synthetic id keeps state keys unique
+          widgetSettingId: -1,
+          page: pageIdx,
+          images: images.slice(0, 60),
+          intervalSeconds: parseInt(obj.imageDelayTime, 10) || 60,
+          cropToFill: obj.isCropToFill !== false,
+          transition: obj.transition || "fade",
+          brightness,
+          pageColor,
+        },
+      ];
+    });
+  },
+
+  async hide(frame) {
+    await frame.evaluate(() => {
+      ["bg_img_1", "bg_img_2"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.style.opacity = "0";
+      });
+    });
+  },
+};
+
+// Add future handlers here (video) - one object each, and a matching
+// entry in the Roku app's m.overlayRegistry.
 module.exports = {
-  handlers: [clockHandler, gifHandler, weatherIconHandler, slideshowHandler, countdownHandler],
+  handlers: [
+    clockHandler,
+    gifHandler,
+    weatherIconHandler,
+    slideshowHandler,
+    countdownHandler,
+    backgroundHandler,
+  ],
 };

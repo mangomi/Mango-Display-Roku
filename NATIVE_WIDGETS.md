@@ -49,7 +49,7 @@ Adding a native widget type touches exactly two registries:
 | Countdown | **Native overlay** | ✅ built | Only the `.value` numbers are hidden and re-rendered on device (box chrome, unit labels and event name stay baked). Manifest carries an absolute target epoch computed in the render browser, so the Roku does timezone-free math; ticks every second, honors which units are enabled, and matches the portal's one-second-ahead display. |
 | Photo slideshow (image widget) | **Native overlay** | ✅ built | Manifest carries the portal-resolved URL list (any source: Unsplash/Google Photos/iCloud/S3, capped 60) + `imageDelayTime` + `isCropToFill` (cover/contain via loadDisplayMode) + per-widget transition (fade/slides/flip, clipped to the rect). A/B Posters preload + swap; decode capped at rect size; failed URLs skip ahead; single-image widgets stay baked. Photos are **hidden from the render** (a baked photo of another aspect ratio would peek around contain-fit photos); the widget panel stays baked. Position persists across page rotations (each visit resumes at the next photo), and the fallback refresh timer stays dormant while the long-poll is healthy so live slideshows are never rebuilt mid-dwell. Google/iCloud URL expiry is refreshed by the 20-min scheduled renders. Page *background* slideshows are phase 2 (layered render). |
 | Video / YouTube (Iframily video) | Native Video node (planned) | ⬜ planned | Roku plays MP4/HLS natively in the rect. YouTube embeds cannot work on Roku — disable in editor for Roku devices. |
-| Weather | In image + **animated icons as native overlays** | ✅ built | Text/temps stay in the image (refresh via scheduled renders). Animated SVG icons (SMIL/CSS — no frames to decode) are **filmed live in the browser** after the still: each icon's animation period is parsed from its SVG source (`dur=`/`animation:`) and exactly one full cycle is captured (capped at 12 s; unknown periods fall back to a 2.6 s window), so loops wrap seamlessly — the sun completes its rotation instead of snapping back. One shared capture burst serves all icons; each keeps the frames spanning its own cycle. Played by `GifOverlay` (emitted as type `gif`, zero Roku changes). Static icon stays in the image as fallback; captures include the underlying background, so they blend seamlessly. Detection fetches each icon URL Node-side (S3 bucket lacks CORS for in-page reads) and skips static icons. |
+| Weather | In image + **animated icons as native overlays** | ✅ built | Text/temps stay in the image (refresh via scheduled renders). Animated SVG icons (SMIL/CSS — no frames to decode) are **filmed live in the browser** after the still: each icon's animation period is parsed from its SVG source (`dur=`/`animation:`) and exactly one full cycle is captured (capped at 12 s; unknown periods fall back to a 2.6 s window), so loops wrap seamlessly — the sun completes its rotation instead of snapping back. One shared capture burst serves all icons; each keeps the frames spanning its own cycle. Played by `GifOverlay` (emitted as type `gif`, zero Roku changes). The static icon is **hidden for the still and restored for the filming pass**, so the overlay is the only source of icon pixels — a baked copy showed through as a stuck ghost whenever the frames didn't cover it exactly (animation overflowing the measured box, or a static icon among animated ones). Elements are matched by geometry, since one widget's icons share an id/class (5-day forecast). For the filming pass the page is **stripped to icons only** — every background, shadow, blur and border is blanked and frames are captured with alpha — so the sprite sheets carry nothing but icon pixels. The still supplies the panel, the overlay supplies the icon, and nothing composites twice (an earlier version filmed the panel too, which showed as a faint square around each icon). Detection fetches each icon URL Node-side (S3 bucket lacks CORS for in-page reads) and skips static icons. |
 | Calendar (all views) | In image | ✅ | Midnight re-render handles date rollover. |
 | News | In image | ✅ | Headline page advances on re-renders, not every 5 min. |
 | Quotes | In image | ✅ | Quirk: portal picks a random quote per render. |
@@ -90,6 +90,39 @@ and the slot is what animates — so the clock fades/slides/squashes in
 lockstep with its page, and the incoming page's overlays ride in live. Designer mode keeps every page in the DOM (hidden pages are
 `visibility:hidden`), so extractors filter overlays by the rendered
 page's index — widget element ids carry it (`clock_<id>_<page>`).
+
+## Layered pages (rotating page backgrounds)
+
+A page background sits *behind* the widgets, so it can't be a normal
+overlay. When a page has a rotating background:
+
+1. The render hides the portal's `bg_img_1/2` layers and makes the page
+   chrome transparent (`html`, `body`, **`#main`** — which carries the
+   page background color — and the page containers), then captures an
+   **alpha PNG** (`display_pN.png`) instead of a JPEG. Weather-icon
+   filming switches to alpha too, so icons composite over live photos.
+2. The manifest emits a `background` overlay: photo list (current photo
+   first — the portal splices its queue as it displays), interval, crop,
+   transition, brightness, and the page color.
+3. The Roku stacks inside each page slot: `under` group (page color +
+   crossfading background Posters) → page PNG → overlays. Backgrounds
+   reuse `SlideshowOverlay`; `brightness` maps to Poster `blendColor`
+   (multiply), matching the portal's `filter: brightness()`.
+
+Single-photo backgrounds stay baked into the render. This under-layer
+mechanism also retires the old "overlays always draw on top" limit for
+anything that needs to sit beneath widgets.
+
+## Update feedback (spinner)
+
+While a **user edit** is rendering, the TV shows a native `BusySpinner`
+in the bottom-right TV-safe corner, so a change is visibly on its way
+instead of silently arriving ~15 s later. The version server carries a
+`busy` flag alongside `version`; it flips true when an edit-driven
+render starts (waiters are flushed immediately, so the spinner appears
+within a couple of seconds of the save) and false when the new render is
+published, held for a 3 s minimum so quick renders still register.
+Background refreshes (startup, scheduled, midnight) never spin.
 
 ## Freshness model (who updates what, when)
 

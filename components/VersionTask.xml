@@ -5,6 +5,8 @@
         <field id="manifestUrl" type="string" />
         <field id="manifest" type="assocarray" />
         <field id="version" type="integer" value="0" />
+        <!-- true while the render service is processing a user edit -->
+        <field id="busy" type="boolean" value="false" />
     </interface>
     <script type="text/brightscript" uri="pkg:/components/VersionTask.brs" />
 </component>

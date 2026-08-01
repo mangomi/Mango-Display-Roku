@@ -49,9 +49,34 @@ const WAIT_HOLD_MS = 50000; // client uses a 55s wait; always answer first
 let version = Math.floor(Date.now() / 1000);
 let waiters = [];
 
+// `busy` is true while a USER EDIT is rendering, so the TV can show a
+// spinner during the wait (background refreshes stay silent)
+let busy = false;
+let busySince = 0;
+// keep the TV's spinner up long enough to be perceived, even if the
+// render finishes almost immediately
+const MIN_BUSY_MS = 3000;
+
+function setBusy(next, why) {
+  if (busy === next) return;
+  busy = next;
+  if (next) busySince = Date.now();
+  log("busy ->", next, "(" + why + ")");
+  flushWaiters();
+}
+
+// belt and braces: busy must never outlive an actual render. Anything
+// that leaves it set (a throw on an unexpected path, a killed child)
+// gets cleaned up here rather than spinning on the TV forever.
+setInterval(() => {
+  if (busy && !rendering && !pendingRender && Date.now() - busySince > MIN_BUSY_MS + 2000) {
+    setBusy(false, "janitor: no render in progress");
+  }
+}, 3000);
+
 function respondVersion(res) {
   res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-  res.end(JSON.stringify({ version }));
+  res.end(JSON.stringify({ version, busy }));
 }
 
 function flushWaiters() {
@@ -69,7 +94,11 @@ http
     if (u.pathname === "/version") return respondVersion(res);
     if (u.pathname === "/wait") {
       const since = parseInt(u.searchParams.get("since") || "0", 10);
-      if (version > since) return respondVersion(res);
+      // the client also reports the busy state it currently believes, so a
+      // transition it missed while loading images is corrected the instant
+      // it re-arms (event-only delivery left spinners running)
+      const clientBusy = u.searchParams.get("busy") === "1";
+      if (version > since || busy !== clientBusy) return respondVersion(res);
       const w = {
         res,
         timer: setTimeout(() => {
@@ -143,6 +172,9 @@ async function doRender(reason) {
   }
   rendering = true;
   log("rendering (" + reason + ")...");
+  const AUTO = ["startup", "scheduled", "midnight"];
+  // tell the TV to spin now, not when the render lands
+  if (!AUTO.includes(reason)) setBusy(true, reason);
   try {
     if (!(await renderPage(0))) throw new Error("page 0 failed");
     const man0 = JSON.parse(fs.readFileSync(manifestFor(pageFile(0)), "utf8"));
@@ -157,16 +189,25 @@ async function doRender(reason) {
       if (!manifests[i]) continue; // failed page: drop from this cycle
       const mp = meta.pages[i] || {};
       pages.push({
-        image: path.basename(pageFile(i)),
+        // layered pages render as transparent PNG, not JPEG
+        image: manifests[i].imageFile || path.basename(pageFile(i)),
         delaySeconds: mp.delaySeconds || 60,
         transition: mp.transition || "fade",
         autoRotate: mp.autoRotate === true,
         overlays: manifests[i].overlays || [],
       });
     }
+    // the TV pulses its refresh dot only for user edits, staying silent
+    // for background refreshes (startup, 20-min data, midnight)
+    const AUTO_REASONS = ["startup", "scheduled", "midnight"];
+    const updateReason = AUTO_REASONS.includes(reason) ? "auto" : "edit";
     fs.writeFileSync(
       path.join(__dirname, "display.json"),
-      JSON.stringify({ canvas: { width: DISPLAY.canvasW, height: DISPLAY.canvasH }, pages }, null, 1),
+      JSON.stringify(
+        { canvas: { width: DISPLAY.canvasW, height: DISPLAY.canvasH }, updateReason, pages },
+        null,
+        1,
+      ),
     );
     version = Math.max(version + 1, Math.floor(Date.now() / 1000));
     log("display.json:", pages.length, "page(s); version ->", version);
@@ -178,6 +219,14 @@ async function doRender(reason) {
   if (pendingRender) {
     pendingRender = false;
     doRender("queued change");
+  } else if (busy) {
+    const held = Date.now() - busySince;
+    const clear = () => {
+      // a new render may have started while this was pending
+      if (!rendering && !pendingRender) setBusy(false, "render published");
+    };
+    if (held >= MIN_BUSY_MS) clear();
+    else setTimeout(clear, MIN_BUSY_MS - held);
   }
 }
 

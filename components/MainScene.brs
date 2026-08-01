@@ -12,6 +12,10 @@ sub init()
     m.pageHost = m.top.findNode("pageHost")
     m.refreshTimer = m.top.findNode("refreshTimer")
     m.pageTimer = m.top.findNode("pageTimer")
+    m.spinnerPoster = m.top.findNode("spinnerPoster")
+    m.spinnerWatchdog = m.top.findNode("spinnerWatchdog")
+    m.spinnerWatchdog.observeField("fire", "onSpinnerWatchdog")
+    m.spinAnim = invalid
     m.top.findNode("instructionsLabel").text = "Setup at " + m.env.setupHost + " using any browser"
 
     ' each slot = page image + that page's overlays, animated as one unit
@@ -20,11 +24,13 @@ sub init()
             slot: m.top.findNode("slotA")
             poster: m.top.findNode("imageA")
             overlays: m.top.findNode("overlaysA")
+            under: m.top.findNode("underA")
         }
         slotB: {
             slot: m.top.findNode("slotB")
             poster: m.top.findNode("imageB")
             overlays: m.top.findNode("overlaysB")
+            under: m.top.findNode("underB")
         }
     }
 
@@ -35,7 +41,9 @@ sub init()
 
     ' native-widget registry: manifest overlay type -> SceneGraph component
     ' (add future types here AND in render-service/nativeWidgets.js)
-    m.overlayRegistry = { clock: "ClockOverlay", gif: "GifOverlay", slideshow: "SlideshowOverlay", countdown: "CountdownOverlay" }
+    m.overlayRegistry = { clock: "ClockOverlay", gif: "GifOverlay", slideshow: "SlideshowOverlay", countdown: "CountdownOverlay", background: "SlideshowOverlay" }
+    ' these render BELOW the page image (layered pages)
+    m.underTypes = { background: true }
 
     m.slots.slotA.poster.observeField("loadStatus", "onPosterLoad")
     m.slots.slotB.poster.observeField("loadStatus", "onPosterLoad")
@@ -51,6 +59,7 @@ sub init()
     m.animCtx = invalid
     m.overlayState = {}
     m.lastVersionSeconds = 0
+    m.latestReason = ""
 
     m.deviceCode = getOrCreateCode(false)
     startPairing()
@@ -89,6 +98,7 @@ sub startPairing()
     for each k in m.slots
         m.slots[k].slot.visible = false
         clearOverlays(m.slots[k].overlays)
+        clearOverlays(m.slots[k].under)
     end for
     m.pairingGroup.visible = true
     m.codeLabel.text = m.deviceCode
@@ -108,6 +118,7 @@ sub onPaired()
     m.versionTask.waitUrl = m.versionBaseUrl
     m.versionTask.manifestUrl = m.pagesUrl
     m.versionTask.observeField("version", "onVersionChange")
+    m.versionTask.observeField("busy", "onBusyChange")
     m.versionTask.control = "RUN"
     ' fallback cadence + retry loop if a fetch fails
     m.refreshTimer.control = "start"
@@ -120,6 +131,8 @@ sub onVersionChange()
     print "[Mango] display.json: "; man.pages.Count(); " page(s)"
     ' never apply mid-transition/mid-load - deferred to finalizeSwap
     m.latestPages = man.pages
+    m.latestReason = ""
+    if man.updateReason <> invalid then m.latestReason = man.updateReason
     maybeApplyPages()
 end sub
 
@@ -128,6 +141,9 @@ sub maybeApplyPages()
     if m.activeAnim <> invalid or m.pendingLoad <> invalid then return
     m.pages = m.latestPages
     m.latestPages = invalid
+    ' announce user edits once the new image is actually on screen;
+    ' background refreshes (startup/scheduled/midnight) stay silent
+    m.latestReason = ""
     if m.pageIndex >= m.pages.Count() then m.pageIndex = 0
     ' quiet refresh of the current page (no transition)
     loadPage(m.pageIndex, false)
@@ -178,7 +194,7 @@ sub loadPage(index as integer, animated as boolean)
     m.pageHost.appendChild(entry.slot)
     resetSlotTransforms(entry.slot)
     ' the page's overlays ride inside the slot, so they move/fade with it
-    applyOverlays(pg.overlays, entry.overlays)
+    applyOverlays(pg.overlays, entry.overlays, entry.under)
     m.pendingLoad = { index: index, animated: animated, transition: pg.transition, slotKey: bk }
     ts = CreateObject("roDateTime").AsSeconds().ToStr()
     entry.poster.uri = m.assetBaseUrl + pg.image + "?t=" + ts
@@ -212,6 +228,7 @@ sub finalizeSwap(newKey as string, index as integer)
     if old <> invalid and m.frontKey <> newKey
         old.slot.visible = false
         clearOverlays(old.overlays)
+        clearOverlays(old.under)
         resetSlotTransforms(old.slot)
     end if
     m.frontKey = newKey
@@ -223,6 +240,54 @@ sub finalizeSwap(newKey as string, index as integer)
     armPageTimer()
     ' apply any manifest that arrived while a transition/load was running
     maybeApplyPages()
+end sub
+
+' spins while the render service is processing a user edit, so the change
+' is visibly "on its way" instead of silently arriving ~15s later
+sub onBusyChange()
+    show = m.versionTask.busy = true and m.pages <> invalid
+    print "[Mango] busy="; m.versionTask.busy
+    if show
+        startSpinner()
+    else
+        stopSpinner()
+    end if
+end sub
+
+sub startSpinner()
+    if m.spinAnim <> invalid then return ' already spinning
+    m.spinnerPoster.rotation = 0.0
+    m.spinnerPoster.visible = true
+    anim = CreateObject("roSGNode", "Animation")
+    anim.duration = 1.1
+    anim.repeat = true
+    anim.easeFunction = "linear"
+    interp = CreateObject("roSGNode", "FloatFieldInterpolator")
+    interp.key = [0.0, 1.0]
+    interp.keyValue = [0.0, 6.2831853]
+    interp.fieldToInterp = "spinnerPoster.rotation"
+    anim.appendChild(interp)
+    m.top.appendChild(anim)
+    m.spinAnim = anim
+    anim.control = "start"
+    m.spinnerWatchdog.control = "start"
+end sub
+
+sub stopSpinner()
+    m.spinnerWatchdog.control = "stop"
+    if m.spinAnim <> invalid
+        m.spinAnim.control = "stop"
+        m.top.removeChild(m.spinAnim)
+        m.spinAnim = invalid
+    end if
+    m.spinnerPoster.visible = false
+    m.spinnerPoster.rotation = 0.0
+end sub
+
+' safety net: never leave a spinner on screen if busy=false is missed
+sub onSpinnerWatchdog()
+    print "[Mango] spinner watchdog - forcing hide"
+    stopSpinner()
 end sub
 
 sub armPageTimer()
@@ -359,8 +424,9 @@ sub clearOverlays(container as object)
     end while
 end sub
 
-sub applyOverlays(overlays as object, container as object)
+sub applyOverlays(overlays as object, container as object, under as object)
     clearOverlays(container)
+    if under <> invalid then clearOverlays(under)
     if overlays = invalid then return
     for each ov in overlays
         compName = m.overlayRegistry.Lookup(ov.type)
@@ -373,7 +439,9 @@ sub applyOverlays(overlays as object, container as object)
                 if key <> "" and m.overlayState.DoesExist(key) then ov.startIndex = m.overlayState[key]
             end if
             node.config = ov
-            container.appendChild(node)
+            target = container
+            if m.underTypes.DoesExist(ov.type) and under <> invalid then target = under
+            target.appendChild(node)
         end if
     end for
 end sub

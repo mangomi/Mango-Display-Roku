@@ -193,10 +193,32 @@ async function extractPageMeta(page) {
       if (groups.length) await page.waitForTimeout(100);
     }
 
-    await page.screenshot({ path: out, type: "jpeg", quality: 85 });
+    // layered mode: a rotating page background means the widgets must be
+    // captured as a transparent PNG so the Roku can stack native photos
+    // UNDER them (see NATIVE_WIDGETS.md)
+    const layered = groups.some((g) => g.handler.type === "background" && g.items.length);
+    let outPath = out;
+    if (layered && portalFrame) {
+      await portalFrame.addStyleTag({
+        content:
+          "html,body{background:transparent !important;}" +
+          "#main{background:transparent !important;}" +
+          "#pageTransition,#pageTransition>div{background-color:transparent !important;}",
+      });
+      await page.addStyleTag({ content: "html,body{background:transparent !important;}" });
+      await page.waitForTimeout(120);
+      outPath = out.replace(/\.jpe?g$/i, "") + ".png";
+    }
+
+    if (layered) {
+      await page.screenshot({ path: outPath, type: "png", omitBackground: true });
+    } else {
+      await page.screenshot({ path: outPath, type: "jpeg", quality: 85 });
+    }
 
     const captureCtx = {
       outDir,
+      layered,
       outScale: outWidth / width,
       reenableAnimations: async () => {
         if (noAnimStyle) {
@@ -223,14 +245,22 @@ async function extractPageMeta(page) {
     const overlays = groups.flatMap((g) => g.items);
     fs.writeFileSync(
       out.replace(/\.jpe?g$/i, "") + ".manifest.json",
-      JSON.stringify({ canvas: { width, height }, overlays, pageMeta }, null, 1),
+      JSON.stringify(
+        { canvas: { width, height }, overlays, pageMeta, imageFile: path.basename(outPath) },
+        null,
+        1,
+      ),
     );
     console.log(
       "manifest:",
       overlays.length,
       "overlay(s)" + (pageMeta ? ", " + pageMeta.pageCount + " page(s)" : ""),
     );
-    console.log("saved", out, outWidth + "x" + outHeight + " (canvas " + width + "x" + height + ")");
+    console.log(
+      "saved",
+      outPath,
+      outWidth + "x" + outHeight + " (canvas " + width + "x" + height + ")" + (layered ? " [layered]" : ""),
+    );
   } finally {
     await browser.close();
   }

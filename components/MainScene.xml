@@ -18,15 +18,26 @@
              animated for page transitions. Slots re-order so the incoming
              one draws on top. -->
         <Group id="pageHost">
+            <!-- under = native layers behind the page (rotating page
+                 backgrounds); the page image is a transparent PNG then -->
             <Group id="slotA" visible="false">
+                <Group id="underA" />
                 <Poster id="imageA" width="1920" height="1080" loadWidth="1920" loadHeight="1080" loadDisplayMode="scaleToFit" />
                 <Group id="overlaysA" />
             </Group>
             <Group id="slotB" visible="false">
+                <Group id="underB" />
                 <Poster id="imageB" width="1920" height="1080" loadWidth="1920" loadHeight="1080" loadDisplayMode="scaleToFit" />
                 <Group id="overlaysB" />
             </Group>
         </Group>
+        <!-- "your change is being applied" spinner: bottom-right inside the
+             5% TV-safe margin, only while a user edit is rendering.
+             Rotation is animated in code - BusySpinner does NOT spin a
+             Poster nested in XML (it renders as a static child). -->
+        <Poster id="spinnerPoster" uri="pkg:/images/spinner.png" width="56" height="56" translation="[1776,936]" scaleRotateCenter="[28,28]" visible="false" />
+        <!-- forces the spinner off if a busy=false is ever missed -->
+        <Timer id="spinnerWatchdog" duration="75" repeat="false" />
         <!-- fallback only: the VersionTask long-poll is the primary refresh
              signal; this timer just catches the case where it can't connect -->
         <Timer id="refreshTimer" duration="60" repeat="true" />

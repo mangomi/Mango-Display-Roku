@@ -113,6 +113,35 @@ Single-photo backgrounds stay baked into the render. This under-layer
 mechanism also retires the old "overlays always draw on top" limit for
 anything that needs to sit beneath widgets.
 
+## OPEN ISSUE — spinner can keep spinning (next session)
+
+**Symptom (reported twice on device):** the spinner keeps turning after
+the edited layout is already visible on screen.
+
+**Cause identified:** busy transitions were delivered as *events*. When a
+render publishes, the server flushes twice in quick succession — first
+`{new version, busy:true}`, then `{busy:false}` a moment later. The TV is
+NOT listening for that second flush: it is synchronously fetching the
+manifest and loading page images. It then re-arms its long-poll, the
+server has nothing newer to say, and the spinner runs until the 75 s
+watchdog (or the next render).
+
+**Fix in `4bdb360`, NOT yet verified on device:** the long-poll is now
+state-based — the client sends the busy state it believes
+(`/wait?since=N&busy=0|1`) and the server replies immediately when its
+own state disagrees, so a missed transition self-corrects on the next
+re-arm (~250 ms).
+
+**To verify next session** (the app was not reinstalled after this
+change — deploy first):
+1. `./package.sh` + sideload, restart the watcher.
+2. Make a layout edit; confirm the spinner appears, then **stops within
+   ~1 s of the change appearing**, not 75 s later.
+3. Watch `[Mango] busy=` in `telnet 10.0.0.50 8085` for a clean
+   true → false pair per edit.
+4. Multi-page displays are the case to exercise — the TV spends longer
+   loading, widening the window where it misses signals.
+
 ## Update feedback (spinner)
 
 While a **user edit** is rendering, the TV shows a native `BusySpinner`
@@ -123,6 +152,16 @@ render starts (waiters are flushed immediately, so the spinner appears
 within a couple of seconds of the save) and false when the new render is
 published, held for a 3 s minimum so quick renders still register.
 Background refreshes (startup, scheduled, midnight) never spin.
+
+## Render scope (product decision)
+
+**Every user change re-renders the entire display — all pages — not just
+the changed widget or page.** Confirmed by Dave 2026-08-02. Widgets can
+span pages, and background/theme changes affect everything, so a full
+re-render is the always-correct option. Cost is ~5 s per page (plus ~4 s
+when animated weather icons need re-filming). Do NOT add per-page dirty
+tracking without asking; if render time becomes a problem on displays
+with many pages, raise it as a trade-off first.
 
 ## Freshness model (who updates what, when)
 

@@ -31,11 +31,11 @@
                 <Group id="overlaysB" />
             </Group>
         </Group>
-        <!-- "your change is being applied" spinner: bottom-right inside the
-             5% TV-safe margin, only while a user edit is rendering.
-             Rotation is animated in code - BusySpinner does NOT spin a
-             Poster nested in XML (it renders as a static child). -->
-        <Poster id="spinnerPoster" uri="pkg:/images/spinner.png" width="56" height="56" translation="[1776,936]" scaleRotateCenter="[28,28]" visible="false" />
+        <!-- "your change is being applied" spinner: centered so it can't be
+             missed, only while a user edit is rendering (transient, so no
+             burn-in). Rotation is animated in code - BusySpinner does NOT
+             spin a Poster nested in XML (it renders as a static child). -->
+        <Poster id="spinnerPoster" uri="pkg:/images/spinner.png" width="80" height="80" translation="[920,500]" scaleRotateCenter="[40,40]" visible="false" />
         <!-- forces the spinner off if a busy=false is ever missed -->
         <Timer id="spinnerWatchdog" duration="75" repeat="false" />
         <!-- fallback only: the VersionTask long-poll is the primary refresh

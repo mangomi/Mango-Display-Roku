@@ -264,7 +264,9 @@ sub startSpinner()
     anim.easeFunction = "linear"
     interp = CreateObject("roSGNode", "FloatFieldInterpolator")
     interp.key = [0.0, 1.0]
-    interp.keyValue = [0.0, 6.2831853]
+    ' NEGATIVE = clockwise on Roku (positive rotates counter-clockwise,
+    ' the opposite of CSS); clockwise is the loading-spinner convention
+    interp.keyValue = [0.0, -6.2831853]
     interp.fieldToInterp = "spinnerPoster.rotation"
     anim.appendChild(interp)
     m.top.appendChild(anim)

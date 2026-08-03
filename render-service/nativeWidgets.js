@@ -1455,11 +1455,133 @@ async function generateEffectSprites(kinds, outDir) {
   }
 }
 
+// ---- interactive targets (remote-controlled task completion) -----------
+// Chores/todo checkboxes are real inputs in the page, so the render can
+// publish them as focusable targets: rect, current state, and the ids the
+// completion API needs. The device draws them natively (the DOM ones are
+// hidden) so a press can tick instantly, then PUTs to the same endpoint
+// the portal uses. Display gesture flags decide what is offered at all.
+async function generateCheckboxSprites(outDir) {
+  const sharp = require("sharp");
+  const files = { empty: "ui_check_empty.png", checked: "ui_check_on.png" };
+  const box =
+    '<rect x="3" y="3" width="58" height="58" rx="10" ry="10" fill="#FFFFFF" fill-opacity="0.92" stroke="#3C4043" stroke-width="4"/>';
+  const svgs = {
+    empty: '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">' + box + "</svg>",
+    checked:
+      '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">' +
+      box +
+      '<path d="M17 33 L28 45 L48 20" fill="none" stroke="#1B8A3A" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>' +
+      "</svg>",
+  };
+  for (const key of Object.keys(files)) {
+    const file = pathHandlers.join(outDir, files[key]);
+    if (fsHandlers.existsSync(file)) continue;
+    await sharp(Buffer.from(svgs[key])).png().toFile(file);
+  }
+  return files;
+}
+
+async function extractTargets(frame, ctx) {
+  const found = await frame.evaluate(() => {
+    let sc = null;
+    let root = null;
+    const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
+    for (const r of roots) {
+      if (!r || !window.angular) continue;
+      const inj = window.angular.element(r).injector();
+      if (!inj) continue;
+      root = inj.get("$rootScope");
+      const walk = (s) => {
+        if (!s || sc) return;
+        if (s.groups && s.groups.length) {
+          sc = s;
+          return;
+        }
+        walk(s.$$childHead);
+        walk(s.$$nextSibling);
+      };
+      walk(root);
+      break;
+    }
+    const gesture = (sc && sc.gesture) || {};
+    const items = [];
+    document.querySelectorAll("input.todocheckbox").forEach((el) => {
+      if (el.offsetParent === null || el.disabled) return;
+      // designer mode keeps EVERY page in the DOM, hiding the inactive
+      // ones with visibility - and unlike clocks/countdowns these inputs
+      // carry no page number, so without this check we would publish
+      // another page's checkboxes (visibility inherits, so this covers
+      // any hidden ancestor too)
+      if (getComputedStyle(el).visibility === "hidden") return;
+      const r = el.getBoundingClientRect();
+      if (r.width < 6 || r.height < 6) return;
+      const s = window.angular.element(el).scope();
+      const todo = s && s.todo;
+      if (!todo || todo.id === undefined) return;
+
+      // which widget owns it, and is completion allowed for that kind?
+      let w = s;
+      while (w && !w.widgetData) w = w.$parent;
+      const wd = w && w.widgetData;
+      const kind = wd && wd.contentType === "chores" ? "chores" : "todo";
+      const allowed =
+        kind === "chores" ? gesture.touch_chores_complete : gesture.touch_todo_complete;
+      if (allowed !== true && allowed !== 1 && allowed !== "true") return;
+
+      let labelId = null;
+      if (kind === "chores") {
+        let p = s;
+        while (p && !(p.value && p.value.selectedLabel)) p = p.$parent;
+        if (p && p.value.selectedLabel) labelId = p.value.selectedLabel.labelId;
+      }
+      items.push({
+        kind,
+        rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+        checked: el.checked === true,
+        widgetSettingId: wd ? wd.widgetSettingId : null,
+        payload: {
+          id: todo.id,
+          projectId: todo.projectId,
+          taskId: todo.taskId,
+          todoAccountId: todo.todoAccountId,
+          labelId,
+        },
+      });
+    });
+    return { items, authToken: (root && root.authToken) || null };
+  });
+
+  if (!found.items.length) return null;
+  const sprites = await generateCheckboxSprites((ctx && ctx.outDir) || ".");
+  return {
+    items: found.items,
+    authToken: found.authToken,
+    statusUrl: (ctx && ctx.apiBase ? ctx.apiBase : "") + "todo/updateStatus",
+    sprites,
+  };
+}
+
+// the device draws these natively, so keep the DOM ones out of the still
+async function hideTargets(frame, items) {
+  await frame.evaluate((rects) => {
+    document.querySelectorAll("input.todocheckbox").forEach((el) => {
+      if (getComputedStyle(el).visibility === "hidden") return; // other page
+      const r = el.getBoundingClientRect();
+      // only hide the ones we actually published as targets
+      const mine = rects.some((t) => Math.abs(t.x - r.x) < 2 && Math.abs(t.y - r.y) < 2);
+      if (mine) el.style.opacity = "0";
+    });
+  }, items.map((i) => i.rect));
+}
+
 // Add future handlers here - one object each, and a matching entry in
 // the Roku app's m.overlayRegistry.
 module.exports = {
   extractEffects,
   hideEffects,
+  extractTargets,
+  hideTargets,
   handlers: [
     clockHandler,
     gifHandler,

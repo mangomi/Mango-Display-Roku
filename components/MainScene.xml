@@ -34,6 +34,8 @@
         <!-- display-wide visual overlays (balloons, snow, ...) live ABOVE the
              page slots so they keep flying through page transitions -->
         <Group id="effectLayer" />
+        <!-- remote pointer + natively drawn task checkboxes -->
+        <InteractionLayer id="interaction" />
         <!-- "your change is being applied" spinner: centered so it can't be
              missed, only while a user edit is rendering (transient, so no
              burn-in). Rotation is animated in code - BusySpinner does NOT

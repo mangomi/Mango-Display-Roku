@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="InteractTask" extends="Task">
+    <interface>
+        <field id="serviceBase" type="string" />
+        <field id="kind" type="string" />
+        <field id="x" type="float" value="0" />
+        <field id="y" type="float" value="0" />
+        <field id="pageIndex" type="integer" value="0" />
+    </interface>
+    <script type="text/brightscript" uri="pkg:/components/InteractTask.brs" />
+</component>

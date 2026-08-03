@@ -13,3 +13,4 @@ render-service/display_p*.png
 render-service/.version
 render-service/effect_*.png
 render-service/effect_*.json
+render-service/ui_check_*.png

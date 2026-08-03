@@ -12,11 +12,13 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const WebSocket = require("ws");
+const { InteractionSession } = require("./session");
 
 // ---- display config (prototype: hardcoded to the "Roku Express" display)
 const ENV = {
   socketBase: "wss://testsocket.mangomirror.com/connection/",
   portalBase: "https://testportal.mangodisplay.com/",
+  apiBase: "https://testapi.mangomirror.com/v1.0.5/",
 };
 const DISPLAY = {
   major: 1,
@@ -93,10 +95,65 @@ function flushWaiters() {
   if (flushed.length) log("notified", flushed.length, "long-poll waiter(s)");
 }
 
+// ---- live interaction --------------------------------------------------
+// The TV signals when a user starts pressing keys (so the portal session
+// can warm up while they aim), then sends the gesture itself. The portal
+// handles it exactly as on a touch TV; we re-capture and publish.
+// built lazily: designerUrl/pageFile are defined further down
+let session = null;
+function getSession() {
+  if (!session) {
+    session = new InteractionSession({
+      designerUrl,
+      canvasW: DISPLAY.canvasW,
+      canvasH: DISPLAY.canvasH,
+      outW: DISPLAY.outW,
+      outH: DISPLAY.outH,
+      pageFile,
+      apiBase: ENV.apiBase,
+    });
+  }
+  return session;
+}
+
+async function handleInteract(u, res) {
+  const type = u.searchParams.get("type") || "tap";
+  const pageIndex = parseInt(u.searchParams.get("page") || "0", 10);
+  const x = parseFloat(u.searchParams.get("x") || "0");
+  const y = parseFloat(u.searchParams.get("y") || "0");
+  const reply = (code, body) => {
+    res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify(body));
+  };
+
+  if (type === "warm") {
+    try {
+      const how = await getSession().open(pageIndex);
+      log("session " + how + " for page", pageIndex);
+      return reply(200, { ok: true, session: how });
+    } catch (e) {
+      log("session warm failed:", e.message);
+      return reply(500, { ok: false, error: e.message });
+    }
+  }
+
+  try {
+    log("interact:", type, "at", Math.round(x) + "," + Math.round(y), "page", pageIndex);
+    const manifest = await getSession().interact({ type, x, y, page: pageIndex });
+    // republish so the TV picks up the portal's real, updated screen
+    publishFromDisk("interaction");
+    return reply(200, { ok: true, targets: manifest.targets ? manifest.targets.items.length : 0 });
+  } catch (e) {
+    log("interact failed:", e.message);
+    return reply(500, { ok: false, error: e.message });
+  }
+}
+
 http
   .createServer((req, res) => {
     const u = new URL(req.url, "http://localhost");
     if (u.pathname === "/version") return respondVersion(res);
+    if (u.pathname === "/interact") return void handleInteract(u, res);
     if (u.pathname === "/wait") {
       const since = parseInt(u.searchParams.get("since") || "0", 10);
       // the client also reports the busy state it currently believes, so a
@@ -154,7 +211,7 @@ function renderPage(pageIndex) {
         String(DISPLAY.outW),
         String(DISPLAY.outH),
       ],
-      { timeout: 120000 },
+      { timeout: 120000, env: { ...process.env, MANGO_API_BASE: ENV.apiBase } },
       (err, stdout, stderr) => {
         if (err) {
           log("page", pageIndex, "render FAILED:", err.message, (stderr || "").slice(0, 200));
@@ -189,39 +246,7 @@ async function doRender(reason) {
     for (let i = 1; i < meta.pageCount; i++) {
       manifests.push((await renderPage(i)) ? JSON.parse(fs.readFileSync(manifestFor(pageFile(i)), "utf8")) : null);
     }
-    const pages = [];
-    for (let i = 0; i < meta.pageCount; i++) {
-      if (!manifests[i]) continue; // failed page: drop from this cycle
-      const mp = meta.pages[i] || {};
-      pages.push({
-        // layered pages render as transparent PNG, not JPEG
-        image: manifests[i].imageFile || path.basename(pageFile(i)),
-        delaySeconds: mp.delaySeconds || 60,
-        transition: mp.transition || "fade",
-        autoRotate: mp.autoRotate === true,
-        overlays: manifests[i].overlays || [],
-      });
-    }
-    // the TV pulses its refresh dot only for user edits, staying silent
-    // for background refreshes (startup, 20-min data, midnight)
-    const AUTO_REASONS = ["startup", "scheduled", "midnight"];
-    const updateReason = AUTO_REASONS.includes(reason) ? "auto" : "edit";
-    // visual overlays are display-wide, not per page
-    const effects = man0.effects || [];
-    fs.writeFileSync(
-      path.join(__dirname, "display.json"),
-      JSON.stringify(
-        { canvas: { width: DISPLAY.canvasW, height: DISPLAY.canvasH }, updateReason, effects, pages },
-        null,
-        1,
-      ),
-    );
-    version = Math.max(version + 1, Math.floor(Date.now() / 1000));
-    try {
-      fs.writeFileSync(VERSION_FILE, String(version));
-    } catch (e) {}
-    log("display.json:", pages.length, "page(s); version ->", version);
-    flushWaiters();
+    publishFromDisk(reason);
   } catch (e) {
     log("render FAILED:", e.message);
   }
@@ -238,6 +263,53 @@ async function doRender(reason) {
     if (held >= MIN_BUSY_MS) clear();
     else setTimeout(clear, MIN_BUSY_MS - held);
   }
+}
+
+// Compose display.json from whatever manifests are on disk and publish.
+// Used after a full render and after a single page is re-captured by an
+// interaction, so both paths produce the same payload.
+function publishFromDisk(reason) {
+  const man0 = JSON.parse(fs.readFileSync(manifestFor(pageFile(0)), "utf8"));
+  const meta = man0.pageMeta || { pageCount: 1, pages: [] };
+  const pages = [];
+  for (let i = 0; i < meta.pageCount; i++) {
+    let m = null;
+    try {
+      m = JSON.parse(fs.readFileSync(manifestFor(pageFile(i)), "utf8"));
+    } catch (e) {
+      continue; // page never rendered: leave it out of this cycle
+    }
+    const mp = meta.pages[i] || {};
+    pages.push({
+      // layered pages render as transparent PNG, not JPEG
+      image: m.imageFile || path.basename(pageFile(i)),
+      delaySeconds: mp.delaySeconds || 60,
+      transition: mp.transition || "fade",
+      autoRotate: mp.autoRotate === true,
+      overlays: m.overlays || [],
+      targets: m.targets || null,
+    });
+  }
+  // the TV spins its indicator only for user-driven updates, staying
+  // silent for background refreshes (startup, 20-min data, midnight)
+  const AUTO_REASONS = ["startup", "scheduled", "midnight"];
+  const updateReason = AUTO_REASONS.includes(reason) ? "auto" : "edit";
+  // visual overlays are display-wide, not per page
+  const effects = man0.effects || [];
+  fs.writeFileSync(
+    path.join(__dirname, "display.json"),
+    JSON.stringify(
+      { canvas: { width: DISPLAY.canvasW, height: DISPLAY.canvasH }, updateReason, effects, pages },
+      null,
+      1,
+    ),
+  );
+  version = Math.max(version + 1, Math.floor(Date.now() / 1000));
+  try {
+    fs.writeFileSync(VERSION_FILE, String(version));
+  } catch (e) {}
+  log("display.json:", pages.length, "page(s); version ->", version);
+  flushWaiters();
 }
 
 function scheduleRender(reason) {

@@ -51,6 +51,10 @@ sub init()
     m.effectLayer = m.top.findNode("effectLayer")
     m.effectsKey = ""
 
+    m.interaction = m.top.findNode("interaction")
+    m.interaction.assetBase = m.assetBaseUrl
+    m.interaction.serviceBase = m.versionBaseUrl
+
     m.slots.slotA.poster.observeField("loadStatus", "onPosterLoad")
     m.slots.slotB.poster.observeField("loadStatus", "onPosterLoad")
     m.refreshTimer.observeField("fire", "onRefreshTick")
@@ -244,6 +248,14 @@ sub finalizeSwap(newKey as string, index as integer)
     entry.slot.visible = true
     m.pairingGroup.visible = false
     m.pageIndex = index
+    ' actionable items belong to the page on screen
+    pg = m.pages[index]
+    m.interaction.pageIndex = index
+    if pg.targets <> invalid
+        m.interaction.targets = pg.targets
+    else
+        m.interaction.targets = {}
+    end if
     armPageTimer()
     ' apply any manifest that arrived while a transition/load was running
     maybeApplyPages()
@@ -485,10 +497,16 @@ end sub
 ' Hidden dev helper (no on-screen hint): * discards the code and starts
 ' over, like clearing localStorage on the Tizen app
 function onKeyEvent(key as string, press as boolean) as boolean
-    if press and key = "options"
+    if not press then return false
+    if key = "options"
         if m.task <> invalid then m.task.control = "STOP"
         m.deviceCode = getOrCreateCode(true)
         startPairing()
+        return true
+    end if
+    ' D-pad and OK drive the interaction pointer (only once paired)
+    if m.pages <> invalid and (key = "up" or key = "down" or key = "left" or key = "right" or key = "OK")
+        m.interaction.keyPress = key
         return true
     end if
     return false

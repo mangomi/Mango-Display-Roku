@@ -193,6 +193,24 @@ async function extractPageMeta(page) {
       if (groups.length) await page.waitForTimeout(100);
     }
 
+    // display-wide visual overlays (balloons, snow, ...) are animated
+    // natively on the Roku, so keep their canvases out of the still
+    let effects = [];
+    if (portalFrame) {
+      try {
+        effects = await nativeWidgets.extractEffects(portalFrame, { outDir });
+        // hide whenever any effect element exists, even if nothing is
+        // emitted, so nothing gets baked twice
+        await nativeWidgets.hideEffects(portalFrame);
+        if (effects.length) {
+          await page.waitForTimeout(80);
+          console.log("effects:", effects.map((e) => e.type).join(", "));
+        }
+      } catch (e) {
+        console.error("effect extraction failed:", e.message);
+      }
+    }
+
     // layered mode: a rotating page background means the widgets must be
     // captured as a transparent PNG so the Roku can stack native photos
     // UNDER them (see NATIVE_WIDGETS.md)
@@ -246,7 +264,7 @@ async function extractPageMeta(page) {
     fs.writeFileSync(
       out.replace(/\.jpe?g$/i, "") + ".manifest.json",
       JSON.stringify(
-        { canvas: { width, height }, overlays, pageMeta, imageFile: path.basename(outPath) },
+        { canvas: { width, height }, overlays, effects, pageMeta, imageFile: path.basename(outPath) },
         null,
         1,
       ),

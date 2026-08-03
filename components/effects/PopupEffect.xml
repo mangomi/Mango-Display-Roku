@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="PopupEffect" extends="Group">
+    <interface>
+        <field id="config" type="assocarray" />
+        <field id="assetBase" type="string" />
+    </interface>
+    <children>
+        <Timer id="frameTick" repeat="true" duration="0.09" />
+        <Timer id="dwellTimer" repeat="false" duration="5" />
+    </children>
+    <script type="text/brightscript" uri="pkg:/components/effects/PopupEffect.brs" />
+</component>

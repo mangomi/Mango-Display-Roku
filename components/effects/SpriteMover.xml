@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="SpriteMover" extends="Group">
+    <interface>
+        <field id="config" type="assocarray" />
+        <field id="assetBase" type="string" />
+    </interface>
+    <children>
+        <Timer id="frameTick" repeat="true" duration="0.09" />
+    </children>
+    <script type="text/brightscript" uri="pkg:/components/effects/SpriteMover.brs" />
+</component>

@@ -44,9 +44,14 @@ let pendingRender = false;
 // render exists, so pickup is ~instant instead of a blind polling interval.
 const VERSION_PORT = 8091;
 const WAIT_HOLD_MS = 50000; // client uses a 55s wait; always answer first
-// epoch-seeded so versions stay monotonic across watcher restarts - a
-// client holding last-seen version N must always see new renders as > N
+// epoch-seeded AND persisted so versions never regress across restarts
+// (a client that already saw a higher number would ignore new renders)
+const VERSION_FILE = path.join(__dirname, ".version");
 let version = Math.floor(Date.now() / 1000);
+try {
+  const prev = parseInt(fs.readFileSync(VERSION_FILE, "utf8").trim(), 10);
+  if (prev >= version) version = prev + 1;
+} catch (e) {}
 let waiters = [];
 
 // `busy` is true while a USER EDIT is rendering, so the TV can show a
@@ -201,15 +206,20 @@ async function doRender(reason) {
     // for background refreshes (startup, 20-min data, midnight)
     const AUTO_REASONS = ["startup", "scheduled", "midnight"];
     const updateReason = AUTO_REASONS.includes(reason) ? "auto" : "edit";
+    // visual overlays are display-wide, not per page
+    const effects = man0.effects || [];
     fs.writeFileSync(
       path.join(__dirname, "display.json"),
       JSON.stringify(
-        { canvas: { width: DISPLAY.canvasW, height: DISPLAY.canvasH }, updateReason, pages },
+        { canvas: { width: DISPLAY.canvasW, height: DISPLAY.canvasH }, updateReason, effects, pages },
         null,
         1,
       ),
     );
     version = Math.max(version + 1, Math.floor(Date.now() / 1000));
+    try {
+      fs.writeFileSync(VERSION_FILE, String(version));
+    } catch (e) {}
     log("display.json:", pages.length, "page(s); version ->", version);
     flushWaiters();
   } catch (e) {

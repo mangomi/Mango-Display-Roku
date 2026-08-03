@@ -28,6 +28,26 @@ sub fetchManifest(ver as integer)
     print "[Mango] manifest fetch failed"
 end sub
 
+' A long-poll connection can die silently (service restart, NAT drop):
+' the server writes into a dead socket and the TV waits on nothing. This
+' plain GET runs when the loop has been quiet for a while, so a wedged
+' connection can never leave the display stale for long.
+function heartbeatCheck(base as string, ver as integer) as dynamic
+    req = CreateObject("roUrlTransfer")
+    port = CreateObject("roMessagePort")
+    req.SetMessagePort(port)
+    req.SetUrl(base + "/version")
+    if not req.AsyncGetToString() then return invalid
+    msg = wait(8000, port)
+    if type(msg) = "roUrlEvent" and msg.GetResponseCode() = 200
+        json = ParseJson(msg.GetString())
+        if json <> invalid and json.version <> invalid then return Int(json.version)
+    else
+        req.AsyncCancel()
+    end if
+    return invalid
+end function
+
 sub runVersionLoop()
     base = m.top.waitUrl
     print "[Mango] version long-poll: "; base
@@ -56,7 +76,11 @@ sub runVersionLoop()
                 end if
                 if json <> invalid and GetInterface(json, "ifAssociativeArray") <> invalid and json.version <> invalid
                     v = Int(json.version)
-                    if v > ver
+                    ' any CHANGE is an update, not just a higher number: a
+                    ' restarted render service can come back with a lower
+                    ' version, and requiring ">" left the TV deaf until it
+                    ' was reinstalled
+                    if v <> ver
                         ver = v
                         print "[Mango] new render version: "; ver
                         ' manifest first, so it's readable when version fires
@@ -66,7 +90,14 @@ sub runVersionLoop()
                 end if
             else
                 req.AsyncCancel()
-                print "[Mango] version wait failed, retrying in 5s"
+                print "[Mango] version wait failed, checking directly"
+                hb = heartbeatCheck(base, ver)
+                if hb <> invalid and hb <> ver
+                    ver = hb
+                    print "[Mango] heartbeat found version: "; ver
+                    fetchManifest(ver)
+                    m.top.version = ver
+                end if
                 sleep(5000)
             end if
         else

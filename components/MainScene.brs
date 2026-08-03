@@ -45,6 +45,12 @@ sub init()
     ' these render BELOW the page image (layered pages)
     m.underTypes = { background: true }
 
+    ' display-wide visual overlays: manifest effect type -> component
+    ' spritesheet effects reuse GifOverlay (animated strip at a fixed rect)
+    m.effectRegistry = { balloons: "ParticleEffect", snow: "ParticleEffect", leaves: "ParticleEffect", hearts: "ParticleEffect", spritesheet: "GifOverlay", spritemover: "SpriteMover", popup: "PopupEffect", dropper: "DropperEffect" }
+    m.effectLayer = m.top.findNode("effectLayer")
+    m.effectsKey = ""
+
     m.slots.slotA.poster.observeField("loadStatus", "onPosterLoad")
     m.slots.slotB.poster.observeField("loadStatus", "onPosterLoad")
     m.refreshTimer.observeField("fire", "onRefreshTick")
@@ -129,6 +135,7 @@ sub onVersionChange()
     man = m.versionTask.manifest
     if man = invalid or man.pages = invalid or man.pages.Count() = 0 then return
     print "[Mango] display.json: "; man.pages.Count(); " page(s)"
+    applyEffects(man.effects)
     ' never apply mid-transition/mid-load - deferred to finalizeSwap
     m.latestPages = man.pages
     m.latestReason = ""
@@ -412,6 +419,33 @@ function overlayStateKey(cfg as object) as string
     if cfg = invalid or cfg.widgetSettingId = invalid then return ""
     return "ov_" + Int(cfg.widgetSettingId).ToStr() + "_" + Int(cfg.page).ToStr()
 end function
+
+' Visual overlays are display-wide and long-running, so they are only
+' rebuilt when the effect set actually changes - otherwise every render
+' would restart the balloons mid-flight.
+sub applyEffects(effects as object)
+    ' fingerprint the whole config, not just the effect names: tuning
+    ' changes (sprite art, sizes, counts) must rebuild too
+    key = ""
+    if effects <> invalid then key = FormatJson(effects)
+    if key = m.effectsKey then return
+    m.effectsKey = key
+    print "[Mango] effects: "; key
+    while m.effectLayer.getChildCount() > 0
+        m.effectLayer.removeChildIndex(0)
+    end while
+    if effects = invalid then return
+    for each e in effects
+        compName = m.effectRegistry.Lookup(e.type)
+        if compName <> invalid
+            node = CreateObject("roSGNode", compName)
+            ' assetBase before config: generated sprites resolve against it
+            if node.hasField("assetBase") then node.assetBase = m.assetBaseUrl
+            node.config = e
+            m.effectLayer.appendChild(node)
+        end if
+    end for
+end sub
 
 sub clearOverlays(container as object)
     while container.getChildCount() > 0

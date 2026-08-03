@@ -821,9 +821,645 @@ const backgroundHandler = {
   },
 };
 
-// Add future handlers here (video) - one object each, and a matching
-// entry in the Roku app's m.overlayRegistry.
+// ---- visual overlays (seasonal effects) --------------------------------
+// These are display-wide, not per-widget, and the portal draws them on
+// full-screen canvases with per-frame randomness. Film strips are the
+// wrong tool here (full-screen sheets blow the texture budget, the motion
+// never repeats, and ~10fps strips look jerky), so the Roku re-creates
+// them natively as particle animations using the SAME sprite art.
+//
+// NOTE: sprite URLs and motion constants live inside the portal's
+// overlayController.js, so this table MIRRORS them. If the portal's
+// artwork or tuning changes, update this table too.
+const S3_OVERLAY = "https://displaytemplates.s3.us-east-1.amazonaws.com/media/visualoverlays/";
+
+const EFFECTS = {
+  // portal: overlaySetting.snow -> #snow, "❅" glyphs, CSS `fall` keyframes
+  // (down, drifting +40px mid-flight), size 1-2.5em, 11-16.5s, max 30.
+  // The glyph is text, so the sprite is generated locally.
+  snow: {
+    type: "snow",
+    domIds: ["snow"],
+    domClasses: ["snowflake"],
+    generate: ["snowflake"],
+    config: {
+      sprites: ["effect_snowflake.png"],
+      maxCount: 30,
+      spawnEverySeconds: 0.7,
+      sizeRange: [16, 40],
+      speedRange: [70, 105],
+      driftAmplitudeRange: [20, 45],
+      driftPeriodRange: [5, 11],
+      fadeInPx: 60,
+      growthFactor: 1.0,
+      direction: "down",
+    },
+  },
+
+  // portal: overlaySetting.fallingLeaves -> .leaf imgs, 18-30s fall, 1/s.
+  // The art is animated GIFs; Roku Posters show a single frame, so the
+  // first frame is extracted and the flutter is replaced by native spin.
+  fallingLeaves: {
+    type: "leaves",
+    domIds: ["fallingLeaves"],
+    domClasses: ["leaf"],
+    generate: ["leaves"],
+    config: {
+      sprites: [
+        "effect_leaf1.png",
+        "effect_leaf2.png",
+        "effect_leaf3.png",
+        "effect_leaf4.png",
+        "effect_leaf5.png",
+        "effect_leaf6.png",
+      ],
+      maxCount: 18,
+      spawnEverySeconds: 1.0,
+      sizeRange: [34, 62],
+      speedRange: [38, 62],
+      driftAmplitudeRange: [30, 70],
+      driftPeriodRange: [6, 13],
+      fadeInPx: 60,
+      growthFactor: 1.0,
+      spinTurnsRange: [-1.4, 1.4],
+      direction: "down",
+    },
+  },
+
+  // portal: overlaySetting.flHeart -> .heart imgs (red_heart1.png, 30px
+  // wide), CSS `fallHearts` (down with a +/-20px sway), 25-35s, max 20
+  flHeart: {
+    type: "hearts",
+    domIds: [],
+    domClasses: ["heart"],
+    config: {
+      sprites: [S3_OVERLAY + "red_heart1.png"],
+      maxCount: 20,
+      spawnEverySeconds: 1.5,
+      sizeRange: [26, 34],
+      speedRange: [32, 45],
+      driftAmplitudeRange: [15, 25],
+      driftPeriodRange: [7, 14],
+      fadeInPx: 80,
+      growthFactor: 1.0,
+      direction: "down",
+    },
+  },
+
+  // portal: overlaySetting.flBalloon -> #balloonCanvas
+  flBalloon: {
+    type: "balloons",
+    domIds: ["balloonCanvas"],
+    config: {
+      sprites: [
+        S3_OVERLAY + "baloons/blue_balloon.png",
+        S3_OVERLAY + "baloons/green_balloon.png",
+        S3_OVERLAY + "baloons/yellow_balloon.png",
+        S3_OVERLAY + "baloons/purple_balloon.png",
+        S3_OVERLAY + "baloons/pink_balloon.png",
+      ],
+      // portal: <=15 balloons, size 30-70px, 0.2-0.7 px/frame @60fps,
+      // sine drift (amplitude 20-60px, 0.5-1.5 rad/s), fade in over the
+      // first 100px of travel, slow growth while rising
+      maxCount: 15,
+      spawnEverySeconds: 1.6,
+      sizeRange: [30, 70],
+      speedRange: [12, 42],
+      driftAmplitudeRange: [20, 60],
+      driftPeriodRange: [4.2, 12.6],
+      fadeInPx: 100,
+      growthFactor: 1.25,
+      direction: "up",
+    },
+  },
+};
+
+// sprite aspect ratios, measured once per process. The portal scales by
+// width and lets height follow the art (drawHeight = natH * size/natW),
+// so the Roku needs the real ratio or the sprites come out squashed.
+const spriteAspectCache = {};
+
+async function spriteAspect(url) {
+  if (spriteAspectCache[url] !== undefined) return spriteAspectCache[url];
+  let aspect = 1.3;
+  try {
+    const sharp = require("sharp");
+    const resp = await fetch(url);
+    if (resp.ok) {
+      const meta = await sharp(Buffer.from(await resp.arrayBuffer())).metadata();
+      if (meta.width > 0 && meta.height > 0) aspect = meta.height / meta.width;
+    }
+  } catch (e) {
+    console.error("sprite aspect failed (" + url.split("/").pop() + "):", e.message);
+  }
+  spriteAspectCache[url] = aspect;
+  return aspect;
+}
+
+// String lights: an animated WEBP tiled across the full width at the top
+// and bottom. Built into a sprite sheet (one full-width strip per frame)
+// and played by the existing GifOverlay, so the blink survives.
+const STRINGLIGHT_HEIGHT = 50;
+
+async function buildStringLightEffects(outDir) {
+  const sharp = require("sharp");
+  const file = "effect_stringlights.png";
+  const filePath = pathHandlers.join(outDir, file);
+  const metaPath = filePath.replace(/\.png$/, ".json");
+  let meta;
+
+  if (fsHandlers.existsSync(filePath) && fsHandlers.existsSync(metaPath)) {
+    meta = JSON.parse(fsHandlers.readFileSync(metaPath, "utf8"));
+  } else {
+    const resp = await fetch(S3_OVERLAY + "stringlight.webp");
+    if (!resp.ok) throw new Error("stringlight fetch " + resp.status);
+    const buf = Buffer.from(await resp.arrayBuffer());
+    const src = await sharp(buf, { animated: true }).metadata();
+    const pages = src.pages || 1;
+    const frameH = src.pageHeight || src.height;
+    const tileW = Math.max(1, Math.round((src.width / frameH) * STRINGLIGHT_HEIGHT));
+    const cols = Math.ceil(1920 / tileW) + 1;
+    // 2048px sheet ceiling: subsample long animations
+    const maxFrames = Math.max(1, Math.floor(2048 / STRINGLIGHT_HEIGHT));
+    const step = Math.max(1, Math.ceil(pages / maxFrames));
+    const indices = [];
+    for (let i = 0; i < pages; i += step) indices.push(i);
+
+    const strips = [];
+    for (const idx of indices) {
+      const tile = await sharp(buf, { page: idx })
+        .resize(tileW, STRINGLIGHT_HEIGHT, { fit: "fill" })
+        .png()
+        .toBuffer();
+      const row = [];
+      for (let c = 0; c < cols; c++) row.push({ input: tile, left: c * tileW, top: 0 });
+      strips.push(
+        await sharp({
+          create: {
+            width: 1920,
+            height: STRINGLIGHT_HEIGHT,
+            channels: 4,
+            background: { r: 0, g: 0, b: 0, alpha: 0 },
+          },
+        })
+          .composite(row)
+          .png()
+          .toBuffer(),
+      );
+    }
+
+    await sharp({
+      create: {
+        width: 1920,
+        height: STRINGLIGHT_HEIGHT * strips.length,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      },
+    })
+      .composite(strips.map((s, i) => ({ input: s, left: 0, top: i * STRINGLIGHT_HEIGHT })))
+      .png()
+      .toFile(filePath);
+
+    const delays = Array.isArray(src.delay) ? src.delay : [];
+    const avg = delays.length ? delays.reduce((a, b) => a + (b > 0 ? b : 120), 0) / delays.length : 120;
+    meta = {
+      frameCount: strips.length,
+      frameMs: Math.max(60, Math.round(avg * step)),
+      cols: 1,
+      rows: strips.length,
+    };
+    fsHandlersWriteJson(metaPath, meta);
+    console.log("generated string light sheet:", strips.length, "frames");
+  }
+
+  const base = { type: "spritesheet", stripFile: file, frameW: 1920, frameH: STRINGLIGHT_HEIGHT, ...meta };
+  return [
+    { ...base, rect: { x: 0, y: 0, w: 1920, h: STRINGLIGHT_HEIGHT } },
+    { ...base, rect: { x: 0, y: 1080 - STRINGLIGHT_HEIGHT, w: 1920, h: STRINGLIGHT_HEIGHT } },
+  ];
+}
+
+function fsHandlersWriteJson(p, obj) {
+  fsHandlers.writeFileSync(p, JSON.stringify(obj));
+}
+
+// Build a sprite sheet from an animated image (GIF/WEBP) at a target
+// width, for effects that both animate AND move. Same grid rules as the
+// widget GIF pipeline: <=2048 per side, cached by url+size.
+// Giphy pools used by the pop-up overlays (elf / scary). Mirrored from
+// the portal's overlayController.js.
+const ELF_GIFS = [
+  "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExaXl4OGtvc3N4NjVpYWFneGxnb2YzZXQ2MG9jcXJzYnc1bnV2NmgwZyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/c6Wwg5oTaXNPydsOpO/giphy.gif",
+  "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExem1heXU4bW84MmEwZGtmczQ2NWhxMDExcHhvb3F5a21xNmR1Mjd5YyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/nqLx5MEvW09S3R7KjM/giphy.gif",
+  "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExNG0xd2J5bWR3N3FjZnRhYzljaDZ5dHBrMGtocmo5ajBvcW0xN3RsZiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/2vqcMtDEE8HHKoSDuG/giphy.gif",
+  "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExeW9nNHZzcjMxcmV3cGtjNTgwd2xuZWNlNzIzbW00cXNhYjR2ZGxvayZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/jUXA5epl1lWkI33w8s/giphy.gif",
+  "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExeHhtbWVvbHdlODhhMGZiYWZhYmdrNjdpNDRoaTJqN3dvcHo2NDIwMCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/saushIfoVoIAWAUxHO/giphy.gif",
+  "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExdmtrdXJheWVjMHowMXpiMjQxbjgxeWh2ZG52dTViZzAyYmNrdW92aCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/dFtJ7fIzH8N7nTXPHH/giphy.gif",
+  "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExbm9wZmMzd2tpY2xqdHdlbXBpaDdjeTQ3NmYxNXA1MWxxZGU4azdtNyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/Jcdo0sSYwHu3BAkhp3/giphy.gif",
+  "https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExNzN2eGI1aWFhM2twc2k1cWN0NWM5YzhhaTBkNWRnMXJuMHg5aDlybiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/vxALUErbULsI7kTlxg/giphy.gif",
+];
+
+const SCARY_GIFS = [
+  S3_OVERLAY + "haloween/skull_bye.gif",
+  S3_OVERLAY + "haloween/spider_crawl2.gif",
+  S3_OVERLAY + "haloween/ghost1.gif",
+  S3_OVERLAY + "haloween/skull2.gif",
+  S3_OVERLAY + "haloween/bats.gif",
+  S3_OVERLAY + "haloween/witch_face.gif",
+];
+
+// portal: .elf img { height: 200px }, one at a time, 4-6s dwell,
+// pop-in/pop-out, random position anywhere on screen
+async function buildPopupEffect(urls, outDir, prefix) {
+  const sprites = [];
+  for (let i = 0; i < urls.length; i++) {
+    try {
+      sprites.push(await buildAnimatedSheet(urls[i], 200, outDir, prefix + i, "height"));
+    } catch (e) {
+      console.error(prefix + " sprite " + i + " failed:", e.message);
+    }
+  }
+  if (!sprites.length) throw new Error("no " + prefix + " sprites");
+  return {
+    type: "popup",
+    sprites,
+    dwellMsRange: [4000, 6000],
+    popMs: 500,
+  };
+}
+
+async function buildAnimatedSheet(url, target, outDir, prefix, fit) {
+  const sharp = require("sharp");
+  const key = crypto.createHash("md5").update(url + "|" + target + "|" + (fit || "width")).digest("hex").slice(0, 12);
+  const file = "effect_" + prefix + "_" + key + ".png";
+  const filePath = pathHandlers.join(outDir, file);
+  const metaPath = filePath.replace(/\.png$/, ".json");
+  if (fsHandlers.existsSync(filePath) && fsHandlers.existsSync(metaPath)) {
+    return { stripFile: file, ...JSON.parse(fsHandlers.readFileSync(metaPath, "utf8")) };
+  }
+
+  const flipFile = file.replace(/\.png$/, "_flip.png");
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error("fetch " + resp.status);
+  const buf = Buffer.from(await resp.arrayBuffer());
+  const src = await sharp(buf, { animated: true }).metadata();
+  const pages = src.pages || 1;
+  const srcH = src.pageHeight || src.height;
+  let frameW = Math.round(target);
+  let frameH = Math.max(1, Math.round((srcH / src.width) * target));
+  if (fit === "height") {
+    frameH = Math.round(target);
+    frameW = Math.max(1, Math.round((src.width / srcH) * target));
+  }
+
+  const maxFrames = Math.min(
+    36,
+    Math.max(2, Math.floor(2048 / frameW) * Math.floor(2048 / frameH)),
+  );
+  const step = Math.max(1, Math.ceil(pages / maxFrames));
+  const indices = [];
+  for (let i = 0; i < pages && indices.length < maxFrames; i += step) indices.push(i);
+
+  const frames = [];
+  for (const idx of indices) {
+    frames.push(
+      await sharp(buf, { page: idx }).resize(frameW, frameH, { fit: "fill" }).png().toBuffer(),
+    );
+  }
+  const cols = Math.max(1, Math.min(Math.floor(2048 / frameW), frames.length));
+  const rows = Math.ceil(frames.length / cols);
+  await sharp({
+    create: {
+      width: cols * frameW,
+      height: rows * frameH,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite(
+      frames.map((f, i) => ({
+        input: f,
+        left: (i % cols) * frameW,
+        top: Math.floor(i / cols) * frameH,
+      })),
+    )
+    .png()
+    .toFile(filePath);
+
+  // A mirrored sheet for travel in the other direction: Roku clips a
+  // Group AFTER its transform, so a negative scale pushes the frame
+  // window out of its own cutout and the sprite vanishes. Each frame is
+  // flipped individually so the grid addressing is unchanged.
+  const flipped = [];
+  for (const f of frames) flipped.push(await sharp(f).flop().png().toBuffer());
+  await sharp({
+    create: {
+      width: cols * frameW,
+      height: rows * frameH,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .composite(
+      flipped.map((f, i) => ({
+        input: f,
+        left: (i % cols) * frameW,
+        top: Math.floor(i / cols) * frameH,
+      })),
+    )
+    .png()
+    .toFile(pathHandlers.join(outDir, flipFile));
+
+  const delays = Array.isArray(src.delay) ? src.delay : [];
+  const avg = delays.length ? delays.reduce((a, b) => a + (b > 0 ? b : 90), 0) / delays.length : 90;
+  const meta = {
+    frameW,
+    frameH,
+    cols,
+    rows,
+    frameCount: frames.length,
+    frameMs: Math.max(50, Math.round(avg * step)),
+    stripFileFlipped: flipFile,
+  };
+  fsHandlersWriteJson(metaPath, meta);
+  console.log("generated " + prefix + " sheet:", frames.length, "frames", frameW + "x" + frameH);
+  return { stripFile: file, ...meta };
+}
+
+async function spriteAspectLocal(file) {
+  if (spriteAspectCache[file] !== undefined) return spriteAspectCache[file];
+  let aspect = 1;
+  try {
+    const meta = await require("sharp")(file).metadata();
+    if (meta.width > 0 && meta.height > 0) aspect = meta.height / meta.width;
+  } catch (e) {
+    console.error("local sprite aspect failed (" + file + "):", e.message);
+  }
+  spriteAspectCache[file] = aspect;
+  return aspect;
+}
+
+async function extractEffects(frame, ctx) {
+  const enabled = await frame.evaluate(() => {
+    if (!window.angular) return null;
+    const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
+    for (const r of roots) {
+      if (!r) continue;
+      const inj = window.angular.element(r).injector();
+      if (!inj) continue;
+      let found = null;
+      const walk = (s) => {
+        if (!s || found) return;
+        if (s.overlaySetting) {
+          found = s.overlaySetting;
+          return;
+        }
+        walk(s.$$childHead);
+        walk(s.$$nextSibling);
+      };
+      walk(inj.get("$rootScope"));
+      return found || null;
+    }
+    return null;
+  });
+  if (!enabled) return [];
+  const active = Object.keys(EFFECTS).filter(
+    (key) => enabled[key] === true || enabled[key] === "true",
+  );
+  const outDir = (ctx && ctx.outDir) || ".";
+  const toGenerate = active.flatMap((key) => EFFECTS[key].generate || []);
+  if (toGenerate.length) await generateEffectSprites(toGenerate, outDir);
+
+  const out = [];
+
+  // Santa: an animated GIF that bounces around the screen (portal moves
+  // him 2px/0.5px per frame @60fps, flipping to face his direction).
+  // The Roku computes the bounce itself, leg by leg.
+  if (enabled.santa === true || enabled.santa === "true") {
+    try {
+      const sheet = await buildAnimatedSheet(S3_OVERLAY + "santa_flying.gif", 150, outDir, "santa");
+      out.push({
+        type: "spritemover",
+        ...sheet,
+        width: sheet.frameW,
+        height: sheet.frameH,
+        startX: 0,
+        startY: 50,
+        speedX: 120,
+        speedY: 30,
+        flipOnTurn: true,
+      });
+    } catch (e) {
+      console.error("santa effect failed:", e.message);
+    }
+  }
+
+  // Flying witch set: the witch (bats trailing her) plus two spiders
+  // that rotate to face their direction. Portal speeds are px/frame at
+  // 60fps; entity boxes and start positions mirrored from its table.
+  if (enabled.flyingWitch === true || enabled.flyingWitch === "true") {
+    try {
+      const witch = await buildAnimatedSheet(
+        S3_OVERLAY + "haloween/witch_broom.png",
+        150,
+        outDir,
+        "witch",
+      );
+      const bats = await buildAnimatedSheet(S3_OVERLAY + "haloween/bats.gif", 120, outDir, "bats");
+      out.push({
+        type: "spritemover",
+        ...witch,
+        startX: 0,
+        startY: 1080 - 200,
+        startDirX: 1,
+        startDirY: -1,
+        speedX: 150,
+        speedY: 42,
+        flipOnTurn: true,
+        companion: { ...bats, offsetX: -(bats.frameW + 20), offsetY: -20 },
+      });
+
+      const spider = await buildAnimatedSheet(
+        S3_OVERLAY + "haloween/spiderwalk.gif",
+        100,
+        outDir,
+        "spider",
+      );
+      out.push({
+        type: "spritemover",
+        ...spider,
+        startX: 30,
+        startY: 1080 - 200,
+        startDirX: 1,
+        startDirY: -1,
+        speedX: 60,
+        speedY: 72,
+        flipOnTurn: true,
+        rotateOnTurn: true,
+      });
+
+      // separate system: spiders that drop from the top on threads
+      // (portal: class "spider" + SVG "web-line", ~1 per 200px, 0.6
+      // px/frame @60fps, sway sin(t/600)*22.5, down to height-120)
+      const dropper = await buildAnimatedSheet(
+        S3_OVERLAY + "haloween/spiderwalk.gif",
+        80,
+        outDir,
+        "spiderdrop",
+      );
+      out.push({
+        type: "dropper",
+        ...dropper,
+        count: Math.max(1, Math.floor(1920 / 200)),
+        speed: 36,
+        maxY: 1080 - 120,
+        swayAmplitude: 22.5,
+        swayPeriodMs: 3770,
+        threadColor: "0xC8C8C8CC",
+      });
+
+      const spider3 = await buildAnimatedSheet(
+        S3_OVERLAY + "haloween/spiderwalk.gif",
+        110,
+        outDir,
+        "spider3",
+      );
+      out.push({
+        type: "spritemover",
+        ...spider3,
+        startX: 1920 - 150,
+        startY: 1080 - 150,
+        startDirX: -1,
+        startDirY: -1,
+        speedX: 60,
+        speedY: 72,
+        flipOnTurn: true,
+        rotateOnTurn: true,
+      });
+    } catch (e) {
+      console.error("witch effect failed:", e.message);
+    }
+  }
+
+  // pop-up characters: one random GIF at a random spot, 4-6s, repeat
+  if (enabled.elf === true || enabled.elf === "true") {
+    try {
+      out.push(await buildPopupEffect(ELF_GIFS, outDir, "elf"));
+    } catch (e) {
+      console.error("elf effect failed:", e.message);
+    }
+  }
+  if (enabled.scaryPopUp === true || enabled.scaryPopUp === "true") {
+    try {
+      out.push(await buildPopupEffect(SCARY_GIFS, outDir, "scary"));
+    } catch (e) {
+      console.error("scary effect failed:", e.message);
+    }
+  }
+
+  // string lights are a fixed pair of animated strips, not particles
+  if (enabled.stringLight === true || enabled.stringLight === "true") {
+    try {
+      out.push(...(await buildStringLightEffects(outDir)));
+    } catch (e) {
+      console.error("string lights failed:", e.message);
+    }
+  }
+
+  for (const key of active) {
+    const cfg = { type: EFFECTS[key].type, ...EFFECTS[key].config };
+    cfg.sprites = await Promise.all(
+      cfg.sprites.map(async (src) => {
+        // generated sprites are local filenames (resolved against the
+        // asset base on the device); everything else is an absolute URL
+        const local = !/^https?:/i.test(src);
+        const aspect = local
+          ? await spriteAspectLocal(pathHandlers.join(outDir, src))
+          : await spriteAspect(src);
+        return { url: src, aspect };
+      }),
+    );
+    out.push(cfg);
+  }
+  return out;
+}
+
+// keep the portal's own effect elements out of the still: frozen
+// mid-flight particles would sit baked under the live native ones.
+// (leaves and hearts are appended straight to <body> by class, so both
+// ids and classes have to be covered)
+async function hideEffects(frame) {
+  // effects handled outside the particle table still have to be kept out
+  // of the still (the Roku animates them natively)
+  const ids = Object.values(EFFECTS)
+    .flatMap((e) => e.domIds || [])
+    .concat(["santa", "elf", "scaryelf", "witch", "bat", "spider", "spider3"]);
+  const classes = Object.values(EFFECTS)
+    .flatMap((e) => e.domClasses || [])
+    // "spider" class = the dropping spiders, "web-line" = their threads
+    .concat(["stringlight", "elf", "spider", "web-line"]);
+  await frame.evaluate(
+    (sel) => {
+      sel.ids.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.style.opacity = "0";
+      });
+      sel.classes.forEach((cls) => {
+        document.querySelectorAll("." + cls).forEach((el) => {
+          el.style.opacity = "0";
+        });
+      });
+    },
+    { ids, classes },
+  );
+}
+
+// sprites the portal draws as text or animated GIFs have to become plain
+// PNGs the Roku can display; generated once and served alongside the
+// page images (referenced by filename, resolved against assetBase)
+async function generateEffectSprites(kinds, outDir) {
+  const sharp = require("sharp");
+  for (const kind of kinds) {
+    if (kind === "snowflake") {
+      const file = pathHandlers.join(outDir, "effect_snowflake.png");
+      if (fsHandlers.existsSync(file)) continue;
+      const spoke = (a) =>
+        `<g transform="rotate(${a} 32 32)">` +
+        '<line x1="32" y1="7" x2="32" y2="57" stroke="#fff" stroke-width="4.5" stroke-linecap="round"/>' +
+        '<line x1="32" y1="14" x2="24" y2="22" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>' +
+        '<line x1="32" y1="14" x2="40" y2="22" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>' +
+        '<line x1="32" y1="50" x2="24" y2="42" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>' +
+        '<line x1="32" y1="50" x2="40" y2="42" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/>' +
+        "</g>";
+      const svg =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">' +
+        [0, 60, 120].map(spoke).join("") +
+        "</svg>";
+      await sharp(Buffer.from(svg)).png().toFile(file);
+      console.log("generated effect_snowflake.png");
+    } else if (kind === "leaves") {
+      for (let i = 1; i <= 6; i++) {
+        const file = pathHandlers.join(outDir, "effect_leaf" + i + ".png");
+        if (fsHandlers.existsSync(file)) continue;
+        try {
+          const resp = await fetch(S3_OVERLAY + "fall/leaf" + i + ".gif");
+          if (!resp.ok) throw new Error("fetch " + resp.status);
+          const buf = Buffer.from(await resp.arrayBuffer());
+          await sharp(buf, { page: 0 }).png().toFile(file);
+        } catch (e) {
+          console.error("leaf sprite " + i + " failed:", e.message);
+        }
+      }
+      console.log("generated leaf sprites");
+    }
+  }
+}
+
+// Add future handlers here - one object each, and a matching entry in
+// the Roku app's m.overlayRegistry.
 module.exports = {
+  extractEffects,
+  hideEffects,
   handlers: [
     clockHandler,
     gifHandler,

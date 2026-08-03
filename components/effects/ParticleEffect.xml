@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="ParticleEffect" extends="Group">
+    <interface>
+        <field id="config" type="assocarray" />
+        <!-- generated sprites are filenames served next to the page images -->
+        <field id="assetBase" type="string" />
+    </interface>
+    <children>
+        <Timer id="spawnTimer" repeat="true" duration="1.6" />
+    </children>
+    <script type="text/brightscript" uri="pkg:/components/effects/ParticleEffect.brs" />
+</component>

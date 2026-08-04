@@ -6,6 +6,7 @@
         <field id="x" type="float" value="0" />
         <field id="y" type="float" value="0" />
         <field id="pageIndex" type="integer" value="0" />
+        <field id="targetId" type="string" />
     </interface>
     <script type="text/brightscript" uri="pkg:/components/InteractTask.brs" />
 </component>

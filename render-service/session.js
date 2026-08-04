@@ -99,7 +99,7 @@ class InteractionSession {
   // A real checkbox click flips the model first (the browser's native
   // toggle) and the handler then sends that new state, so the flip has to
   // be mirrored here or the portal dutifully re-sends the old value.
-  async tap(x, y) {
+  async tap(x, y, id) {
     const frame = this.page.frames().find((f) => f.url().includes("designer=true"));
     if (!frame) throw new Error("portal frame missing");
 
@@ -109,13 +109,28 @@ class InteractionSession {
         document.querySelectorAll("input.todocheckbox").forEach((el) => {
           if (el.style.opacity === "0") el.style.opacity = "";
         });
-        const pad = 14;
-        const el = [...document.querySelectorAll("input.todocheckbox")].find((c) => {
-          if (getComputedStyle(c).visibility === "hidden") return false; // other page
-          const r = c.getBoundingClientRect();
-          return pt.x >= r.x - pad && pt.x <= r.right + pad && pt.y >= r.y - pad && pt.y <= r.bottom + pad;
-        });
-        if (!el) return { handled: false, reason: "no target under pointer" };
+        const boxes = [...document.querySelectorAll("input.todocheckbox")].filter(
+          (c) => getComputedStyle(c).visibility !== "hidden", // other pages
+        );
+        // Identity beats geometry: the list can reshuffle between the
+        // render the device is showing and this live page (a completed
+        // task drops out and the rest move up), so match the task itself
+        // and fall back to the pointer position only if it isn't found.
+        let el = null;
+        if (pt.id) {
+          el = boxes.find((c) => {
+            const s = window.angular.element(c).scope();
+            return s && s.todo && String(s.todo.id) === String(pt.id);
+          });
+        }
+        if (!el) {
+          const pad = 14;
+          el = boxes.find((c) => {
+            const r = c.getBoundingClientRect();
+            return pt.x >= r.x - pad && pt.x <= r.right + pad && pt.y >= r.y - pad && pt.y <= r.bottom + pad;
+          });
+        }
+        if (!el) return { handled: false, reason: "no target for id/point" };
 
         const sc = window.angular.element(el).scope();
         const climb = (k) => {
@@ -148,7 +163,7 @@ class InteractionSession {
         });
         return { handled: true, kind, taskId: sc.todo.taskId, status: next };
       },
-      { x, y },
+      { x, y, id },
     );
 
     if (!result.handled) {
@@ -175,7 +190,15 @@ class InteractionSession {
     });
   }
 
-  // one interaction, serialised: nothing else may drive the page at once
+  // One interaction, serialised: nothing else may drive the page at once.
+  //
+  // Deliberately does NOT re-render afterwards. The device draws the
+  // checkbox itself and ticks it on the press, so the screen is already
+  // right; a forced re-render would only republish the page image (a
+  // visible reload) for a change the user can already see. The backend
+  // pushes its own refresh for the change, which re-renders through the
+  // normal path and brings across anything native drawing can't show
+  // (reward points, the task leaving the list).
   async interact(action) {
     if (this.busy) throw new Error("session busy");
     this.busy = true;
@@ -183,11 +206,9 @@ class InteractionSession {
     try {
       await this.open(action.page || 0);
       if (action.type === "tap") {
-        await this.tap(action.x, action.y);
-      } else {
-        throw new Error("unsupported action: " + action.type);
+        return await this.tap(action.x, action.y, action.id);
       }
-      return await this.recapture();
+      throw new Error("unsupported action: " + action.type);
     } finally {
       this.busy = false;
       this.touchIdle();

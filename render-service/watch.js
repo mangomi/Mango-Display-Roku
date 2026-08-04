@@ -138,11 +138,12 @@ async function handleInteract(u, res) {
   }
 
   try {
-    log("interact:", type, "at", Math.round(x) + "," + Math.round(y), "page", pageIndex);
-    const manifest = await getSession().interact({ type, x, y, page: pageIndex });
-    // republish so the TV picks up the portal's real, updated screen
-    publishFromDisk("interaction");
-    return reply(200, { ok: true, targets: manifest.targets ? manifest.targets.items.length : 0 });
+    const id = u.searchParams.get("id") || null;
+    log("interact:", type, "at", Math.round(x) + "," + Math.round(y), "page", pageIndex, id ? "id " + id : "");
+    // no re-render here: the device already shows the change, and the
+    // backend's own push re-renders through the normal path
+    const r = await getSession().interact({ type, x, y, id, page: pageIndex });
+    return reply(200, r);
   } catch (e) {
     log("interact failed:", e.message);
     return reply(500, { ok: false, error: e.message });

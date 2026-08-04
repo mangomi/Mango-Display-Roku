@@ -6,7 +6,7 @@ sub init()
 end sub
 
 sub runInteract()
-    url = m.top.serviceBase + "/interact?type=" + m.top.kind + "&page=" + m.top.pageIndex.ToStr() + "&x=" + Int(m.top.x).ToStr() + "&y=" + Int(m.top.y).ToStr()
+    url = m.top.serviceBase + "/interact?type=" + m.top.kind + "&page=" + m.top.pageIndex.ToStr() + "&x=" + Int(m.top.x).ToStr() + "&y=" + Int(m.top.y).ToStr() + "&id=" + m.top.targetId
     req = CreateObject("roUrlTransfer")
     port = CreateObject("roMessagePort")
     req.SetMessagePort(port)

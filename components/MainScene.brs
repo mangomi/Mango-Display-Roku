@@ -71,6 +71,9 @@ sub init()
     m.lastVersionSeconds = 0
     m.latestReason = ""
 
+    ' without focus the scene never receives remote key events
+    m.top.setFocus(true)
+
     m.deviceCode = getOrCreateCode(false)
     startPairing()
 end sub
@@ -497,7 +500,15 @@ end sub
 ' Hidden dev helper (no on-screen hint): * discards the code and starts
 ' over, like clearing localStorage on the Tizen app
 function onKeyEvent(key as string, press as boolean) as boolean
-    if not press then return false
+    ' releases matter: holding an arrow glides the pointer, so the layer
+    ' needs to know when the key comes back up
+    if not press
+        if m.pages <> invalid and (key = "up" or key = "down" or key = "left" or key = "right")
+            m.interaction.keyRelease = key
+            return true
+        end if
+        return false
+    end if
     if key = "options"
         if m.task <> invalid then m.task.control = "STOP"
         m.deviceCode = getOrCreateCode(true)

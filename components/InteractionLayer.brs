@@ -1,6 +1,16 @@
 ' Remote interaction: a pointer the user steers with the D-pad, plus the
 ' task checkboxes drawn natively (the render hides the real ones).
 '
+' The flow mirrors the portal's own remotePointer directive, which is what
+' the other TV platforms run (js/directives/remotePointer.js):
+'   - OK reveals the pointer; the press that reveals it does nothing else
+'   - OK again taps whatever sits under the pointer
+'   - arrows do nothing until the pointer is up, then move it 10px a step,
+'     holding one glides it along
+'   - 15s without input hides it again
+' Same look, too: a 20px red dot with a 2px white ring, centred on the
+' point it acts at.
+'
 ' Pressing OK sends the gesture to the render service, which replays it
 ' into a live portal session - the portal runs its own handler, exactly
 ' as on a touch TV, and the updated screen comes back as a new render.
@@ -9,16 +19,24 @@
 
 sub init()
     m.boxes = m.top.findNode("boxes")
+    m.preload = m.top.findNode("preload")
     m.pointer = m.top.findNode("pointer")
+    m.overrides = {}
     m.hideTimer = m.top.findNode("hideTimer")
     m.hideTimer.observeField("fire", "onIdle")
+    m.holdDelay = m.top.findNode("holdDelay")
+    m.holdDelay.observeField("fire", "onHoldStart")
+    m.holdRepeat = m.top.findNode("holdRepeat")
+    m.holdRepeat.observeField("fire", "onHoldStep")
     m.px = 960
     m.py = 540
     m.active = false
     m.items = []
     m.warmSent = false
+    m.heldKey = ""
     m.top.observeField("targets", "onTargets")
     m.top.observeField("keyPress", "onKey")
+    m.top.observeField("keyRelease", "onKeyUp")
 end sub
 
 ' ---- checkboxes ---------------------------------------------------------
@@ -32,16 +50,57 @@ sub onTargets()
     if t = invalid or t.items = invalid then return
     sprites = t.sprites
     if sprites = invalid then return
+    m.preload.uri = m.top.assetBase + sprites.checked
 
+    seen = {}
     for each it in t.items
+        tid = ""
+        if it.payload <> invalid and it.payload.id <> invalid then tid = Int(it.payload.id).ToStr()
+        checked = it.checked = true
+        if tid <> ""
+            seen[tid] = true
+            checked = resolveChecked(tid, checked)
+        end if
         p = m.boxes.createChild("Poster")
         p.translation = [it.rect.x, it.rect.y]
         p.width = it.rect.w
         p.height = it.rect.h
-        p.uri = m.top.assetBase + spriteFor(sprites, it.checked = true)
-        m.items.Push({ node: p, rect: it.rect, checked: it.checked = true, sprites: sprites })
+        p.uri = m.top.assetBase + spriteFor(sprites, checked)
+        m.items.Push({ node: p, rect: it.rect, checked: checked, sprites: sprites, id: tid })
     end for
+
+    ' a target that has left the page - a completed chore dropping out of
+    ' the list - has nothing left to hold, so stop tracking it
+    stale = []
+    for each k in m.overrides
+        if not seen.DoesExist(k) then stale.Push(k)
+    end for
+    for each k in stale
+        m.overrides.Delete(k)
+    end for
+    print "[Mango] targets: "; m.items.Count(); " box(es), "; m.overrides.Count(); " held locally"
 end sub
+
+' The press is the user's truth until the backend's own refresh proves it
+' landed. A render can arrive before the change has propagated, and
+' repainting the old state would read as the tick being thrown away.
+function resolveChecked(id as string, fromManifest as boolean) as boolean
+    ov = m.overrides[id]
+    if ov = invalid then return fromManifest
+    if ov.checked = fromManifest
+        m.overrides.Delete(id)   ' backend caught up - the render owns it again
+        return fromManifest
+    end if
+    if nowSecs() - ov.at > 180
+        m.overrides.Delete(id)   ' never landed - stop pinning a state that isn't real
+        return fromManifest
+    end if
+    return ov.checked
+end function
+
+function nowSecs() as integer
+    return CreateObject("roDateTime").AsSeconds()
+end function
 
 function spriteFor(sprites as object, checked as boolean) as string
     if checked then return sprites.checked
@@ -51,6 +110,14 @@ end function
 ' ---- pointer ------------------------------------------------------------
 
 sub showPointer()
+    ' always the middle of the screen: the pointer is general-purpose, so
+    ' it has to appear somewhere predictable rather than wherever it was
+    ' last left or next to whatever happens to be tappable
+    if not m.active
+        m.px = 960
+        m.py = 540
+        placePointer()
+    end if
     m.active = true
     m.pointer.visible = true
     m.hideTimer.control = "start"
@@ -65,28 +132,71 @@ sub onIdle()
     m.active = false
     m.pointer.visible = false
     m.warmSent = false
+    stopHold()
 end sub
 
 sub placePointer()
-    m.pointer.translation = [m.px - 48, m.py - 48]
+    m.pointer.translation = [m.px - 12, m.py - 12]
 end sub
 
 sub onKey()
     key = m.top.keyPress
     if key = "" then return
     m.top.keyPress = ""
-    if m.top.targets = invalid or m.items.Count() = 0 then return
+    ' the pointer comes up on any page, tappable or not - it isn't only
+    ' for checkboxes, and a dead OK on some pages would read as broken
 
-    if not m.active
-        ' first press only reveals the pointer, so nothing fires by accident
-        snapToNearestTarget()
-        placePointer()
-        showPointer()
+    if key = "OK"
+        ' the press that brings the pointer up does nothing else, so
+        ' nothing can be triggered blind
+        if m.active
+            m.hideTimer.control = "start"
+            activateUnderPointer()
+        else
+            showPointer()
+        end if
+        return
+    end if
+
+    ' arrows only steer a pointer that is already up
+    if not m.active then return
+    m.hideTimer.control = "start"
+    if key = m.heldKey then return   ' the system's own key repeat; the hold timer drives this
+    m.heldKey = key
+    movePointer(key)
+    m.holdDelay.control = "start"
+end sub
+
+' holding an arrow glides the pointer: one step on the press, then a
+' short pause, then continuous movement until the key comes back up
+sub onKeyUp()
+    key = m.top.keyRelease
+    if key = "" then return
+    m.top.keyRelease = ""
+    if key = m.heldKey then stopHold()
+end sub
+
+sub stopHold()
+    m.heldKey = ""
+    m.holdDelay.control = "stop"
+    m.holdRepeat.control = "stop"
+end sub
+
+sub onHoldStart()
+    if m.heldKey <> "" then m.holdRepeat.control = "start"
+end sub
+
+sub onHoldStep()
+    if m.heldKey = ""
+        m.holdRepeat.control = "stop"
         return
     end if
     m.hideTimer.control = "start"
+    movePointer(m.heldKey)
+end sub
 
-    stepPx = 42
+sub movePointer(key as string)
+    stepPx = 10
     if key = "up"
         m.py = m.py - stepPx
     else if key = "down"
@@ -95,42 +205,21 @@ sub onKey()
         m.px = m.px - stepPx
     else if key = "right"
         m.px = m.px + stepPx
-    else if key = "OK"
-        activateUnderPointer()
-        return
     end if
-    if m.px < 20 then m.px = 20
-    if m.px > 1900 then m.px = 1900
-    if m.py < 20 then m.py = 20
-    if m.py > 1060 then m.py = 1060
+    if m.px < 12 then m.px = 12
+    if m.px > 1908 then m.px = 1908
+    if m.py < 12 then m.py = 12
+    if m.py > 1068 then m.py = 1068
     placePointer()
 end sub
 
-' first reveal drops the pointer on the closest actionable thing rather
-' than wherever it happened to be left
-sub snapToNearestTarget()
-    best = invalid
-    bestD = 1e12
-    for each it in m.items
-        cx = it.rect.x + it.rect.w / 2
-        cy = it.rect.y + it.rect.h / 2
-        d = (cx - m.px) * (cx - m.px) + (cy - m.py) * (cy - m.py)
-        if d < bestD
-            bestD = d
-            best = it
-        end if
-    end for
-    if best <> invalid
-        m.px = best.rect.x + best.rect.w / 2
-        m.py = best.rect.y + best.rect.h / 2
-    end if
-end sub
-
 sub activateUnderPointer()
+    print "[Mango] OK at "; Int(m.px); ","; Int(m.py)
     hit = invalid
     for each it in m.items
-        ' generous hit box: checkboxes are small targets on a TV
-        pad = 26
+        ' small forgiveness margin - the portal hits the exact point, but
+        ' its checkbox has a label around it that ours doesn't
+        pad = 12
         if m.px >= it.rect.x - pad and m.px <= it.rect.x + it.rect.w + pad and m.py >= it.rect.y - pad and m.py <= it.rect.y + it.rect.h + pad
             hit = it
             exit for
@@ -138,21 +227,31 @@ sub activateUnderPointer()
     end for
     if hit = invalid then return
 
-    ' optimistic tick - the portal's real state arrives with the next render
+    ' tick now, ask later: the press paints locally and that state is held
+    ' across refreshes until the portal's own render agrees with it
     hit.checked = not hit.checked
     hit.node.uri = m.top.assetBase + spriteFor(hit.sprites, hit.checked)
-    sendAction("tap", hit.rect.x + hit.rect.w / 2, hit.rect.y + hit.rect.h / 2)
+    if hit.id <> "" then m.overrides[hit.id] = { checked: hit.checked, at: nowSecs() }
+    print "[Mango] tick "; hit.id; " -> "; hit.checked
+    sendAction2("tap", hit.rect.x + hit.rect.w / 2, hit.rect.y + hit.rect.h / 2, hit.id)
 end sub
 
 ' ---- service channel ----------------------------------------------------
 
 sub sendAction(kind as string, x as float, y as float)
+    sendAction2(kind, x, y, "")
+end sub
+
+' identity travels with the gesture: the live page's task list can differ
+' from the render the device is showing, so position alone can misfire
+sub sendAction2(kind as string, x as float, y as float, id as string)
     task = CreateObject("roSGNode", "InteractTask")
     task.serviceBase = m.top.serviceBase
     task.kind = kind
     task.x = x
     task.y = y
     task.pageIndex = m.top.pageIndex
+    task.targetId = id
     task.control = "RUN"
     m.pendingTask = task
 end sub

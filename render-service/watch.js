@@ -13,6 +13,7 @@ const http = require("http");
 const path = require("path");
 const WebSocket = require("ws");
 const { InteractionSession } = require("./session");
+const { RenderPool } = require("./renderPool");
 
 // ---- display config (prototype: hardcoded to the "Roku Express" display)
 const ENV = {
@@ -127,6 +128,23 @@ function getSession() {
 // would re-fetch the default range and silently undo the scroll.
 let interacting = false;
 const pendingSwipes = new Map();
+
+// A scrolled calendar lives only in the page that was told about it, so
+// every render has to be told again. Held briefly - the scroll is meant
+// to be a look-ahead, not a new permanent position.
+const CALENDAR_HOLD_MS = 10 * 60 * 1000;
+const OVERRIDE_FILE = path.join(__dirname, "calendar-override.json");
+function rememberCalendar(cal) {
+  let all = {};
+  try {
+    const prev = JSON.parse(fs.readFileSync(OVERRIDE_FILE, "utf8"));
+    if (prev && Date.now() - prev.at < CALENDAR_HOLD_MS) all = prev.widgets || {};
+  } catch (e) {}
+  Object.assign(all, cal);
+  try {
+    fs.writeFileSync(OVERRIDE_FILE, JSON.stringify({ at: Date.now(), holdMs: CALENDAR_HOLD_MS, widgets: all }));
+  } catch (e) {}
+}
 function waitForCalendarPayload(widgetId, ms) {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
@@ -135,6 +153,75 @@ function waitForCalendarPayload(widgetId, ms) {
     }, ms);
     pendingSwipes.set(widgetId, { resolve, timer });
   });
+}
+
+// ---- fast path: apply pushed data to warm pages ------------------------
+// A push that only carries widget DATA (a new calendar event, refreshed
+// weather, a new quote) does not need the portal booted again. The warm
+// pages take the payload through the portal's own handlers - exactly what
+// a real display does with the same message - and are captured straight
+// away. Anything we do not fully understand falls back to a cold render.
+let pool = null;
+function getPool() {
+  if (!pool) {
+    pool = new RenderPool({
+      designerUrl,
+      pageFile,
+      canvasW: DISPLAY.canvasW,
+      canvasH: DISPLAY.canvasH,
+      outW: DISPLAY.outW,
+      outH: DISPLAY.outH,
+      apiBase: ENV.apiBase,
+    });
+  }
+  return pool;
+}
+
+function knownPageCount() {
+  try {
+    const prev = JSON.parse(lastMetaJson);
+    if (prev && prev.pageCount > 0) return prev.pageCount;
+  } catch (e) {}
+  try {
+    const pub = JSON.parse(fs.readFileSync(path.join(__dirname, "display.json"), "utf8"));
+    if (pub && pub.pages && pub.pages.length) return pub.pages.length;
+  } catch (e) {}
+  return 1;
+}
+
+let fastPayload = null;
+let fastTimer = null;
+function scheduleFast(data) {
+  if (!fastPayload) fastPayload = {};
+  for (const k of Object.keys(data)) fastPayload[k] = Object.assign(fastPayload[k] || {}, data[k]);
+  if (fastTimer) clearTimeout(fastTimer);
+  fastTimer = setTimeout(runFast, 700);
+}
+
+async function runFast() {
+  fastTimer = null;
+  const payload = fastPayload;
+  fastPayload = null;
+  if (!payload) return;
+  if (rendering || interacting) return void scheduleRender("data update");
+  rendering = true;
+  const t0 = Date.now();
+  let failed = null;
+  try {
+    for (let i = 0; i < knownPageCount(); i++) {
+      if (!(await getPool().applyTo(i, payload))) throw new Error("page " + i + " would not take the update");
+      await getPool().capture(i);
+    }
+    publishFromDisk("data update");
+    log("fast update in " + (Date.now() - t0) + "ms (" + Object.keys(payload).join(",") + ")");
+  } catch (e) {
+    failed = e.message;
+  }
+  rendering = false;
+  if (failed) {
+    log("fast path fell back to a full render:", failed);
+    doRender("data update");
+  }
 }
 
 async function handleInteract(u, res) {
@@ -178,17 +265,13 @@ async function handleInteract(u, res) {
         const payload = await waitPayload;
         if (!payload) {
           log("no calendar payload arrived within 12s - screen left as it was");
-        } else {
-          // Capture on a FRESH page, never the warm one. The warm page has
-          // been alive through gestures and the portal's own page rotation,
-          // so what it is showing is not necessarily the page we mean to
-          // publish - a stale one lands in the wrong page's file.
-          await getSession().close("fresh page for capture");
-          await getSession().open(pageIndex);
-          if (await getSession().applyCalendar(payload)) {
-            await getSession().recapture();
-            publishFromDisk("interaction");
-          }
+        } else if (await getSession().applyCalendar(payload)) {
+          // Captured on the warm page the gesture was dispatched into -
+          // it is already pinned to this display page, and the capture
+          // now cleans up after itself, so there is nothing to gain from
+          // throwing it away and paying for another portal boot.
+          await getSession().recapture();
+          publishFromDisk("interaction");
         }
       }
       interacting = false;
@@ -289,19 +372,25 @@ async function doRender(reason) {
   }
   rendering = true;
   log("rendering (" + reason + ")...");
-  const AUTO = ["startup", "scheduled", "midnight"];
+  const AUTO = ["startup", "scheduled", "midnight", "data update"];
   // tell the TV to spin now, not when the render lands
   if (!AUTO.includes(reason)) setBusy(true, reason);
   try {
+    // Deliberately SEQUENTIAL. Rendering the pages concurrently was
+    // tried and is not safe: two designer sessions for the same display
+    // interfere, and page 0 came back without its ready signal, captured
+    // half-loaded, and published a one-page manifest. The win is small
+    // next to warming the page anyway.
     if (!(await renderPage(0))) throw new Error("page 0 failed");
     const man0 = JSON.parse(fs.readFileSync(manifestFor(pageFile(0)), "utf8"));
     const meta = man0.pageMeta || { pageCount: 1, pages: [] };
     lastMetaJson = JSON.stringify(man0.pageMeta || null);
-    const manifests = [man0];
-    for (let i = 1; i < meta.pageCount; i++) {
-      manifests.push((await renderPage(i)) ? JSON.parse(fs.readFileSync(manifestFor(pageFile(i)), "utf8")) : null);
-    }
+    for (let i = 1; i < meta.pageCount; i++) await renderPage(i);
     publishFromDisk(reason);
+    // keep the warm pages ready for the next data push
+    getPool()
+      .prewarm(meta.pageCount || 1)
+      .catch(() => {});
   } catch (e) {
     log("render FAILED:", e.message);
   }
@@ -348,7 +437,7 @@ function publishFromDisk(reason) {
   }
   // the TV spins its indicator only for user-driven updates, staying
   // silent for background refreshes (startup, 20-min data, midnight)
-  const AUTO_REASONS = ["startup", "scheduled", "midnight"];
+  const AUTO_REASONS = ["startup", "scheduled", "midnight", "data update"];
   const updateReason = AUTO_REASONS.includes(reason) ? "auto" : "edit";
   // visual overlays are display-wide, not per page
   const effects = man0.effects || [];
@@ -470,6 +559,11 @@ function connect() {
           pendingSwipes.delete(String(hit));
           clearTimeout(p.timer);
           log("calendar payload for widget", hit, "-> applying to the live page (no re-render)");
+          // Remember it. Otherwise the very next render - a scheduled one,
+          // or any of the weather/quote pushes that land every minute or
+          // two - re-fetches the default range and silently undoes the
+          // scroll, seconds after the user made it.
+          rememberCalendar(cal);
           p.resolve(cal);
           return;
         }
@@ -477,6 +571,17 @@ function connect() {
     }
     const keys = msg && typeof msg === "object" ? Object.keys(msg).filter((k) => k !== "type") : [];
     log("change push:", type, keys.length ? "keys=" + keys.join(",") : "", "| " + raw.slice(0, 220));
+    // data-only pushes go through the warm pages instead of a cold render
+    if (msg && typeof msg.data === "string") {
+      try {
+        const inner = JSON.parse(msg.data);
+        const innerKeys = Object.keys(inner || {});
+        if (getPool().canHandle(innerKeys)) {
+          scheduleFast(inner);
+          return;
+        }
+      } catch (e) {}
+    }
     // MM_SOCKET_DUMP=1 keeps the full bodies for inspection - payload
     // shapes are how we learn what the backend actually sends a display
     if (process.env.MM_SOCKET_DUMP) {

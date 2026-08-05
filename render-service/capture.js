@@ -81,6 +81,10 @@ function wireDiagnostics(page) {
 
 async function openHarness(page, opts) {
   const { url, width, height, outWidth, outHeight } = opts;
+  const th0 = Date.now();
+  let thPrev = th0;
+  const hm = [];
+  const hmark = (l) => { const n = Date.now(); hm.push(l + "=" + (n - thPrev) + "ms"); thPrev = n; };
   await page.addInitScript(() => {
     window.__mmReady = false;
     window.addEventListener("message", (e) => {
@@ -118,6 +122,7 @@ async function openHarness(page, opts) {
   } catch (e) {
     console.error("no-anim CSS injection failed (fade will run):", e.message);
   }
+  hmark("iframe+css");
 
   try {
     await page.waitForFunction("window.__mmReady === true", null, { timeout: 15000 });
@@ -125,12 +130,96 @@ async function openHarness(page, opts) {
   } catch (e) {
     console.error("no ready signal within 15s - capturing anyway");
   }
+  hmark("portal-ready");
   await page.waitForTimeout(400);
+  await applyCalendarOverride(page);
+  hmark("settle+override");
+  console.log("harness: total=" + (Date.now() - th0) + "ms " + hm.join(" "));
   return state;
+}
+
+// A calendar the user scrolled with the remote is not part of what the
+// portal serves on load - the backend hands the new range out over the
+// socket and forgets it. The watcher keeps the last one it saw, so every
+// render re-applies it and the view the user asked for survives the next
+// refresh instead of snapping back a few seconds later.
+async function applyCalendarOverride(page) {
+  let saved = null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(__dirname, "calendar-override.json"), "utf8"));
+    if (raw && raw.widgets && Date.now() - raw.at < (raw.holdMs || 600000)) saved = raw.widgets;
+  } catch (e) {
+    return;
+  }
+  if (!saved || !Object.keys(saved).length) return;
+  const frame = page.frames().find((f) => f.url().includes("designer=true"));
+  if (!frame) return;
+  try {
+    const res = await frame.evaluate((data) => {
+      // Only the page being rendered matters. Designer mode keeps every
+      // page in the DOM, so an invisible calendar from another page would
+      // otherwise be "updated" here and then waited on for a repaint that
+      // never comes - six seconds added to every render of every page.
+      const visible = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].filter(
+        (e) => getComputedStyle(e).visibility !== "hidden" && e.offsetParent !== null,
+      );
+      if (!visible.length) return { skip: "no calendar on this page" };
+
+      // and only if it is not already showing what we would set
+      const wanted = [];
+      for (const el of visible) {
+        let w = window.angular.element(el).scope();
+        while (w && !w.widgetData) w = w.$parent;
+        const id = w && w.widgetData ? String(w.widgetData.widgetSettingId) : null;
+        const want = id && data[id];
+        if (!want) continue;
+        const now = w.widgetData.data && w.widgetData.data.initial_date;
+        if (String(now) !== String(want.initial_date)) wanted.push({ el, id });
+      }
+      if (!wanted.length) return { skip: "already on the saved range" };
+
+      const el = wanted[0].el;
+      let sc = window.angular.element(el).scope();
+      while (sc && !sc.updateCalendarData) sc = sc.$parent;
+      if (!sc) return { skip: "no handler" };
+      const before = (el.innerText || "").replace(/\s+/g, " ").slice(0, 60);
+      sc.updateCalendarData(data); // runs its own $apply - never wrap it
+      return { before, ids: wanted.map((w) => w.id) };
+    }, saved);
+
+    if (res.skip) return;
+    // the portal defers its repaint behind a 2s timeout, so this is a
+    // short wait for a change we know is coming, not a blind timeout
+    await frame
+      .waitForFunction(
+        (prev) => {
+          const el = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].find(
+            (e) => getComputedStyle(e).visibility !== "hidden",
+          );
+          return el && (el.innerText || "").replace(/\s+/g, " ").slice(0, 60) !== prev;
+        },
+        res.before,
+        { timeout: 3500 },
+      )
+      .catch(() => {});
+    await page.waitForTimeout(200);
+    console.log("calendar: re-applied the scrolled range to widget(s)", res.ids.join(","));
+  } catch (e) {
+    console.error("calendar override failed:", e.message);
+  }
 }
 
 async function capturePage(page, opts) {
   const { out, url, width, height, outWidth, outHeight, apiBase } = opts;
+  // stage timings: "make it fast" needs measurements, not guesses
+  const t0 = Date.now();
+  let tPrev = t0;
+  const marks = [];
+  const mark = (label) => {
+    const now = Date.now();
+    marks.push(label + "=" + (now - tPrev) + "ms");
+    tPrev = now;
+  };
   const state = opts.state || { noAnimStyle: null };
   const outDir = path.dirname(path.resolve(out));
 
@@ -162,6 +251,7 @@ async function capturePage(page, opts) {
     }
     if (groups.length) await page.waitForTimeout(100);
   }
+  mark("widgets");
 
   // display-wide visual overlays are animated natively on the Roku
   let effects = [];
@@ -177,6 +267,7 @@ async function capturePage(page, opts) {
       console.error("effect extraction failed:", e.message);
     }
   }
+  mark("effects");
 
   // interactive targets (task checkboxes) - drawn natively so a remote
   // press can tick instantly
@@ -193,6 +284,7 @@ async function capturePage(page, opts) {
       console.error("target extraction failed:", e.message);
     }
   }
+  mark("targets");
 
   // layered mode: a rotating background or a video widget needs the
   // widgets captured as a transparent PNG
@@ -215,6 +307,7 @@ async function capturePage(page, opts) {
   } else {
     await page.screenshot({ path: outPath, type: "jpeg", quality: 85 });
   }
+  mark("screenshot");
 
   const captureCtx = {
     outDir,
@@ -235,7 +328,23 @@ async function capturePage(page, opts) {
     } catch (e) {
       console.error("live capture '" + g.handler.type + "' failed:", e.message);
     }
+    mark("film:" + g.handler.type);
   }
+
+  // Filming strips every background so the frames carry icon pixels only.
+  // Those styles must not outlive the burst: the page is reused for later
+  // captures, and a leftover strip turns the next still into text on
+  // black with no panels at all.
+  const unfilm = (target) =>
+    target
+      .evaluate(() => {
+        document.querySelectorAll("style").forEach((n) => {
+          if ((n.textContent || "").includes("mm-film")) n.remove();
+        });
+      })
+      .catch(() => {});
+  await unfilm(page);
+  if (portalFrame) await unfilm(portalFrame);
 
   // areas where a pointer gesture is live (calendar swipe surfaces)
   let regions = null;
@@ -245,6 +354,7 @@ async function capturePage(page, opts) {
   } catch (e) {
     console.error("region extraction failed:", e.message);
   }
+  mark("regions");
 
   const pageMeta = await extractPageMeta(page);
   const overlays = groups.flatMap((g) => g.items);
@@ -258,6 +368,8 @@ async function capturePage(page, opts) {
     imageFile: path.basename(outPath),
   };
   fs.writeFileSync(out.replace(/\.jpe?g$/i, "") + ".manifest.json", JSON.stringify(manifest, null, 1));
+  mark("manifest");
+  console.log("timings: total=" + (Date.now() - t0) + "ms " + marks.join(" "));
   console.log(
     "manifest:",
     overlays.length,

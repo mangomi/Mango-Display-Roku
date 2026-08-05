@@ -229,24 +229,13 @@ class InteractionSession {
       });
     }, type);
 
-    // the new range is fetched over HTTP, so wait for the widget to
-    // actually repaint rather than guessing at a delay; hitting the
-    // range limit repaints nothing, and falling through is correct there
-    let changed = false;
-    try {
-      await frame.waitForFunction(
-        (prev) => {
-          const el = window.__mmSwipeEl;
-          return el && (el.innerText || "").replace(/\s+/g, " ").slice(0, 400) !== prev;
-        },
-        before.text,
-        { timeout: 6000 },
-      );
-      changed = true;
-    } catch (e) {}
-    await this.page.waitForTimeout(400);
-    console.log("swipe:", type, "->", changed ? "new dates" : "no change (range limit?)");
-    return { handled: true, kind: "calendar", direction: type, changed };
+    // Return the moment the gesture is dispatched. This page will never
+    // repaint on its own: the portal asks the backend, and the answer
+    // comes back over the socket - which a preview-mode page does not
+    // have. Waiting for a change here just burned six seconds per swipe
+    // before timing out. The caller waits on the socket payload instead.
+    console.log("swipe:", type, "dispatched, waiting on the socket payload");
+    return { handled: true, kind: "calendar", direction: type };
   }
 
   // Apply a socket payload the watcher received on the page's behalf.

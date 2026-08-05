@@ -31,6 +31,7 @@ sub init()
     m.dblTimer = m.top.findNode("dblTimer")
     m.dblTimer.observeField("fire", "onDblWindowEnd")
     m.dblKey = ""
+    m.didGlide = false
     m.px = 960
     m.py = 540
     m.active = false
@@ -164,38 +165,26 @@ sub onKey()
     ' Double-click left/right turns the page. This one acts on the whole
     ' page rather than on whatever the pointer is over, so - like the
     ' portal - it works whether or not the pointer is showing.
-    if key = "left" or key = "right"
-        if key = m.dblKey
-            m.dblTimer.control = "stop"
-            m.dblKey = ""
-            if pageSwipeAllowed()
-                if key = "right" then m.top.pageTurn = "next" else m.top.pageTurn = "prev"
-                return
-            end if
-        else
-            m.dblKey = key
-            m.dblTimer.control = "stop"
-            m.dblTimer.control = "start"
+    if (key = "left" or key = "right") and key = m.dblKey
+        m.dblTimer.control = "stop"
+        m.dblKey = ""
+        if pageSwipeAllowed()
+            if key = "right" then m.top.pageTurn = "next" else m.top.pageTurn = "prev"
+            return
         end if
     end if
 
     ' Double-click up/down over a calendar sends a swipe. Unlike the page
     ' turn this one is aimed: the pointer has to be sitting on the widget,
     ' so it only counts while the pointer is showing.
-    if (key = "up" or key = "down") and m.active
-        if key = m.dblKey
-            m.dblTimer.control = "stop"
-            m.dblKey = ""
-            reg = regionUnderPointer()
-            if reg <> invalid and calendarScrollAllowed()
-                m.hideTimer.control = "start"
-                if key = "up" then sendAction2("swipeup", m.px, m.py, reg.id) else sendAction2("swipedown", m.px, m.py, reg.id)
-                return
-            end if
-        else
-            m.dblKey = key
-            m.dblTimer.control = "stop"
-            m.dblTimer.control = "start"
+    if (key = "up" or key = "down") and m.active and key = m.dblKey
+        m.dblTimer.control = "stop"
+        m.dblKey = ""
+        reg = regionUnderPointer()
+        if reg <> invalid and calendarScrollAllowed()
+            m.hideTimer.control = "start"
+            if key = "up" then sendAction2("swipeup", m.px, m.py, reg.id) else sendAction2("swipedown", m.px, m.py, reg.id)
+            return
         end if
     end if
 
@@ -214,7 +203,19 @@ sub onKeyUp()
     key = m.top.keyRelease
     if key = "" then return
     m.top.keyRelease = ""
+    glided = m.didGlide
     if key = m.heldKey then stopHold()
+    ' Arm the double-click window from the RELEASE, the way the portal
+    ' does. Measuring press-to-press instead leaves the user only
+    ' whatever is left of 250ms after however long they held the first
+    ' press down - which on a real remote is usually nothing, so the
+    ' second press reads as another pointer nudge.
+    ' A press that glided the pointer was a hold, not a click.
+    if not glided
+        m.dblKey = key
+        m.dblTimer.control = "stop"
+        m.dblTimer.control = "start"
+    end if
 end sub
 
 function calendarScrollAllowed() as boolean
@@ -244,6 +245,7 @@ end sub
 
 sub stopHold()
     m.heldKey = ""
+    m.didGlide = false
     m.holdDelay.control = "stop"
     m.holdRepeat.control = "stop"
 end sub
@@ -253,6 +255,7 @@ sub onHoldStart()
 end sub
 
 sub onHoldStep()
+    m.didGlide = true
     if m.heldKey = ""
         m.holdRepeat.control = "stop"
         return

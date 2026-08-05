@@ -427,6 +427,53 @@ const weatherIconHandler = {
     const live = items.filter((i) => i.liveCapture);
     if (!live.length) return items;
     const sharp = require("sharp");
+
+    // Filming is by far the most expensive thing a render does - a full
+    // animation cycle of wall-clock, ~7s. Since the panel double-composite
+    // fix the frames carry ONLY icon pixels with alpha elsewhere, so a
+    // sheet depends solely on WHICH icon at WHAT size, not on whatever is
+    // behind it. That makes it cacheable: the same sun over the same
+    // forecast tile produces byte-identical frames every render, and the
+    // set only changes when the actual weather does.
+    const wxKey = (o) => {
+      const w = Math.round(o.rect.w * ctx.outScale);
+      const h = Math.round(o.rect.h * ctx.outScale);
+      return crypto
+        .createHash("md5")
+        .update([o.src, w, h, o.period || 0].join("|"))
+        .digest("hex")
+        .slice(0, 16);
+    };
+    const cachedFor = (o) => {
+      const key = wxKey(o);
+      const sheet = pathHandlers.join(ctx.outDir, "overlay_wxc_" + key + ".png");
+      const meta = sheet.replace(/\.png$/, ".json");
+      if (!fsHandlers.existsSync(sheet) || !fsHandlers.existsSync(meta)) return null;
+      try {
+        return { key, file: "overlay_wxc_" + key + ".png", ...JSON.parse(fsHandlers.readFileSync(meta, "utf8")) };
+      } catch (e) {
+        return null;
+      }
+    };
+
+    const hits = live.map(cachedFor);
+    if (hits.every(Boolean)) {
+      live.forEach((o, i) => {
+        const c = hits[i];
+        o.stripFile = c.stripFile;
+        o.frameW = c.frameW;
+        o.frameH = c.frameH;
+        o.frameCount = c.frameCount;
+        o.cols = c.cols;
+        o.rows = c.rows;
+        o.frameMs = c.frameMs;
+        delete o.liveCapture;
+        delete o.period;
+        delete o.src;
+      });
+      console.log("wx: " + live.length + " icon sheet(s) reused from cache, filming skipped");
+      return items;
+    }
     await ctx.reenableAnimations();
     // The still is already saved, so the page can be stripped to nothing
     // but the icons: restore them, then blank every background/shadow/
@@ -442,11 +489,12 @@ const weatherIconHandler = {
     });
     await frame.addStyleTag({
       content:
+        "/*mm-film*/" +
         "*,*::before,*::after{background:transparent !important;" +
         "box-shadow:none !important;backdrop-filter:none !important;" +
         "-webkit-backdrop-filter:none !important;border-color:transparent !important;}",
     });
-    await page.addStyleTag({ content: "html,body{background:transparent !important;}" });
+    await page.addStyleTag({ content: "/*mm-film*/html,body{background:transparent !important;}" });
     await page.waitForTimeout(200);
 
     // film long enough to cover the longest icon cycle, sampling finely
@@ -472,7 +520,7 @@ const weatherIconHandler = {
     // stale capture sheets from previous renders (keep ~10 min for the
     // manifest still live on devices)
     for (const f of fsHandlers.readdirSync(ctx.outDir)) {
-      if (!f.startsWith("overlay_wx_")) continue;
+      if (!f.startsWith("overlay_wx_")) continue; // legacy per-render sheets only
       try {
         const p = pathHandlers.join(ctx.outDir, f);
         if (Date.now() - fsHandlers.statSync(p).mtimeMs > 600000) fsHandlers.unlinkSync(p);
@@ -508,7 +556,9 @@ const weatherIconHandler = {
         for (const idx of picked) frames.push(await sharp(shots[idx]).extract(dr).png().toBuffer());
         const cols = Math.max(1, Math.min(Math.floor(2048 / dr.width), frames.length));
         const rows = Math.ceil(frames.length / cols);
-        const fileName = "overlay_wx_" + o.widgetSettingId + "_" + Date.now() + ".png";
+        // keyed by icon + size so the next render reuses it instead of
+        // spending another animation cycle filming the same sun
+        const fileName = "overlay_wxc_" + wxKey(o) + ".png";
         await sharp({
           create: {
             width: cols * dr.width,
@@ -534,6 +584,20 @@ const weatherIconHandler = {
         o.cols = cols;
         o.rows = rows;
         o.frameMs = Math.max(60, Math.round(realGapMs * stride));
+        try {
+          fsHandlers.writeFileSync(
+            pathHandlers.join(ctx.outDir, fileName.replace(/\.png$/, ".json")),
+            JSON.stringify({
+              stripFile: fileName,
+              frameW: o.frameW,
+              frameH: o.frameH,
+              frameCount: o.frameCount,
+              cols: o.cols,
+              rows: o.rows,
+              frameMs: o.frameMs,
+            }),
+          );
+        } catch (e) {}
         console.log(
           "wx sheet:",
           o.widgetSettingId,

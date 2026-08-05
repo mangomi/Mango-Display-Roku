@@ -28,9 +28,17 @@
              ~250px a second, close to a browser's key repeat -->
         <Timer id="holdDelay" repeat="false" duration="0.35" />
         <Timer id="holdRepeat" repeat="true" duration="0.04" />
-        <!-- double-click window for the navigation gestures; the portal
-             uses the same 250ms (ARROW_DOUBLE_TAP_GAP) -->
-        <Timer id="dblTimer" repeat="false" duration="0.25" />
+        <!-- Double-click window for the navigation gestures, measured from
+             the first key's RELEASE. Deliberately wider than the portal's
+             250ms: that is a keyboard threshold, and a thumb on a remote
+             is slower - measured presses land 300-400ms apart and were
+             being read as two separate pointer nudges. 450ms is about
+             where desktop OSes put their double-click default. The cost
+             is that tapping an arrow faster than twice a second to walk
+             the pointer along can register as a gesture; holding the key
+             is the intended way to move, and a press that glided is
+             excluded from counting as a click. -->
+        <Timer id="dblTimer" repeat="false" duration="0.45" />
     </children>
     <script type="text/brightscript" uri="pkg:/components/InteractionLayer.brs" />
 </component>

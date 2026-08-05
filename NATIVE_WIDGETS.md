@@ -172,3 +172,48 @@ with many pages, raise it as a trade-off first.
 | Date rollover | Scheduled re-render at local midnight | ~instant |
 | Clock time | Native overlay, ticks on-device | live |
 | Service restart | Startup render on watcher boot | ~5 s |
+
+## Resume here (2026-08-05)
+
+Everything below is committed and pushed (`0d470f4`). Services are stopped
+— restart per the runbook, then verify `watch.js` DISPLAY.deviceId still
+matches the display's code before anything else.
+
+**The one unfinished thing: `renderPool.js`, currently `FAST_PATH_ENABLED =
+false`.**
+
+It keeps a portal page warm per display page so a data-only socket push (a
+new calendar event, refreshed weather, a new quote) is applied through the
+portal's own update handlers and captured, instead of booting the portal
+again. That is what a real display does with the same message, and it is
+the remaining step toward updates being imperceptible.
+
+State: it ran a real push end to end and published correctly, but timed
+**10.2s** — slower than the 5.8s cold render it replaces. Two causes were
+found and fixed straight after, and the re-measure never completed:
+
+1. Pages were created lazily, so the first update paid for both portal
+   boots. `prewarm()` now runs after every full render.
+2. The 2.6s wait for the portal's deferred calendar repaint was applied to
+   every page, including ones with no calendar on them. It is now scoped
+   to pages where a calendar is actually visible.
+
+Expect roughly 1.8s for a weather/quote push and ~4s when a calendar is
+involved (the portal's own 2s `$timeout` inside `updateCalendarData` is
+the floor). To pick it up: set `FAST_PATH_ENABLED = true`, restart, and
+trigger a real push — the reliable trick is a swipe with **no** `id`
+(`/interact?type=swipeup&page=0&x=423&y=562`), because without an id the
+service does not reserve the payload for that gesture, so it flows down
+the normal socket route into the fast path. Watch for `fast update in Nms`.
+
+It ships disabled because `runFast` holds the render lock: an unverified
+hang there would freeze every render rather than merely being slow.
+
+**Do not retry:** rendering pages concurrently. Two designer sessions for
+the same display interfere — page 0 missed its ready signal, captured
+half-loaded, and published a one-page manifest.
+
+**Known, not yet decided:** the pointer appears dead centre, which on a
+typical layout is not over any calendar, so a double-click there does
+nothing at all and reads as broken. Whether the pointer should signal that
+it is over something interactive is Dave's call.

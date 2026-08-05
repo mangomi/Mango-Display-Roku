@@ -54,6 +54,7 @@ sub init()
     m.interaction = m.top.findNode("interaction")
     m.interaction.assetBase = m.assetBaseUrl
     m.interaction.serviceBase = m.versionBaseUrl
+    m.interaction.observeField("pageTurn", "onPageTurn")
 
     m.slots.slotA.poster.observeField("loadStatus", "onPosterLoad")
     m.slots.slotB.poster.observeField("loadStatus", "onPosterLoad")
@@ -143,6 +144,9 @@ sub onVersionChange()
     if man = invalid or man.pages = invalid or man.pages.Count() = 0 then return
     print "[Mango] display.json: "; man.pages.Count(); " page(s)"
     applyEffects(man.effects)
+    if man.gestures <> invalid
+        m.interaction.gestures = man.gestures
+    end if
     ' never apply mid-transition/mid-load - deferred to finalizeSwap
     m.latestPages = man.pages
     m.latestReason = ""
@@ -177,6 +181,30 @@ end sub
 sub onPageTimer()
     if m.pages = invalid or m.pages.Count() < 2 then return
     loadPage((m.pageIndex + 1) mod m.pages.Count(), true)
+end sub
+
+' Double-click left/right on the remote. The device already holds every
+' page, so a turn is local and instant - no round trip to the render
+' service, unlike the gestures that change what a widget shows.
+sub onPageTurn()
+    dir = m.interaction.pageTurn
+    if dir = "" then return
+    m.interaction.pageTurn = ""
+    if m.pages = invalid or m.pages.Count() < 2 then return
+    ' turning mid-transition would fight the animation in flight
+    if m.activeAnim <> invalid or m.pendingLoad <> invalid then return
+    n = m.pages.Count()
+    delta = 1
+    if dir = "prev" then delta = -1
+    ' + n keeps the result positive: BrightScript MOD follows the sign of
+    ' the left operand, so (0 - 1) MOD 3 would be -1, not 2
+    idx = (m.pageIndex + delta + n) mod n
+    print "[Mango] page turn "; dir; " -> "; idx
+    ' the dwell restarts for the page the user landed on (armPageTimer in
+    ' finalizeSwap), so a manual turn doesn't get cut short by a timer
+    ' that was already most of the way through the previous page
+    m.pageTimer.control = "stop"
+    loadPage(idx, true)
 end sub
 
 function frontEntry() as object
@@ -258,6 +286,11 @@ sub finalizeSwap(newKey as string, index as integer)
         m.interaction.targets = pg.targets
     else
         m.interaction.targets = {}
+    end if
+    if pg.regions <> invalid
+        m.interaction.regions = pg.regions
+    else
+        m.interaction.regions = []
     end if
     armPageTimer()
     ' apply any manifest that arrived while a transition/load was running

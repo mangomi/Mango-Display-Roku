@@ -75,8 +75,12 @@ function setBusy(next, why) {
 // belt and braces: busy must never outlive an actual render. Anything
 // that leaves it set (a throw on an unexpected path, a killed child)
 // gets cleaned up here rather than spinning on the TV forever.
+// An interaction counts as work in progress too: a swipe waits on the
+// backend, then on the portal's own deferred repaint, and only then
+// captures - well past this threshold. Clearing the spinner underneath it
+// tells the user their press did nothing, seconds before it lands.
 setInterval(() => {
-  if (busy && !rendering && !pendingRender && Date.now() - busySince > MIN_BUSY_MS + 2000) {
+  if (busy && !rendering && !pendingRender && !interacting && Date.now() - busySince > MIN_BUSY_MS + 2000) {
     setBusy(false, "janitor: no render in progress");
   }
 }, 3000);
@@ -116,6 +120,23 @@ function getSession() {
   return session;
 }
 
+// A calendar swipe's answer comes back on THIS socket, not to the page
+// that asked for it: the render page runs in preview mode, which never
+// opens a socket. So a swipe registers here, and the matching push is
+// handed to it instead of triggering a normal re-render - a fresh render
+// would re-fetch the default range and silently undo the scroll.
+let interacting = false;
+const pendingSwipes = new Map();
+function waitForCalendarPayload(widgetId, ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingSwipes.delete(widgetId);
+      resolve(null);
+    }, ms);
+    pendingSwipes.set(widgetId, { resolve, timer });
+  });
+}
+
 async function handleInteract(u, res) {
   const type = u.searchParams.get("type") || "tap";
   const pageIndex = parseInt(u.searchParams.get("page") || "0", 10);
@@ -140,11 +161,44 @@ async function handleInteract(u, res) {
   try {
     const id = u.searchParams.get("id") || null;
     log("interact:", type, "at", Math.round(x) + "," + Math.round(y), "page", pageIndex, id ? "id " + id : "");
-    // no re-render here: the device already shows the change, and the
-    // backend's own push re-renders through the normal path
+    // A tap needs no re-render: the device already drew the tick, and the
+    // backend's own push re-renders through the normal path. A swipe
+    // changes what the widget SHOWS - dates the device has never seen -
+    // so this is the one gesture that has to go back through a capture.
+    const swipe = type === "swipeup" || type === "swipedown";
+    // register BEFORE dispatching: the backend answers in ~2s
+    const waitPayload = swipe && id ? waitForCalendarPayload(String(id), 12000) : null;
+    if (swipe) {
+      interacting = true;
+      setBusy(true, type);
+    }
     const r = await getSession().interact({ type, x, y, id, page: pageIndex });
+    if (swipe) {
+      if (r && r.handled && waitPayload) {
+        const payload = await waitPayload;
+        if (!payload) {
+          log("no calendar payload arrived within 12s - screen left as it was");
+        } else {
+          // Capture on a FRESH page, never the warm one. The warm page has
+          // been alive through gestures and the portal's own page rotation,
+          // so what it is showing is not necessarily the page we mean to
+          // publish - a stale one lands in the wrong page's file.
+          await getSession().close("fresh page for capture");
+          await getSession().open(pageIndex);
+          if (await getSession().applyCalendar(payload)) {
+            await getSession().recapture();
+            publishFromDisk("interaction");
+          }
+        }
+      }
+      interacting = false;
+      setBusy(false, "swipe done");
+      return reply(200, r);
+    }
     return reply(200, r);
   } catch (e) {
+    interacting = false;
+    setBusy(false, "swipe failed");
     log("interact failed:", e.message);
     return reply(500, { ok: false, error: e.message });
   }
@@ -289,6 +343,7 @@ function publishFromDisk(reason) {
       autoRotate: mp.autoRotate === true,
       overlays: m.overlays || [],
       targets: m.targets || null,
+      regions: m.regions || null,
     });
   }
   // the TV spins its indicator only for user-driven updates, staying
@@ -297,10 +352,12 @@ function publishFromDisk(reason) {
   const updateReason = AUTO_REASONS.includes(reason) ? "auto" : "edit";
   // visual overlays are display-wide, not per page
   const effects = man0.effects || [];
+  // remote gestures the user enabled, display-wide like effects
+  const gestures = meta.gestures || { pageSwipe: false, calendarScroll: false };
   fs.writeFileSync(
     path.join(__dirname, "display.json"),
     JSON.stringify(
-      { canvas: { width: DISPLAY.canvasW, height: DISPLAY.canvasH }, updateReason, effects, pages },
+      { canvas: { width: DISPLAY.canvasW, height: DISPLAY.canvasH }, updateReason, effects, gestures, pages },
       null,
       1,
     ),
@@ -385,15 +442,48 @@ function connect() {
   });
 
   ws.on("message", (buf) => {
+    const raw = buf.toString();
     let type = "unknown";
+    let msg = null;
     try {
-      type = JSON.parse(buf.toString()).type || "unknown";
+      msg = JSON.parse(raw);
+      type = msg.type || "unknown";
     } catch (e) {}
     if (IGNORE_TYPES.has(type)) {
       log("(ignored:", type + ")");
       return;
     }
-    log("change push:", type);
+    // This connection is the display's only socket - the render page runs
+    // in preview mode, which never opens one - so anything the backend
+    // pushes here (a new calendar event, a widget's data changing on its
+    // own) has to become a re-render, not just a layout signal. Log the
+    // shape of every push so a type we don't yet handle is visible rather
+    // than silently folded into a generic refresh.
+    // a swipe waiting on this widget owns the payload: hand it over and
+    // skip the render, which would re-fetch the default range
+    if (pendingSwipes.size && msg && typeof msg.data === "string" && msg.data.includes("refreshCalenderData")) {
+      try {
+        const cal = JSON.parse(msg.data).refreshCalenderData || {};
+        const hit = Object.keys(cal).find((k) => pendingSwipes.has(String(k)));
+        if (hit) {
+          const p = pendingSwipes.get(String(hit));
+          pendingSwipes.delete(String(hit));
+          clearTimeout(p.timer);
+          log("calendar payload for widget", hit, "-> applying to the live page (no re-render)");
+          p.resolve(cal);
+          return;
+        }
+      } catch (e) {}
+    }
+    const keys = msg && typeof msg === "object" ? Object.keys(msg).filter((k) => k !== "type") : [];
+    log("change push:", type, keys.length ? "keys=" + keys.join(",") : "", "| " + raw.slice(0, 220));
+    // MM_SOCKET_DUMP=1 keeps the full bodies for inspection - payload
+    // shapes are how we learn what the backend actually sends a display
+    if (process.env.MM_SOCKET_DUMP) {
+      try {
+        fs.appendFileSync(path.join(__dirname, "socket-dump.jsonl"), raw + "\n");
+      } catch (e) {}
+    }
     scheduleRender(type);
   });
 

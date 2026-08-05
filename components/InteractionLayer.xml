@@ -3,12 +3,18 @@
     <interface>
         <!-- targets block from the page manifest: items, sprites, authToken -->
         <field id="targets" type="assocarray" />
+        <!-- areas where a pointer gesture is live (calendar swipe surfaces) -->
+        <field id="regions" type="array" />
         <field id="pageIndex" type="integer" value="0" />
         <field id="assetBase" type="string" />
         <field id="serviceBase" type="string" />
         <!-- set by MainScene when a remote key arrives -->
         <field id="keyPress" type="string" />
         <field id="keyRelease" type="string" />
+        <!-- which remote gestures the user enabled, from display.json -->
+        <field id="gestures" type="assocarray" />
+        <!-- "next"/"prev" when a page turn is asked for; MainScene clears it -->
+        <field id="pageTurn" type="string" />
     </interface>
     <children>
         <Group id="boxes" />
@@ -22,6 +28,9 @@
              ~250px a second, close to a browser's key repeat -->
         <Timer id="holdDelay" repeat="false" duration="0.35" />
         <Timer id="holdRepeat" repeat="true" duration="0.04" />
+        <!-- double-click window for the navigation gestures; the portal
+             uses the same 250ms (ARROW_DOUBLE_TAP_GAP) -->
+        <Timer id="dblTimer" repeat="false" duration="0.25" />
     </children>
     <script type="text/brightscript" uri="pkg:/components/InteractionLayer.brs" />
 </component>

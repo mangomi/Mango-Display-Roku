@@ -1483,7 +1483,8 @@ async function generateCheckboxSprites(outDir) {
 }
 
 async function extractTargets(frame, ctx) {
-  const found = await frame.evaluate(() => {
+  const pageIdx = ctx && ctx.pageIdx !== undefined ? ctx.pageIdx : null;
+  const found = await frame.evaluate((wantPage) => {
     let sc = null;
     let root = null;
     const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
@@ -1516,9 +1517,36 @@ async function extractTargets(frame, ctx) {
       if (getComputedStyle(el).visibility === "hidden") return;
       const r = el.getBoundingClientRect();
       if (r.width < 6 || r.height < 6) return;
+      // The to-do list scrolls inside its widget, so most of its rows are
+      // laid out far below the visible box. They aren't in the screenshot
+      // and can't be aimed at, so they must not become targets - clip to
+      // every clipping ancestor, then to the canvas.
+      const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+      for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+        const cs = getComputedStyle(a);
+        if (cs.overflow === "visible" && cs.overflowX === "visible" && cs.overflowY === "visible") continue;
+        const ar = a.getBoundingClientRect();
+        if (cx < ar.left || cx > ar.right || cy < ar.top || cy > ar.bottom) return;
+      }
+      if (cx < 0 || cx > window.innerWidth || cy < 0 || cy > window.innerHeight) return;
+
+      // Which task this row is bound to comes from the row's OWN binding,
+      // never a scope lookup for `todo`: sub-task rows repeat over
+      // `subTask`, so reading `todo` off the scope chain silently
+      // resolves to their PARENT task (same id on four rows, and a tap
+      // that completes the wrong thing).
       const s = window.angular.element(el).scope();
-      const todo = s && s.todo;
-      if (!todo || todo.id === undefined) return;
+      const modelExpr = el.getAttribute("ng-model") || "";      // "todo.status" / "subTask.status"
+      const itemExpr = modelExpr.replace(/\.status\s*$/, "");
+      const clickExpr = el.getAttribute("ng-click") || "";
+      const todo = itemExpr && s ? s.$eval(itemExpr) : null;
+      if (!todo || todo.id === undefined || !clickExpr) return;
+
+      // page index from the row's own scope, not just visibility
+      let po = s;
+      while (po && po.outerindex === undefined) po = po.$parent;
+      const ownPage = po ? parseInt(po.outerindex, 10) : NaN;
+      if (wantPage !== null && !isNaN(ownPage) && ownPage !== wantPage) return;
 
       // which widget owns it, and is completion allowed for that kind?
       let w = s;
@@ -1550,7 +1578,7 @@ async function extractTargets(frame, ctx) {
       });
     });
     return { items, authToken: (root && root.authToken) || null };
-  });
+  }, pageIdx);
 
   if (!found.items.length) return null;
   const sprites = await generateCheckboxSprites((ctx && ctx.outDir) || ".");
@@ -1560,6 +1588,68 @@ async function extractTargets(frame, ctx) {
     statusUrl: (ctx && ctx.apiBase ? ctx.apiBase : "") + "todo/updateStatus",
     sprites,
   };
+}
+
+// Gesture regions: areas the pointer can sit over to send a swipe, as
+// opposed to targets, which are controls the device redraws itself.
+// Today that means the calendar's swipe surface (more dates up/down).
+// Nothing is hidden for these - the widget is drawn normally, the region
+// only tells the device where the gesture is live.
+async function extractRegions(frame, ctx) {
+  const pageIdx = ctx && ctx.pageIdx !== undefined ? ctx.pageIdx : null;
+  const found = await frame.evaluate((wantPage) => {
+    let sc = null;
+    const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
+    for (const r of roots) {
+      if (!r || !window.angular) continue;
+      const inj = window.angular.element(r).injector();
+      if (!inj) continue;
+      const walk = (s) => {
+        if (!s || sc) return;
+        if (s.groups && s.groups.length) return void (sc = s);
+        walk(s.$$childHead);
+        walk(s.$$nextSibling);
+      };
+      walk(inj.get("$rootScope"));
+      break;
+    }
+    const gesture = (sc && sc.gesture) || {};
+    const on = (v) => v === true || v === 1 || v === "true" || v === "1";
+    if (!on(gesture.touch_calendar_scroll)) return [];
+
+    const items = [];
+    document.querySelectorAll("[ng-swipe-up][ng-swipe-down]").forEach((el) => {
+      if (el.offsetParent === null) return;
+      if (getComputedStyle(el).visibility === "hidden") return; // another page
+      const r = el.getBoundingClientRect();
+      if (r.width < 40 || r.height < 40) return;
+      const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+      if (cx < 0 || cx > window.innerWidth || cy < 0 || cy > window.innerHeight) return;
+      const s = window.angular.element(el).scope();
+      let w = s;
+      while (w && !w.widgetData) w = w.$parent;
+      const wd = w && w.widgetData;
+      if (!wd || wd.widgetSettingId === undefined) return;
+      // designer mode keeps EVERY page in the DOM and the visibility
+      // check alone does not separate them here, so trust the widget's
+      // own page index (outerindex, the same value the portal passes to
+      // its handlers) exactly like the overlay extractors do
+      let po = s;
+      while (po && po.outerindex === undefined) po = po.$parent;
+      const ownPage = po ? parseInt(po.outerindex, 10) : parseInt(el.getAttribute("outerIndex"), 10);
+      if (wantPage !== null && !isNaN(ownPage) && ownPage !== wantPage) return;
+      items.push({
+        kind: "calendar",
+        page: ownPage,
+        rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+        // one page can hold several calendars, so the gesture has to name
+        // which one it landed on
+        id: String(wd.widgetSettingId),
+      });
+    });
+    return items;
+  }, pageIdx);
+  return found && found.length ? found : null;
 }
 
 // the device draws these natively, so keep the DOM ones out of the still
@@ -1581,6 +1671,7 @@ module.exports = {
   extractEffects,
   hideEffects,
   extractTargets,
+  extractRegions,
   hideTargets,
   handlers: [
     clockHandler,

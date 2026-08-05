@@ -26,10 +26,13 @@ async function extractPageMeta(page) {
         const inj = window.angular.element(r).injector();
         if (!inj) continue;
         let found = null;
+        let gesture = null;
         const walk = (s) => {
           if (!s || found) return;
+          if (s.gesture && !gesture) gesture = s.gesture;
           if (s.groups && s.groups.length) {
             found = s.groups;
+            if (s.gesture) gesture = s.gesture;
             return;
           }
           walk(s.$$childHead);
@@ -37,6 +40,7 @@ async function extractPageMeta(page) {
         };
         walk(inj.get("$rootScope"));
         if (found) {
+          const on = (v) => v === true || v === 1 || v === "true" || v === "1";
           return {
             pageCount: found.length,
             pages: found.map((g) => ({
@@ -44,6 +48,12 @@ async function extractPageMeta(page) {
               transition: g.transition || "fade",
               autoRotate: g.isAutoPageRotation === true,
             })),
+            // which remote gestures the user has switched on for this
+            // display - the device honours these, same as the portal does
+            gestures: {
+              pageSwipe: on(gesture && gesture.touch_page_swipe),
+              calendarScroll: on(gesture && gesture.touch_calendar_scroll),
+            },
           };
         }
         break;
@@ -173,7 +183,7 @@ async function capturePage(page, opts) {
   let targets = null;
   if (portalFrame) {
     try {
-      targets = await nativeWidgets.extractTargets(portalFrame, { outDir, apiBase });
+      targets = await nativeWidgets.extractTargets(portalFrame, { outDir, apiBase, pageIdx });
       if (targets) {
         await nativeWidgets.hideTargets(portalFrame, targets.items);
         await page.waitForTimeout(60);
@@ -227,6 +237,15 @@ async function capturePage(page, opts) {
     }
   }
 
+  // areas where a pointer gesture is live (calendar swipe surfaces)
+  let regions = null;
+  try {
+    regions = await nativeWidgets.extractRegions(portalFrame, { pageIdx });
+    if (regions) console.log("regions:", regions.length);
+  } catch (e) {
+    console.error("region extraction failed:", e.message);
+  }
+
   const pageMeta = await extractPageMeta(page);
   const overlays = groups.flatMap((g) => g.items);
   const manifest = {
@@ -234,6 +253,7 @@ async function capturePage(page, opts) {
     overlays,
     effects,
     targets,
+    regions,
     pageMeta,
     imageFile: path.basename(outPath),
   };

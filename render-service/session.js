@@ -92,9 +92,13 @@ class InteractionSession {
 
   // Preview/designer mode deliberately disables the portal's click
   // bindings, so a synthetic click never reaches its handlers. Instead we
-  // resolve the control under the pointer and invoke the portal's OWN
-  // handler - the same function the click would have called - so the
-  // portal still builds the payload and calls the API itself.
+  // resolve the control under the pointer and run the row's OWN ng-click
+  // expression against its OWN scope - exactly what Angular does on a
+  // real click, so the portal builds the payload and calls the API
+  // itself. Evaluating the expression rather than reconstructing the call
+  // is what makes chores, to-dos and sub-tasks all work: each template
+  // passes a different argument list (chores carry key/label/value,
+  // to-dos pass null, sub-tasks bind `subTask` instead of `todo`).
   //
   // A real checkbox click flips the model first (the browser's native
   // toggle) and the handler then sends that new state, so the flip has to
@@ -112,6 +116,14 @@ class InteractionSession {
         const boxes = [...document.querySelectorAll("input.todocheckbox")].filter(
           (c) => getComputedStyle(c).visibility !== "hidden", // other pages
         );
+        // every row reports the task ITS OWN binding points at - a
+        // sub-task row repeats over `subTask`, so asking the scope for
+        // `todo` would hand back its parent task
+        const taskOf = (c) => {
+          const s = window.angular.element(c).scope();
+          const m = (c.getAttribute("ng-model") || "").replace(/\.status\s*$/, "");
+          return s && m ? s.$eval(m) : null;
+        };
         // Identity beats geometry: the list can reshuffle between the
         // render the device is showing and this live page (a completed
         // task drops out and the rest move up), so match the task itself
@@ -119,8 +131,8 @@ class InteractionSession {
         let el = null;
         if (pt.id) {
           el = boxes.find((c) => {
-            const s = window.angular.element(c).scope();
-            return s && s.todo && String(s.todo.id) === String(pt.id);
+            const t = taskOf(c);
+            return t && String(t.id) === String(pt.id);
           });
         }
         if (!el) {
@@ -133,35 +145,20 @@ class InteractionSession {
         if (!el) return { handled: false, reason: "no target for id/point" };
 
         const sc = window.angular.element(el).scope();
-        const climb = (k) => {
-          let q = sc;
-          while (q && q[k] === undefined) q = q.$parent;
-          return q ? q[k] : undefined;
-        };
-        let fnScope = sc;
-        while (fnScope && !fnScope.updateTaskStatus) fnScope = fnScope.$parent;
-        if (!fnScope) return { handled: false, reason: "handler not on scope chain" };
+        const modelExpr = (el.getAttribute("ng-model") || "").replace(/\.status\s*$/, "");
+        const clickExpr = el.getAttribute("ng-click") || "";
+        if (!sc || !modelExpr || !clickExpr) return { handled: false, reason: "row has no binding" };
 
-        const widgetData = climb("widgetData");
-        const value = climb("value");
-        const kind = widgetData && widgetData.contentType === "chores" ? "chores" : "todo";
-        const next = !sc.todo.status;
+        const task = sc.$eval(modelExpr);
+        if (!task) return { handled: false, reason: "row binding resolves to nothing" };
+        const kind = /'chores'|"chores"/.test(clickExpr) ? "chores" : "todo";
+        const next = !task.status;
         const evt = { preventDefault() {}, stopPropagation() {}, target: el };
-        sc.todo.status = next;
-        fnScope.$apply(() => {
-          fnScope.updateTaskStatus(
-            sc.todo,
-            widgetData ? widgetData.widgetSettingId : null,
-            climb("key"),
-            climb("outerindex"),
-            climb("innerIndex"),
-            evt,
-            kind,
-            value ? value.selectedLabel : undefined,
-            value,
-          );
+        sc.$apply(() => {
+          sc.$eval(modelExpr + ".status = " + (next ? "true" : "false"));
+          sc.$eval(clickExpr, { $event: evt });
         });
-        return { handled: true, kind, taskId: sc.todo.taskId, status: next };
+        return { handled: true, kind, taskId: task.taskId, title: task.taskTitle, status: next };
       },
       { x, y, id },
     );
@@ -170,10 +167,140 @@ class InteractionSession {
       console.log("tap ignored:", result.reason);
       return result;
     }
-    console.log("tap:", result.kind, "task", result.taskId, "->", result.status ? "complete" : "not complete");
+    console.log(
+      "tap:", result.kind, JSON.stringify(result.title || result.taskId),
+      "->", result.status ? "complete" : "not complete",
+    );
     // give the portal's API call and its own DOM update time to land
     await this.page.waitForTimeout(1500);
     return result;
+  }
+
+  // A swipe on a widget (calendar: show more dates). Preview mode blocks
+  // real touch input, so - exactly as the portal's own remote pointer
+  // does - we emit the Hammer event straight at the element's hammer
+  // instance. The `arrowDoubleTap` marker matters: updateCalendarView
+  // checks for it and skips the scroll-the-widget path in favour of
+  // moving the date range, which is what the remote gesture means.
+  async swipe(dir, x, y, id) {
+    const frame = this.page.frames().find((f) => f.url().includes("designer=true"));
+    if (!frame) throw new Error("portal frame missing");
+    const type = dir === "swipeup" ? "swipeup" : "swipedown";
+
+    const before = await frame.evaluate(
+      (pt) => {
+        const els = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].filter(
+          (e) => getComputedStyle(e).visibility !== "hidden",
+        );
+        let el = null;
+        if (pt.id) {
+          el = els.find((e) => {
+            const s = window.angular.element(e).scope();
+            let w = s;
+            while (w && !w.widgetData) w = w.$parent;
+            return w && w.widgetData && String(w.widgetData.widgetSettingId) === String(pt.id);
+          });
+        }
+        if (!el) {
+          el = els.find((e) => {
+            const r = e.getBoundingClientRect();
+            return pt.x >= r.x && pt.x <= r.right && pt.y >= r.y && pt.y <= r.bottom;
+          });
+        }
+        if (!el) return { handled: false, reason: "no swipe surface for id/point" };
+        if (!el.hammerInstance) return { handled: false, reason: "no hammer instance on surface" };
+        window.__mmSwipeEl = el;
+        return { handled: true, text: (el.innerText || "").replace(/\s+/g, " ").slice(0, 400) };
+      },
+      { x, y, id },
+    );
+    if (!before.handled) {
+      console.log("swipe ignored:", before.reason);
+      return before;
+    }
+
+    await frame.evaluate((t) => {
+      const el = window.__mmSwipeEl;
+      el.hammerInstance.emit(t, {
+        type: t,
+        target: el,
+        pointerType: "touch",
+        mangoMirrorRemoteGesture: "arrowDoubleTap",
+      });
+    }, type);
+
+    // the new range is fetched over HTTP, so wait for the widget to
+    // actually repaint rather than guessing at a delay; hitting the
+    // range limit repaints nothing, and falling through is correct there
+    let changed = false;
+    try {
+      await frame.waitForFunction(
+        (prev) => {
+          const el = window.__mmSwipeEl;
+          return el && (el.innerText || "").replace(/\s+/g, " ").slice(0, 400) !== prev;
+        },
+        before.text,
+        { timeout: 6000 },
+      );
+      changed = true;
+    } catch (e) {}
+    await this.page.waitForTimeout(400);
+    console.log("swipe:", type, "->", changed ? "new dates" : "no change (range limit?)");
+    return { handled: true, kind: "calendar", direction: type, changed };
+  }
+
+  // Apply a socket payload the watcher received on the page's behalf.
+  // The portal has its own handler for exactly this data, so a real
+  // display and this page end up in the same state - we're just carrying
+  // the message across, since a preview-mode page has no socket of its
+  // own to receive it on.
+  async applyCalendar(refreshCalenderData) {
+    const frame = this.page.frames().find((f) => f.url().includes("designer=true"));
+    if (!frame) throw new Error("portal frame missing");
+    const r = await frame.evaluate((data) => {
+      const el = document.querySelector("[ng-swipe-up][ng-swipe-down]");
+      if (!el) return { ok: false, reason: "no calendar on page" };
+      let sc = window.angular.element(el).scope();
+      while (sc && !sc.updateCalendarData) sc = sc.$parent;
+      if (!sc) return { ok: false, reason: "updateCalendarData not on scope chain" };
+      const before = (el.innerText || "").replace(/\s+/g, " ").slice(0, 60);
+      // Call it bare. updateCalendarData runs its own $scope.$apply(), so
+      // wrapping it throws $rootScope:inprog - which aborts the function
+      // midway, after the new data lands but BEFORE it schedules the
+      // repaint, leaving the model on the new range and the view on the
+      // old one.
+      try {
+        sc.updateCalendarData(data);
+      } catch (e) {
+        return { ok: false, reason: "updateCalendarData threw: " + e.message };
+      }
+      return { ok: true, widgets: Object.keys(data), before };
+    }, refreshCalenderData);
+    if (!r.ok) {
+      console.log("calendar payload not applied:", r.reason);
+      return false;
+    }
+
+    // the repaint is deferred behind a 2s $timeout inside the portal, so
+    // wait for the view itself to move rather than guessing at a delay
+    let moved = false;
+    try {
+      await frame.waitForFunction(
+        (prev) => {
+          const el = document.querySelector("[ng-swipe-up][ng-swipe-down]");
+          return el && (el.innerText || "").replace(/\s+/g, " ").slice(0, 60) !== prev;
+        },
+        r.before,
+        { timeout: 10000 },
+      );
+      moved = true;
+    } catch (e) {}
+    await this.page.waitForTimeout(600);
+    console.log(
+      "calendar payload applied to widget(s)", r.widgets.join(","),
+      moved ? "- view moved" : "- view did NOT move",
+    );
+    return moved;
   }
 
   // re-capture the live page into the same files the watcher publishes
@@ -207,6 +334,9 @@ class InteractionSession {
       await this.open(action.page || 0);
       if (action.type === "tap") {
         return await this.tap(action.x, action.y, action.id);
+      }
+      if (action.type === "swipeup" || action.type === "swipedown") {
+        return await this.swipe(action.type, action.x, action.y, action.id);
       }
       throw new Error("unsupported action: " + action.type);
     } finally {

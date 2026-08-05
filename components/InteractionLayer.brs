@@ -28,6 +28,9 @@ sub init()
     m.holdDelay.observeField("fire", "onHoldStart")
     m.holdRepeat = m.top.findNode("holdRepeat")
     m.holdRepeat.observeField("fire", "onHoldStep")
+    m.dblTimer = m.top.findNode("dblTimer")
+    m.dblTimer.observeField("fire", "onDblWindowEnd")
+    m.dblKey = ""
     m.px = 960
     m.py = 540
     m.active = false
@@ -158,6 +161,44 @@ sub onKey()
         return
     end if
 
+    ' Double-click left/right turns the page. This one acts on the whole
+    ' page rather than on whatever the pointer is over, so - like the
+    ' portal - it works whether or not the pointer is showing.
+    if key = "left" or key = "right"
+        if key = m.dblKey
+            m.dblTimer.control = "stop"
+            m.dblKey = ""
+            if pageSwipeAllowed()
+                if key = "right" then m.top.pageTurn = "next" else m.top.pageTurn = "prev"
+                return
+            end if
+        else
+            m.dblKey = key
+            m.dblTimer.control = "stop"
+            m.dblTimer.control = "start"
+        end if
+    end if
+
+    ' Double-click up/down over a calendar sends a swipe. Unlike the page
+    ' turn this one is aimed: the pointer has to be sitting on the widget,
+    ' so it only counts while the pointer is showing.
+    if (key = "up" or key = "down") and m.active
+        if key = m.dblKey
+            m.dblTimer.control = "stop"
+            m.dblKey = ""
+            reg = regionUnderPointer()
+            if reg <> invalid and calendarScrollAllowed()
+                m.hideTimer.control = "start"
+                if key = "up" then sendAction2("swipeup", m.px, m.py, reg.id) else sendAction2("swipedown", m.px, m.py, reg.id)
+                return
+            end if
+        else
+            m.dblKey = key
+            m.dblTimer.control = "stop"
+            m.dblTimer.control = "start"
+        end if
+    end if
+
     ' arrows only steer a pointer that is already up
     if not m.active then return
     m.hideTimer.control = "start"
@@ -174,6 +215,31 @@ sub onKeyUp()
     if key = "" then return
     m.top.keyRelease = ""
     if key = m.heldKey then stopHold()
+end sub
+
+function calendarScrollAllowed() as boolean
+    g = m.top.gestures
+    return g <> invalid and g.calendarScroll = true
+end function
+
+function regionUnderPointer() as object
+    r = m.top.regions
+    if r = invalid then return invalid
+    for each it in r
+        if m.px >= it.rect.x and m.px <= it.rect.x + it.rect.w and m.py >= it.rect.y and m.py <= it.rect.y + it.rect.h
+            return it
+        end if
+    end for
+    return invalid
+end function
+
+function pageSwipeAllowed() as boolean
+    g = m.top.gestures
+    return g <> invalid and g.pageSwipe = true
+end function
+
+sub onDblWindowEnd()
+    m.dblKey = ""
 end sub
 
 sub stopHold()

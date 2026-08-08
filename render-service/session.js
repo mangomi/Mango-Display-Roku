@@ -50,7 +50,17 @@ class InteractionSession {
     if (this.page) await this.close("page change");
 
     const url = this.opts.designerUrl(pageIndex);
-    this.browser = await chromium.launch();
+    // Same reason as the render pool: a headless page that is not the
+    // foreground tab gets its timers throttled, which stalls the portal's
+    // own deferred repaint. The dispatch page then never updates its
+    // range, so every swipe recomputes the SAME next one.
+    this.browser = await chromium.launch({
+      args: [
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+      ],
+    });
     this.page = await this.browser.newPage({
       viewport: { width: this.opts.outW, height: this.opts.outH },
       hasTouch: true,

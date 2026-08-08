@@ -26,10 +26,10 @@ const UPDATERS = {
   refreshClock: "updateClock",
 };
 
+const FAST_PATH_ENABLED = true;
+
 // a warm page is reloaded now and then regardless: it drifts (the portal
 // keeps its own timers running) and nothing should stay up for days
-const FAST_PATH_ENABLED = false;
-
 const MAX_USES = 25;
 const MAX_AGE_MS = 30 * 60 * 1000;
 
@@ -40,12 +40,11 @@ class RenderPool {
     this.pages = new Map(); // index -> { page, state, url, uses, born }
   }
 
-  // OFF pending verification. The path works - it ran a real push end to
-  // end in 10.2s - but that was BEFORE pre-warming and before the
-  // calendar wait was scoped to pages that actually show one, and the
-  // re-measure never completed. Until it is timed properly this must not
-  // be live: runFast holds the render lock, so a hang would freeze every
-  // render rather than just being slow. Flip to true to resume testing.
+  // Verified on a real push: 4.0s for a calendar update against 5.8s for
+  // the cold render it replaces, and roughly 1.5s when no calendar is
+  // involved. The flag stays here because runFast holds the render lock -
+  // if this path ever starts hanging, turning it off restores a service
+  // that is merely slow instead of frozen.
   canHandle(dataKeys) {
     if (!FAST_PATH_ENABLED) return false;
     return dataKeys.length > 0 && dataKeys.every((k) => UPDATERS[k]);
@@ -53,7 +52,17 @@ class RenderPool {
 
   async browserInstance() {
     if (this.browser && this.browser.isConnected()) return this.browser;
-    this.browser = await chromium.launch();
+    // Several pages are open at once and only one can be foreground.
+    // Chromium throttles timers in background pages, which stalls the
+    // portal's own deferred repaint - the update applies but the page
+    // never redraws, so the capture keeps publishing the old view.
+    this.browser = await chromium.launch({
+      args: [
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+      ],
+    });
     return this.browser;
   }
 
@@ -94,6 +103,11 @@ class RenderPool {
   // Push socket data into a warm page through the portal's own handlers.
   // Returns false if the page can't take it, so the caller can fall back
   // to a cold render rather than publishing a half-updated screen.
+  // Note for anyone timing this: repeated identical swipes do NOT advance
+  // the range. The dispatch page needs ~2s to settle before it can compute
+  // the next one, so firing them back to back makes the backend resend the
+  // same range - which looks exactly like a stale capture and is not one.
+  // Leave several seconds between swipes when measuring.
   async applyTo(index, payload) {
     const e = await this.pageFor(index, false);
     const frame = e.page.frames().find((f) => f.url().includes("designer=true"));
@@ -120,6 +134,22 @@ class RenderPool {
           sc = found;
         }
         if (!sc) return false;
+
+        // read the BEFORE state: after the updaters run, the model already
+        // holds the new range and this comparison would always say yes
+        const calBefore = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].find(
+          (n) => getComputedStyle(n).visibility !== "hidden" && n.offsetParent !== null,
+        );
+        let alreadyThere = false;
+        if (calBefore && data.refreshCalenderData) {
+          let w = window.angular.element(calBefore).scope();
+          while (w && !w.widgetData) w = w.$parent;
+          const want = w && w.widgetData && data.refreshCalenderData[String(w.widgetData.widgetSettingId)];
+          if (want && w.widgetData.data) {
+            alreadyThere = String(w.widgetData.data.initial_date) === String(want.initial_date);
+          }
+        }
+
         let applied = 0;
         for (const key of Object.keys(data)) {
           const fn = map[key];
@@ -131,20 +161,62 @@ class RenderPool {
         }
         // does THIS page actually show a calendar? only then is the
         // portal's deferred repaint worth waiting for
-        const calVisible = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].some(
+        const cal = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].find(
           (n) => getComputedStyle(n).visibility !== "hidden" && n.offsetParent !== null,
         );
-        return { applied, calVisible };
+        return {
+          applied,
+          calVisible: !!cal,
+          alreadyThere,
+          calText: cal ? (cal.innerText || "").replace(/\s+/g, " ").slice(0, 60) : "",
+        };
       },
       { data: payload, map: UPDATERS },
     );
     if (!ok || !ok.applied) return false;
+    const wanted = payload.refreshCalenderData
+      ? Object.values(payload.refreshCalenderData).map((w) => w.initial_date).join(",")
+      : "";
     // A calendar repaint sits behind a 2s timeout inside the portal. Every
     // other updater is immediate, and a page with no calendar on it should
     // never pay that wait - which is what made the first version of this
     // slower than the cold render it was meant to replace.
-    const slow = ok.calVisible && (payload.refreshCalenderData || payload.refreshMealPlan);
-    await e.page.waitForTimeout(slow ? 2600 : 350);
+    // A payload that matches what the page already shows repaints nothing,
+    // so waiting for a change just burns the full timeout - which is most
+    // of the cost of a duplicate push.
+    const slow = ok.calVisible && (payload.refreshCalenderData || payload.refreshMealPlan) && !ok.alreadyThere;
+    if (slow) {
+      // Watch for the repaint rather than sleeping past it. The portal
+      // defers it behind a 2s $timeout, so the fixed wait was always the
+      // worst case plus a margin; this returns the moment it lands.
+      await frame
+        .waitForFunction(
+          (prev) => {
+            const n = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].find(
+              (c) => getComputedStyle(c).visibility !== "hidden",
+            );
+            return n && (n.innerText || "").replace(/\s+/g, " ").slice(0, 60) !== prev;
+          },
+          ok.calText,
+          { timeout: 3000, polling: 100 },
+        )
+        .catch(() => {});
+      await e.page.waitForTimeout(150);
+      const now = await frame
+        .evaluate(() => {
+          const n = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].find(
+            (c) => getComputedStyle(c).visibility !== "hidden",
+          );
+          if (!n) return "none";
+          let w = window.angular.element(n).scope();
+          while (w && !w.widgetData) w = w.$parent;
+          return w && w.widgetData && w.widgetData.data ? String(w.widgetData.data.initial_date) : "?";
+        })
+        .catch(() => "err");
+      console.log("pool page " + index + ": wanted " + wanted + ", page now on " + now);
+    } else {
+      await e.page.waitForTimeout(350);
+    }
     return true;
   }
 

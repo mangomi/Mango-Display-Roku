@@ -15,6 +15,9 @@
         <field id="gestures" type="assocarray" />
         <!-- "next"/"prev" when a page turn is asked for; MainScene clears it -->
         <field id="pageTurn" type="string" />
+        <!-- centre of the widget a gesture acted on, so the spinner can
+             sit on the thing that is actually changing -->
+        <field id="busyAt" type="array" />
     </interface>
     <children>
         <Group id="boxes" />

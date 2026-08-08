@@ -32,6 +32,9 @@ sub init()
     m.dblTimer.observeField("fire", "onDblWindowEnd")
     m.dblKey = ""
     m.didGlide = false
+    m.swipeBusy = false
+    m.swipeCooldown = m.top.findNode("swipeCooldown")
+    m.swipeCooldown.observeField("fire", "onSwipeCooldown")
     m.px = 960
     m.py = 540
     m.active = false
@@ -83,6 +86,11 @@ sub onTargets()
         m.overrides.Delete(k)
     end for
     print "[Mango] targets: "; m.items.Count(); " box(es), "; m.overrides.Count(); " held locally"
+    ' the render came back, so the gesture is done with
+    if m.swipeBusy
+        m.swipeBusy = false
+        m.swipeCooldown.control = "stop"
+    end if
 end sub
 
 ' The press is the user's truth until the backend's own refresh proves it
@@ -181,8 +189,16 @@ sub onKey()
         m.dblTimer.control = "stop"
         m.dblKey = ""
         reg = regionUnderPointer()
-        if reg <> invalid and calendarScrollAllowed()
+        ' one swipe at a time: a second one sent while the first is still
+        ' coming back makes the backend recompute from the same starting
+        ' point and resend the dates already on screen
+        if reg <> invalid and calendarScrollAllowed() and not m.swipeBusy
             m.hideTimer.control = "start"
+            m.swipeBusy = true
+            m.swipeCooldown.control = "start"
+            ' tell the scene where to put the spinner: on the widget that
+            ' is changing, not the middle of a screen where nothing is
+            m.top.busyAt = [reg.rect.x + reg.rect.w / 2, reg.rect.y + reg.rect.h / 2]
             if key = "up" then sendAction2("swipeup", m.px, m.py, reg.id) else sendAction2("swipedown", m.px, m.py, reg.id)
             return
         end if
@@ -238,6 +254,11 @@ function pageSwipeAllowed() as boolean
     g = m.top.gestures
     return g <> invalid and g.pageSwipe = true
 end function
+
+' the swipe has had its turn - accept gestures again
+sub onSwipeCooldown()
+    m.swipeBusy = false
+end sub
 
 sub onDblWindowEnd()
     m.dblKey = ""

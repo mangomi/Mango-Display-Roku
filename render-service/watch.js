@@ -253,6 +253,14 @@ async function handleInteract(u, res) {
     // changes what the widget SHOWS - dates the device has never seen -
     // so this is the one gesture that has to go back through a capture.
     const swipe = type === "swipeup" || type === "swipedown";
+    // Backstop for the device's own cooldown. A swipe sent while one is
+    // still in flight makes the portal recompute from the range it has
+    // not finished moving to, so the backend resends the dates already on
+    // screen - which reads as the gesture doing nothing at all.
+    if (swipe && interacting) {
+      log("swipe ignored: one already in flight");
+      return reply(200, { handled: false, reason: "a swipe is already in flight" });
+    }
     // register BEFORE dispatching: the backend answers in ~2s
     const waitPayload = swipe && id ? waitForCalendarPayload(String(id), 12000) : null;
     if (swipe) {

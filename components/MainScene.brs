@@ -353,8 +353,23 @@ sub onBusyChange()
     end if
 end sub
 
+' Put the spinner on the thing that is actually changing. A calendar
+' swipe only alters that widget, so a spinner in the middle of the screen
+' points at nothing - the portal shows it on the widget too.
+sub placeSpinner()
+    cx = 960
+    cy = 540
+    at = m.interaction.busyAt
+    if at <> invalid and at.Count() = 2
+        cx = at[0]
+        cy = at[1]
+    end if
+    m.spinnerPoster.translation = [cx - 40, cy - 40]
+end sub
+
 sub startSpinner()
     if m.spinAnim <> invalid then return ' already spinning
+    placeSpinner()
     m.spinnerPoster.rotation = 0.0
     m.spinnerPoster.visible = true
     anim = CreateObject("roSGNode", "Animation")
@@ -375,6 +390,7 @@ sub startSpinner()
 end sub
 
 sub stopSpinner()
+    m.interaction.busyAt = []
     m.spinnerWatchdog.control = "stop"
     if m.spinAnim <> invalid
         m.spinAnim.control = "stop"

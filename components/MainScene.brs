@@ -69,6 +69,9 @@ sub init()
     m.activeAnim = invalid
     m.animCtx = invalid
     m.overlayState = {}
+    m.overlaysKey = invalid
+    m.forceInPlace = false
+    m.latestImageOnly = false
     m.lastVersionSeconds = 0
     m.latestReason = ""
 
@@ -149,6 +152,7 @@ sub onVersionChange()
     end if
     ' never apply mid-transition/mid-load - deferred to finalizeSwap
     m.latestPages = man.pages
+    m.latestImageOnly = (man.imageOnly = true)
     m.latestReason = ""
     if man.updateReason <> invalid then m.latestReason = man.updateReason
     maybeApplyPages()
@@ -164,7 +168,10 @@ sub maybeApplyPages()
     m.latestReason = ""
     if m.pageIndex >= m.pages.Count() then m.pageIndex = 0
     ' quiet refresh of the current page (no transition)
+    m.forceInPlace = (m.latestImageOnly = true)
+    m.latestImageOnly = false
     loadPage(m.pageIndex, false)
+    m.forceInPlace = false
 end sub
 
 sub onRefreshTick()
@@ -207,6 +214,17 @@ sub onPageTurn()
     loadPage(idx, true)
 end sub
 
+' the native layers a page asks for, as a comparable string
+function overlayConfigKey(overlays as object) as string
+    if overlays = invalid then return ""
+    return FormatJson(overlays)
+end function
+
+function overlaysUnchanged(overlays as object) as boolean
+    if m.overlaysKey = invalid then return false
+    return m.overlaysKey = overlayConfigKey(overlays)
+end function
+
 function frontEntry() as object
     if m.frontKey = "" then return invalid
     return m.slots[m.frontKey]
@@ -229,6 +247,23 @@ sub loadPage(index as integer, animated as boolean)
     if m.pages = invalid then return
     if index >= m.pages.Count() then index = 0
     pg = m.pages[index]
+
+    ' A quiet refresh of the page already on screen, whose native layers
+    ' are unchanged, only needs the new image. Rebuilding the overlays
+    ' restarts every GIF from frame one and blanks them while their sheets
+    ' reload - which with updates now landing every few seconds reads as
+    ' the whole screen freezing.
+    ' the service says only the page image changed, or the native layers
+    ' this page asks for are identical to the ones already running
+    inPlaceOk = (m.forceInPlace = true) or overlaysUnchanged(pg.overlays)
+    if not animated and m.frontKey <> "" and index = m.pageIndex and inPlaceOk
+        entry = m.slots[m.frontKey]
+        m.pendingLoad = { index: index, animated: false, inPlace: true, slotKey: m.frontKey }
+        ts = CreateObject("roDateTime").AsSeconds().ToStr()
+        entry.poster.uri = m.assetBaseUrl + pg.image + "?t=" + ts
+        return
+    end if
+
     bk = backKey()
     entry = m.slots[bk]
     ' incoming slot draws on top during transitions
@@ -237,6 +272,7 @@ sub loadPage(index as integer, animated as boolean)
     resetSlotTransforms(entry.slot)
     ' the page's overlays ride inside the slot, so they move/fade with it
     applyOverlays(pg.overlays, entry.overlays, entry.under)
+    m.overlaysKey = overlayConfigKey(pg.overlays)
     m.pendingLoad = { index: index, animated: animated, transition: pg.transition, slotKey: bk }
     ts = CreateObject("roDateTime").AsSeconds().ToStr()
     entry.poster.uri = m.assetBaseUrl + pg.image + "?t=" + ts
@@ -257,6 +293,13 @@ sub onPosterLoad(ev as object)
     if status <> "ready" then return
     pl = m.pendingLoad
     m.pendingLoad = invalid
+    if pl.inPlace = true
+        ' image swapped underneath the live overlays; nothing to tear down
+        m.pageIndex = pl.index
+        armPageTimer()
+        maybeApplyPages()
+        return
+    end if
     if pl.animated and m.frontKey <> ""
         startTransition(pl.transition, pl.slotKey, pl.index)
     else

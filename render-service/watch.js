@@ -439,6 +439,11 @@ function publishFromDisk(reason) {
   // silent for background refreshes (startup, 20-min data, midnight)
   const AUTO_REASONS = ["startup", "scheduled", "midnight", "data update"];
   const updateReason = AUTO_REASONS.includes(reason) ? "auto" : "edit";
+  // A calendar swipe changes what one widget SHOWS and nothing else. Say
+  // so, and the device swaps just the page image instead of rebuilding
+  // every native layer - which restarts each GIF from frame one and
+  // blanks them while their sheets reload.
+  const imageOnly = reason === "interaction";
   // visual overlays are display-wide, not per page
   const effects = man0.effects || [];
   // remote gestures the user enabled, display-wide like effects
@@ -446,7 +451,7 @@ function publishFromDisk(reason) {
   fs.writeFileSync(
     path.join(__dirname, "display.json"),
     JSON.stringify(
-      { canvas: { width: DISPLAY.canvasW, height: DISPLAY.canvasH }, updateReason, effects, gestures, pages },
+      { canvas: { width: DISPLAY.canvasW, height: DISPLAY.canvasH }, updateReason, imageOnly, effects, gestures, pages },
       null,
       1,
     ),

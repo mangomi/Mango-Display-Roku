@@ -70,6 +70,9 @@ sub init()
     m.animCtx = invalid
     m.overlayState = {}
     m.overlaysKey = invalid
+    m.loadSeq = 0
+    m.loadWatchdog = m.top.findNode("loadWatchdog")
+    m.loadWatchdog.observeField("fire", "onLoadWatchdog")
     m.forceInPlace = false
     m.latestImageOnly = false
     m.lastVersionSeconds = 0
@@ -248,22 +251,6 @@ sub loadPage(index as integer, animated as boolean)
     if index >= m.pages.Count() then index = 0
     pg = m.pages[index]
 
-    ' A quiet refresh of the page already on screen, whose native layers
-    ' are unchanged, only needs the new image. Rebuilding the overlays
-    ' restarts every GIF from frame one and blanks them while their sheets
-    ' reload - which with updates now landing every few seconds reads as
-    ' the whole screen freezing.
-    ' the service says only the page image changed, or the native layers
-    ' this page asks for are identical to the ones already running
-    inPlaceOk = (m.forceInPlace = true) or overlaysUnchanged(pg.overlays)
-    if not animated and m.frontKey <> "" and index = m.pageIndex and inPlaceOk
-        entry = m.slots[m.frontKey]
-        m.pendingLoad = { index: index, animated: false, inPlace: true, slotKey: m.frontKey }
-        ts = CreateObject("roDateTime").AsSeconds().ToStr()
-        entry.poster.uri = m.assetBaseUrl + pg.image + "?t=" + ts
-        return
-    end if
-
     bk = backKey()
     entry = m.slots[bk]
     ' incoming slot draws on top during transitions
@@ -274,8 +261,27 @@ sub loadPage(index as integer, animated as boolean)
     applyOverlays(pg.overlays, entry.overlays, entry.under)
     m.overlaysKey = overlayConfigKey(pg.overlays)
     m.pendingLoad = { index: index, animated: animated, transition: pg.transition, slotKey: bk }
-    ts = CreateObject("roDateTime").AsSeconds().ToStr()
-    entry.poster.uri = m.assetBaseUrl + pg.image + "?t=" + ts
+    m.loadWatchdog.control = "start"
+    entry.poster.uri = m.assetBaseUrl + pg.image + "?t=" + nextLoadTag()
+end sub
+
+' Seconds are not unique enough: two refreshes in the same second build
+' the SAME uri, and setting a field to the value it already holds fires no
+' change event - so the load never completes, pendingLoad is never
+' cleared, and every later update is deferred forever. That wedged the
+' display. A counter cannot collide.
+function nextLoadTag() as string
+    m.loadSeq = m.loadSeq + 1
+    return CreateObject("roDateTime").AsSeconds().ToStr() + "_" + m.loadSeq.ToStr()
+end function
+
+' last line of defence: nothing may leave a load pending, or the display
+' silently stops accepting updates
+sub onLoadWatchdog()
+    if m.pendingLoad = invalid then return
+    print "[Mango] load watchdog: clearing a stuck page load"
+    m.pendingLoad = invalid
+    maybeApplyPages()
 end sub
 
 sub onPosterLoad(ev as object)
@@ -287,19 +293,14 @@ sub onPosterLoad(ev as object)
     if status = "failed"
         print "[Mango] image load failed: "; node.uri
         m.pendingLoad = invalid
+        m.loadWatchdog.control = "stop"
         maybeApplyPages()
         return
     end if
     if status <> "ready" then return
     pl = m.pendingLoad
     m.pendingLoad = invalid
-    if pl.inPlace = true
-        ' image swapped underneath the live overlays; nothing to tear down
-        m.pageIndex = pl.index
-        armPageTimer()
-        maybeApplyPages()
-        return
-    end if
+    m.loadWatchdog.control = "stop"
     if pl.animated and m.frontKey <> ""
         startTransition(pl.transition, pl.slotKey, pl.index)
     else

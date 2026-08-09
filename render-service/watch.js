@@ -47,21 +47,22 @@ let pendingRender = false;
 // render exists, so pickup is ~instant instead of a blind polling interval.
 const VERSION_PORT = 8091;
 const WAIT_HOLD_MS = 50000; // client uses a 55s wait; always answer first
-// epoch-seeded AND persisted so versions never regress across restarts
-// (a client that already saw a higher number would ignore new renders)
+// A SMALL counter, persisted. It must stay small: BrightScript's ParseJson
+// hands large numbers back as single-precision floats, which hold about 7
+// significant digits, so a 10-digit epoch second like 1786311809 arrives on
+// the device as 1786311808. The device could then never hold the real
+// value - consecutive versions rounded to the SAME float, it saw no change,
+// and it sat polling every 250ms forever while its screen only refreshed on
+// its 60s fallback. That was the whole "swipes do not change the dates" bug.
 const VERSION_FILE = path.join(__dirname, ".version");
-let version = Math.floor(Date.now() / 1000);
+let version = 1;
 try {
   const prev = parseInt(fs.readFileSync(VERSION_FILE, "utf8").trim(), 10);
-  if (prev >= version) version = prev + 1;
+  // anything from the old epoch-based scheme is discarded, not resumed
+  if (prev > 0 && prev < 1000000) version = prev + 1;
 } catch (e) {}
 let waiters = [];
-// Highest version any client has told us it holds. A device must never be
-// ahead of us: if it is, it ignores everything we publish below its own
-// number and only refreshes on its 60s fallback. Publishing above this
-// makes every publish unambiguously newer, whatever the client picked up
-// from an earlier instance of this service.
-let seenClientVersion = 0;
+
 
 // `busy` is true while a USER EDIT is rendering, so the TV can show a
 // spinner during the wait (background refreshes stay silent)
@@ -259,15 +260,6 @@ async function handleInteract(u, res) {
     // changes what the widget SHOWS - dates the device has never seen -
     // so this is the one gesture that has to go back through a capture.
     const swipe = type === "swipeup" || type === "swipedown";
-    // Backstop for the device's own cooldown. A swipe sent while one is
-    // still in flight makes the portal recompute from the range it has
-    // not finished moving to, so the backend resends the dates already on
-    // screen - which reads as the gesture doing nothing at all.
-    if (swipe && interacting) {
-      log("swipe ignored: one already in flight");
-      return reply(200, { handled: false, reason: "a swipe is already in flight" });
-    }
-    // register BEFORE dispatching: the backend answers in ~2s
     const waitPayload = swipe && id ? waitForCalendarPayload(String(id), 12000) : null;
     if (swipe) {
       interacting = true;
@@ -279,13 +271,13 @@ async function handleInteract(u, res) {
         const payload = await waitPayload;
         if (!payload) {
           log("no calendar payload arrived within 12s - screen left as it was");
-        } else if (await getSession().applyCalendar(payload)) {
-          // Captured on the warm page the gesture was dispatched into -
-          // it is already pinned to this display page, and the capture
-          // now cleans up after itself, so there is nothing to gain from
-          // throwing it away and paying for another portal boot.
-          await getSession().recapture();
-          publishFromDisk("interaction");
+        } else {
+          await getSession().close("fresh page for capture");
+          await getSession().open(pageIndex);
+          if (await getSession().applyCalendar(payload)) {
+            await getSession().recapture();
+            publishFromDisk("interaction");
+          }
         }
       }
       interacting = false;
@@ -325,14 +317,11 @@ http
       // and it re-polls a few hundred ms later forever while its content
       // only ever refreshes on its own 60s fallback. Adopt anything ahead
       // of us so the next publish is unambiguously newer.
-      if (since > seenClientVersion) seenClientVersion = since;
-      if (since > version) {
-        log("client is ahead (" + since + " > " + version + ") - adopting its version");
-        version = since;
-        try {
-          fs.writeFileSync(VERSION_FILE, String(version));
-        } catch (e) {}
-      }
+      log("/wait from device: since=" + since + " ours=" + version + " busy=" + clientBusy);
+      // Deliberately NOT adopting a client's number any more. Those hacks
+      // existed to paper over the float-rounding bug and now only drag us
+      // back into the range where it happens. The device accepts any
+      // change, so a small counter always wins.
       if (version !== since || busy !== clientBusy) return respondVersion(res);
       const w = {
         res,
@@ -491,7 +480,7 @@ function publishFromDisk(reason) {
       1,
     ),
   );
-  version = Math.max(version + 1, seenClientVersion + 1, Math.floor(Date.now() / 1000));
+  version = version + 1;
   try {
     fs.writeFileSync(VERSION_FILE, String(version));
   } catch (e) {}

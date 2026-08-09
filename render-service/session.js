@@ -218,7 +218,6 @@ class InteractionSession {
           });
         }
         if (!el) return { handled: false, reason: "no swipe surface for id/point" };
-        if (!el.hammerInstance) return { handled: false, reason: "no hammer instance on surface" };
         window.__mmSwipeEl = el;
         return { handled: true, text: (el.innerText || "").replace(/\s+/g, " ").slice(0, 400) };
       },
@@ -229,15 +228,38 @@ class InteractionSession {
       return before;
     }
 
-    await frame.evaluate((t) => {
+    // Evaluate the element's OWN ng-swipe expression, the same way a tap
+    // runs the row's ng-click. Emitting at hammerInstance instead depends
+    // on Hammer being wired the way we assume, and it silently did nothing
+    // on the List-type calendar - the portal's handler was never reached,
+    // so the backend had nothing to send back. The arrowDoubleTap marker
+    // still matters: updateCalendarView checks for it and moves the date
+    // range rather than scrolling the widget.
+    const fired = await frame.evaluate((t) => {
       const el = window.__mmSwipeEl;
-      el.hammerInstance.emit(t, {
+      const attr = t === "swipeup" ? "ng-swipe-up" : "ng-swipe-down";
+      const expr = el.getAttribute(attr);
+      if (!expr) return { ok: false, reason: "no " + attr + " on surface" };
+      let sc = window.angular.element(el).scope();
+      if (!sc) return { ok: false, reason: "no scope on surface" };
+      const evt = {
         type: t,
         target: el,
         pointerType: "touch",
         mangoMirrorRemoteGesture: "arrowDoubleTap",
-      });
+        preventDefault() {},
+        stopPropagation() {},
+      };
+      const run = () => sc.$eval(expr, { $event: evt });
+      const inDigest = !!(sc.$root && sc.$root.$$phase) || !!sc.$$phase;
+      if (inDigest) run();
+      else sc.$apply(run);
+      return { ok: true };
     }, type);
+    if (!fired.ok) {
+      console.log("swipe not dispatched:", fired.reason);
+      return { handled: false, reason: fired.reason };
+    }
 
     // Return the moment the gesture is dispatched. This page will never
     // repaint on its own: the portal asks the backend, and the answer

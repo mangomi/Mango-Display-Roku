@@ -56,6 +56,12 @@ try {
   if (prev >= version) version = prev + 1;
 } catch (e) {}
 let waiters = [];
+// Highest version any client has told us it holds. A device must never be
+// ahead of us: if it is, it ignores everything we publish below its own
+// number and only refreshes on its 60s fallback. Publishing above this
+// makes every publish unambiguously newer, whatever the client picked up
+// from an earlier instance of this service.
+let seenClientVersion = 0;
 
 // `busy` is true while a USER EDIT is rendering, so the TV can show a
 // spinner during the wait (background refreshes stay silent)
@@ -319,6 +325,7 @@ http
       // and it re-polls a few hundred ms later forever while its content
       // only ever refreshes on its own 60s fallback. Adopt anything ahead
       // of us so the next publish is unambiguously newer.
+      if (since > seenClientVersion) seenClientVersion = since;
       if (since > version) {
         log("client is ahead (" + since + " > " + version + ") - adopting its version");
         version = since;
@@ -484,7 +491,7 @@ function publishFromDisk(reason) {
       1,
     ),
   );
-  version = Math.max(version + 1, Math.floor(Date.now() / 1000));
+  version = Math.max(version + 1, seenClientVersion + 1, Math.floor(Date.now() / 1000));
   try {
     fs.writeFileSync(VERSION_FILE, String(version));
   } catch (e) {}

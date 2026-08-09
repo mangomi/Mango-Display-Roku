@@ -306,7 +306,27 @@ http
       // transition it missed while loading images is corrected the instant
       // it re-arms (event-only delivery left spinners running)
       const clientBusy = u.searchParams.get("busy") === "1";
-      if (version > since || busy !== clientBusy) return respondVersion(res);
+      // Any DIFFERENCE, not just a higher number. The device accepts a
+      // version change in either direction (a restarted service can come
+      // back lower), so holding the connection whenever ours is not
+      // strictly higher left it deaf: a publish that landed while it was
+      // busy fetching images was never re-offered, and it sat on stale
+      // content until something else happened to publish.
+      // A client can hold a HIGHER version than ours - it saw one from a
+      // previous instance of this service, and we resumed from a stale
+      // .version file. Left alone that never converges: every poll
+      // differs, we answer immediately, the device will not go backwards,
+      // and it re-polls a few hundred ms later forever while its content
+      // only ever refreshes on its own 60s fallback. Adopt anything ahead
+      // of us so the next publish is unambiguously newer.
+      if (since > version) {
+        log("client is ahead (" + since + " > " + version + ") - adopting its version");
+        version = since;
+        try {
+          fs.writeFileSync(VERSION_FILE, String(version));
+        } catch (e) {}
+      }
+      if (version !== since || busy !== clientBusy) return respondVersion(res);
       const w = {
         res,
         timer: setTimeout(() => {

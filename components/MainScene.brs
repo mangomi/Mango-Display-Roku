@@ -251,6 +251,24 @@ sub loadPage(index as integer, animated as boolean)
     if index >= m.pages.Count() then index = 0
     pg = m.pages[index]
 
+    ' Only this page's IMAGE changed - a calendar swipe, which the service
+    ' marks imageOnly. Swap it under the live overlays rather than
+    ' rebuilding them: a rebuild restarts every GIF from frame one and
+    ' blanks them while their sheets reload, which reads as the screen
+    ' freezing whenever anything updates.
+    if not animated and m.frontKey <> "" and index = m.pageIndex and (m.forceInPlace = true or overlaysUnchanged(pg.overlays))
+        ' Deliberately does NOT track a pending load. There is no slot to
+        ' swap and nothing to finalise - the visible Poster just picks up
+        ' the new bitmap. Waiting on loadStatus here wedged the display:
+        ' when Roku serves the image from its own cache the field never
+        ' leaves "ready", so no change event arrives, pendingLoad is never
+        ' cleared, and every later update is deferred behind it.
+        m.slots[m.frontKey].poster.uri = m.assetBaseUrl + pg.image + "?t=" + nextLoadTag()
+        m.pageIndex = index
+        armPageTimer()
+        return
+    end if
+
     bk = backKey()
     entry = m.slots[bk]
     ' incoming slot draws on top during transitions

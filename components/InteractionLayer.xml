@@ -42,6 +42,9 @@
              is the intended way to move, and a press that glided is
              excluded from counting as a click. -->
         <Timer id="dblTimer" repeat="false" duration="0.45" />
+        <!-- a swipe takes a few seconds to come back; a second one sent
+             underneath it just makes the backend resend the same dates -->
+        <Timer id="swipeCooldown" repeat="false" duration="8" />
     </children>
     <script type="text/brightscript" uri="pkg:/components/InteractionLayer.brs" />
 </component>

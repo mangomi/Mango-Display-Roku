@@ -21,6 +21,11 @@ sub init()
     m.boxes = m.top.findNode("boxes")
     m.preload = m.top.findNode("preload")
     m.pointer = m.top.findNode("pointer")
+    m.highlight = m.top.findNode("highlight")
+    m.hlTop = m.top.findNode("hlTop")
+    m.hlBottom = m.top.findNode("hlBottom")
+    m.hlLeft = m.top.findNode("hlLeft")
+    m.hlRight = m.top.findNode("hlRight")
     m.overrides = {}
     m.hideTimer = m.top.findNode("hideTimer")
     m.hideTimer.observeField("fire", "onIdle")
@@ -86,6 +91,7 @@ sub onTargets()
         m.overrides.Delete(k)
     end for
     print "[Mango] targets: "; m.items.Count(); " box(es), "; m.overrides.Count(); " held locally"
+    updateHighlight()
     ' the render came back, so the gesture is done with
     if m.swipeBusy
         m.swipeBusy = false
@@ -132,6 +138,7 @@ sub showPointer()
     end if
     m.active = true
     m.pointer.visible = true
+    updateHighlight()
     m.hideTimer.control = "start"
     ' warm the portal session while the user is still aiming
     if not m.warmSent
@@ -143,6 +150,7 @@ end sub
 sub onIdle()
     m.active = false
     m.pointer.visible = false
+    m.highlight.visible = false
     m.warmSent = false
     stopHold()
 end sub
@@ -301,20 +309,63 @@ sub movePointer(key as string)
     if m.py < 12 then m.py = 12
     if m.py > 1068 then m.py = 1068
     placePointer()
+    updateHighlight()
+end sub
+
+' small forgiveness margin - the portal hits the exact point, but its
+' checkbox has a label around it that ours doesn't
+function itemUnderPointer() as object
+    pad = 12
+    for each it in m.items
+        if m.px >= it.rect.x - pad and m.px <= it.rect.x + it.rect.w + pad and m.py >= it.rect.y - pad and m.py <= it.rect.y + it.rect.h + pad
+            return it
+        end if
+    end for
+    return invalid
+end function
+
+' Outline whatever the pointer is over, so it is obvious what can be acted
+' on. Without this the pointer is a dot on a photo: nothing says which
+' parts of the screen do anything, which reads as the remote being broken.
+sub updateHighlight()
+    if not m.active
+        m.highlight.visible = false
+        return
+    end if
+    r = invalid
+    reg = regionUnderPointer()
+    if reg <> invalid
+        r = reg.rect
+    else
+        it = itemUnderPointer()
+        if it <> invalid
+            pad = 10
+            r = { x: it.rect.x - pad, y: it.rect.y - pad, w: it.rect.w + pad * 2, h: it.rect.h + pad * 2 }
+        end if
+    end if
+    if r = invalid
+        m.highlight.visible = false
+        return
+    end if
+    t = 4
+    m.hlTop.translation = [r.x, r.y]
+    m.hlTop.width = r.w
+    m.hlTop.height = t
+    m.hlBottom.translation = [r.x, r.y + r.h - t]
+    m.hlBottom.width = r.w
+    m.hlBottom.height = t
+    m.hlLeft.translation = [r.x, r.y]
+    m.hlLeft.width = t
+    m.hlLeft.height = r.h
+    m.hlRight.translation = [r.x + r.w - t, r.y]
+    m.hlRight.width = t
+    m.hlRight.height = r.h
+    m.highlight.visible = true
 end sub
 
 sub activateUnderPointer()
     print "[Mango] OK at "; Int(m.px); ","; Int(m.py)
-    hit = invalid
-    for each it in m.items
-        ' small forgiveness margin - the portal hits the exact point, but
-        ' its checkbox has a label around it that ours doesn't
-        pad = 12
-        if m.px >= it.rect.x - pad and m.px <= it.rect.x + it.rect.w + pad and m.py >= it.rect.y - pad and m.py <= it.rect.y + it.rect.h + pad
-            hit = it
-            exit for
-        end if
-    end for
+    hit = itemUnderPointer()
     if hit = invalid then return
 
     ' tick now, ask later: the press paints locally and that state is held

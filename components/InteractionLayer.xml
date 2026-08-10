@@ -24,6 +24,16 @@
         <!-- holds the ticked sprite in the texture cache so the first press
              swaps instantly instead of waiting on a fetch -->
         <Poster id="preload" width="4" height="4" opacity="0.01" />
+        <!-- Outline drawn round whatever the pointer is over. Four thin
+             rectangles rather than one border: SceneGraph rectangles have
+             no border property. Sits BELOW the pointer so the dot stays
+             on top of it. -->
+        <Group id="highlight" visible="false">
+            <Rectangle id="hlTop" color="0x86E39AFF" />
+            <Rectangle id="hlBottom" color="0x86E39AFF" />
+            <Rectangle id="hlLeft" color="0x86E39AFF" />
+            <Rectangle id="hlRight" color="0x86E39AFF" />
+        </Group>
         <!-- same dot the other platforms draw: 20px red, 2px white ring -->
         <Poster id="pointer" uri="pkg:/images/pointer.png" width="24" height="24" visible="false" />
         <Timer id="hideTimer" repeat="false" duration="15" />

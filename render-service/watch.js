@@ -15,22 +15,34 @@ const WebSocket = require("ws");
 const { InteractionSession } = require("./session");
 const { RenderPool } = require("./renderPool");
 
-// ---- display config (prototype: hardcoded to the "Roku Express" display)
+// ---- configuration ------------------------------------------------------
+// Everything comes from the environment so the same image can run against
+// test or production, and against any display, without a rebuild. The
+// defaults are the TEST backend and the development display deliberately:
+// running this with no configuration must never reach production.
+const env = (name, fallback) => process.env[name] || fallback;
+
 const ENV = {
-  socketBase: "wss://testsocket.mangomirror.com/connection/",
-  portalBase: "https://testportal.mangodisplay.com/",
-  apiBase: "https://testapi.mangomirror.com/v1.0.5/",
+  socketBase: env("MANGO_SOCKET_BASE", "wss://testsocket.mangomirror.com/connection/"),
+  portalBase: env("MANGO_PORTAL_BASE", "https://testportal.mangodisplay.com/"),
+  apiBase: env("MANGO_API_BASE", "https://testapi.mangomirror.com/v1.0.5/"),
 };
 const DISPLAY = {
-  major: 1,
-  minor: 2336,
-  deviceId: "RK569557324",
+  major: parseInt(env("DISPLAY_MAJOR", "1"), 10),
+  minor: parseInt(env("DISPLAY_MINOR", "2336"), 10),
+  deviceId: env("DISPLAY_DEVICE_ID", "RK569557324"),
   page: 0,
   canvasW: 1920, // layout coordinate space - portal has no responsive reflow
   canvasH: 1080,
-  outW: 1280, // device's native resolution (from roDeviceInfo / mirror record)
-  outH: 720,
+  // the device's own resolution, from its mirror record. Still per-process
+  // because this service handles one display; the fleet manager makes it
+  // per-display.
+  outW: parseInt(env("DISPLAY_OUT_W", "1280"), 10),
+  outH: parseInt(env("DISPLAY_OUT_H", "720"), 10),
 };
+// where the device fetches images from - a CDN hostname in production,
+// this machine in development
+const ASSET_BASE = env("ASSET_BASE_URL", "");
 const DEBOUNCE_MS = 2500;
 const KEEPALIVE_MS = 60000;
 const RECONNECT_MS = 10000;
@@ -357,7 +369,24 @@ http
     res.writeHead(404);
     res.end();
   })
-  .listen(VERSION_PORT, "0.0.0.0", () => log("version server on 0.0.0.0:" + VERSION_PORT));
+  .listen(VERSION_PORT, "0.0.0.0", () => {
+    banner();
+    log("version server on 0.0.0.0:" + VERSION_PORT);
+  });
+
+// Say out loud what this process is pointed at. A container that silently
+// renders the wrong display, or reaches production when it meant to reach
+// test, is the expensive kind of mistake.
+function banner() {
+  const prod = /(^|\.)api\.mangomirror\.com/.test(ENV.apiBase) || /(^|\/\/)socket\./.test(ENV.socketBase);
+  log("display", DISPLAY.deviceId, "(major " + DISPLAY.major + " minor " + DISPLAY.minor + ")",
+      DISPLAY.outW + "x" + DISPLAY.outH);
+  log("api", ENV.apiBase);
+  log("portal", ENV.portalBase);
+  log("socket", ENV.socketBase);
+  log("assets", ASSET_BASE || "(served locally)");
+  log("environment:", prod ? "*** PRODUCTION ***" : "test");
+}
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);

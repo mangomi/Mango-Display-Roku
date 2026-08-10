@@ -604,7 +604,14 @@ function connect() {
           const p = pendingSwipes.get(String(hit));
           pendingSwipes.delete(String(hit));
           clearTimeout(p.timer);
-          log("calendar payload for widget", hit, "-> applying to the live page (no re-render)");
+          // the range is logged because step size varies by widget type:
+          // a Weeks calendar moves a fortnight per swipe, a List one a
+          // single day, which often shows the very same events
+          log(
+            "calendar payload for widget", hit,
+            "-> range starts", (cal[hit] && cal[hit].initial_date) || "?",
+            "(applying to the live page, no re-render)",
+          );
           // Remember it. Otherwise the very next render - a scheduled one,
           // or any of the weather/quote pushes that land every minute or
           // two - re-fetches the default range and silently undoes the

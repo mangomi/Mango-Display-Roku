@@ -40,6 +40,20 @@ per-GB processing.
 | 10 | IAM role + policy | `roku-render-build` (CodeBuild) | free |
 | 11 | CodeBuild project | `roku-render-build`, ARM, privileged | ~$0.05 per build |
 | 12 | Container image | `mango-display-render:v1` in ECR, 568MB, arm64 | storage only |
+| 13 | Security group rule | port 80 from anywhere -> `roku-render-sg` | free |
+| 14 | Security group | `roku-render-task-sg` (`sg-0cef8da8f496529ed`), 8091 from the ALB only | free |
+| 15 | Application Load Balancer | `roku-control`, idle timeout **120s** | ~$17/mo |
+| 16 | Target group | `roku-control-tg`, health check `/version` | free |
+| 17 | Listener | HTTP :80 -> target group | free |
+| 18 | Task definition | `roku-render:1`, 1 vCPU / 2GB, ARM64 | free |
+| 19 | ECS service | `roku-render`, 1 task | ~$36/mo |
+
+**Live at** `http://roku-control-1212257186.us-east-1.elb.amazonaws.com`
+— the only address compiled into the channel. Everything else, including
+where images live, is learned from it at runtime.
+
+**Running cost: roughly $55/month** for one display. The load balancer is
+fixed; the task handles many displays once the fleet manager lands.
 
 **Current spend: effectively zero.** Nothing is running. No task, no load
 balancer, no data.
@@ -110,6 +124,21 @@ Two traps already hit, both fixed in the Dockerfile:
   to one library version, and this project already drifted (code on
   1.61.1, Dockerfile pinned to 1.47.0) - which fails at runtime, not at
   build. The browser is installed by the same Playwright that drives it.
+
+## Cutover notes
+
+- **The ALB idle timeout is 120s, not the default 60s.** The control
+  channel is a long poll held for ~50s and the client waits 55s; the
+  default would sever it.
+- **One socket per display identity.** While the Mac and the container
+  were both connected as RK569557324 the backend kept closing one of
+  them. The Mac has to be stopped, not merely ignored. This matters for
+  the fleet manager: a display must have exactly one owner.
+- **The container generated its own asset prefix** on first run, so the
+  live objects are under a different prefix from the Mac's. The old ones
+  are orphans and can be deleted; nothing points at them.
+- **HTTP, not HTTPS.** Fine for the test backend, needs a certificate
+  before production - the device would need the new scheme.
 
 ## Blocked on
 

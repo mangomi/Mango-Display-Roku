@@ -34,10 +34,14 @@ sub init()
         }
     }
 
-    ' render service endpoints; display.json carries pages + overlays
-    m.assetBaseUrl = "http://10.0.0.74:8090/"
-    m.pagesUrl = m.assetBaseUrl + "display.json"
-    m.versionBaseUrl = "http://10.0.0.74:8091"
+    ' The control endpoint - the hosted render service behind its load
+    ' balancer. Everything else (where images live) is learned from it at
+    ' runtime, so moving assets to another bucket or a CDN domain does not
+    ' need a channel update. Only this address is compiled in.
+    m.versionBaseUrl = "http://roku-control-1212257186.us-east-1.elb.amazonaws.com"
+    ' placeholders until the control channel says where assets live
+    m.assetBaseUrl = ""
+    m.pagesUrl = ""
 
     ' native-widget registry: manifest overlay type -> SceneGraph component
     ' (add future types here AND in render-service/nativeWidgets.js)

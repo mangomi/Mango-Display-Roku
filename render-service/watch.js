@@ -267,7 +267,13 @@ async function handleInteract(u, res) {
     }
     const r = await getSession().interact({ type, x, y, id, page: pageIndex });
     if (swipe) {
-      if (r && r.handled && waitPayload) {
+      // If the swiped page repainted itself, it IS the answer - capture it
+      // now rather than waiting up to 12s for a push that may never come.
+      if (r && r.handled && r.changed) {
+        log("swiped page updated itself - capturing it directly");
+        await getSession().recapture();
+        publishFromDisk("interaction");
+      } else if (r && r.handled && waitPayload) {
         const payload = await waitPayload;
         if (!payload) {
           // Some widgets get no push at all - the List calendar is one:

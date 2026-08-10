@@ -261,13 +261,30 @@ class InteractionSession {
       return { handled: false, reason: fired.reason };
     }
 
-    // Return the moment the gesture is dispatched. This page will never
-    // repaint on its own: the portal asks the backend, and the answer
-    // comes back over the socket - which a preview-mode page does not
-    // have. Waiting for a change here just burned six seconds per swipe
-    // before timing out. The caller waits on the socket payload instead.
-    console.log("swipe:", type, "dispatched, waiting on the socket payload");
-    return { handled: true, kind: "calendar", direction: type };
+    // Some widgets DO repaint here on their own - a List calendar fetches
+    // its new range straight into this page and the backend never pushes
+    // anything, so waiting on the socket for it means waiting forever.
+    // Watch the element we actually swiped (not the first calendar on the
+    // page, which is a different widget) and tell the caller, so it can
+    // capture this page instead of waiting.
+    let changed = false;
+    try {
+      await frame.waitForFunction(
+        (prev) => {
+          const el = window.__mmSwipeEl;
+          return el && (el.innerText || "").replace(/\s+/g, " ").slice(0, 400) !== prev;
+        },
+        before.text,
+        { timeout: 6000, polling: 150 },
+      );
+      changed = true;
+      await this.page.waitForTimeout(500);
+    } catch (e) {}
+    console.log(
+      "swipe:", type,
+      changed ? "-> this page already shows the new range" : "-> dispatched, waiting on the socket payload",
+    );
+    return { handled: true, kind: "calendar", direction: type, changed };
   }
 
   // Apply a socket payload the watcher received on the page's behalf.

@@ -36,6 +36,10 @@ per-GB processing.
 | 6 | IAM role | `roku-render-task` | free |
 | 7 | Security group | `sg-00d529710ca26dcc1` | free |
 | 8 | Inline policy `read-r2-credentials` on `roku-render-execution` | reads one secret ARN | free |
+| 9 | S3 bucket for build source | `roku-render-build-945710099949` | pennies |
+| 10 | IAM role + policy | `roku-render-build` (CodeBuild) | free |
+| 11 | CodeBuild project | `roku-render-build`, ARM, privileged | ~$0.05 per build |
+| 12 | Container image | `mango-display-render:v1` in ECR, 568MB, arm64 | storage only |
 
 **Current spend: effectively zero.** Nothing is running. No task, no load
 balancer, no data.
@@ -78,6 +82,34 @@ configuration, not a channel rebuild.
 values, but the IAM grant is on the whole secret, so a compromised render
 container could read every staging credential in it. A dedicated secret
 for this service removes that.
+
+## Building the container
+
+Built on CodeBuild, not a laptop - rebuilds should not depend on anyone's
+machine being awake, and Docker Desktop on macOS is a liability.
+
+```
+# after changing render-service/ or the Dockerfile:
+cd ~/Projects/Mango-Display-Roku
+zip -qr /tmp/source.zip buildspec.yml render-service fonts \
+  -x "render-service/node_modules/*" "render-service/display_p*" \
+     "render-service/overlay_*" "render-service/effect_*" \
+     "render-service/ui_check_*" "render-service/*.manifest.json" \
+     "render-service/display.json" "render-service/.version" \
+     "render-service/.asset-prefix" "render-service/calendar-override.json"
+aws s3 cp /tmp/source.zip s3://roku-render-build-945710099949/source.zip
+aws codebuild start-build --project-name roku-render-build
+```
+
+Two traps already hit, both fixed in the Dockerfile:
+
+- **Do not pull from Docker Hub.** Builds run from shared AWS addresses
+  and anonymous pulls are rate-limited (429). Use
+  `public.ecr.aws/docker/library/...` - same image, no credentials.
+- **Do not pin a `playwright:vX` base image.** It ships a browser matched
+  to one library version, and this project already drifted (code on
+  1.61.1, Dockerfile pinned to 1.47.0) - which fails at runtime, not at
+  build. The browser is installed by the same Playwright that drives it.
 
 ## Blocked on
 

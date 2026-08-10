@@ -1,0 +1,21 @@
+# Builds the render service container on AWS CodeBuild and pushes it to
+# ECR. Nothing runs on a developer machine, so rebuilds do not depend on
+# anyone's laptop being awake.
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo "Logging in to ECR"
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+  build:
+    commands:
+      - echo "Building $IMAGE_REPO:$IMAGE_TAG"
+      # Context is the repo root: the image needs both render-service/ and
+      # the portal fonts, which live above it.
+      - docker build -f render-service/Dockerfile -t $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG -t $ECR_REGISTRY/$IMAGE_REPO:latest .
+  post_build:
+    commands:
+      - docker push $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG
+      - docker push $ECR_REGISTRY/$IMAGE_REPO:latest
+      - echo "Pushed $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG"

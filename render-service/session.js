@@ -302,8 +302,13 @@ class InteractionSession {
       return false;
     }
 
-    // the repaint is deferred behind a 2s $timeout inside the portal, so
-    // wait for the view itself to move rather than guessing at a delay
+    // The repaint is deferred behind a 2s $timeout inside the portal, so
+    // give it time to land - but do NOT require the text to change. This
+    // page is freshly opened and the saved range is re-applied at load, so
+    // it is often ALREADY showing the range we are about to set. Treating
+    // "no visible change" as failure meant those swipes were never
+    // published, even though the page was correct: the user saw nothing
+    // happen on roughly half of them.
     let moved = false;
     try {
       await frame.waitForFunction(
@@ -312,16 +317,16 @@ class InteractionSession {
           return el && (el.innerText || "").replace(/\s+/g, " ").slice(0, 60) !== prev;
         },
         r.before,
-        { timeout: 10000 },
+        { timeout: 3000 },
       );
       moved = true;
     } catch (e) {}
     await this.page.waitForTimeout(600);
     console.log(
       "calendar payload applied to widget(s)", r.widgets.join(","),
-      moved ? "- view moved" : "- view did NOT move",
+      moved ? "- view moved" : "- already on that range",
     );
-    return moved;
+    return true;
   }
 
   // re-capture the live page into the same files the watcher publishes

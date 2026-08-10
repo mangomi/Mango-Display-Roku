@@ -69,8 +69,22 @@ function publicBase() {
   return PUBLIC_BASE + "/" + assetPrefix() + "/";
 }
 
-async function putFile(localPath, key) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function putFile(localPath, key, attempt = 1) {
   const body = fs.readFileSync(localPath);
+  try {
+    return await putOnce(body, localPath, key);
+  } catch (e) {
+    // TLS resets and transient 5xx happen on long batches; the first
+    // publish alone is ~30 files including megabyte sprite sheets
+    if (attempt >= 3) throw e;
+    await sleep(attempt * 500);
+    return putFile(localPath, key, attempt + 1);
+  }
+}
+
+async function putOnce(body, localPath, key) {
   await s3().send(
     new PutObjectCommand({
       Bucket: BUCKET,
@@ -95,6 +109,7 @@ async function publish(dir, files) {
   const prefix = assetPrefix();
   let sent = 0;
   let bytes = 0;
+  const failed = [];
   for (const name of files) {
     const local = path.join(dir, name);
     let stat;
@@ -105,11 +120,24 @@ async function publish(dir, files) {
     }
     const stamp = stat.size + ":" + Math.round(stat.mtimeMs);
     if (uploaded.get(name) === stamp) continue;
-    bytes += await putFile(local, prefix + "/" + name);
-    uploaded.set(name, stamp);
-    sent++;
+    try {
+      bytes += await putFile(local, prefix + "/" + name);
+      uploaded.set(name, stamp);
+      sent++;
+    } catch (e) {
+      // One bad file must not strand the rest - a missing sprite is a
+      // blank patch, a missing manifest is a display that never updates.
+      // Not marking it uploaded means the next render retries it.
+      failed.push(name);
+    }
   }
-  return { sent, bytes, prefix };
+  return { sent, bytes, prefix, failed };
 }
 
-module.exports = { publish, assetPrefix, publicBase, BUCKET };
+// publishing is opt-in: with nothing configured the service serves from
+// disk, which is how development works
+function enabled() {
+  return !!(ACCOUNT && PUBLIC_BASE);
+}
+
+module.exports = { publish, assetPrefix, publicBase, enabled, BUCKET };

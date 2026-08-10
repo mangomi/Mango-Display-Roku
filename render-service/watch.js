@@ -14,6 +14,7 @@ const path = require("path");
 const WebSocket = require("ws");
 const { InteractionSession } = require("./session");
 const { RenderPool } = require("./renderPool");
+const assets = require("./assets");
 
 // ---- configuration ------------------------------------------------------
 // Everything comes from the environment so the same image can run against
@@ -107,7 +108,10 @@ setInterval(() => {
 
 function respondVersion(res) {
   res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-  res.end(JSON.stringify({ version, busy }));
+  // The device is TOLD where to fetch rather than having it compiled in:
+  // the per-display prefix must not be public, and moving to a custom
+  // domain later should be configuration, not a channel rebuild.
+  res.end(JSON.stringify({ version, busy, assetBase: assets.publicBase() || ASSET_BASE }));
 }
 
 function flushWaiters() {
@@ -384,7 +388,7 @@ function banner() {
   log("api", ENV.apiBase);
   log("portal", ENV.portalBase);
   log("socket", ENV.socketBase);
-  log("assets", ASSET_BASE || "(served locally)");
+  log("assets", assets.publicBase() || ASSET_BASE || "(served locally)");
   log("environment:", prod ? "*** PRODUCTION ***" : "test");
 }
 
@@ -540,6 +544,45 @@ function publishFromDisk(reason) {
   } catch (e) {}
   log("display.json:", pages.length, "page(s); version ->", version);
   flushWaiters();
+  pushToR2(reason);
+}
+
+// Everything a device fetches: the manifest, the page images, and the
+// sprite sheets the overlays and effects name. Gathered from disk rather
+// than from the manifest so a file we forgot to reference still ships -
+// a missing sprite is a blank patch on someone's wall.
+function publishableFiles() {
+  const out = ["display.json"];
+  for (const f of fs.readdirSync(__dirname)) {
+    if (/^display_p\d+\.(png|jpe?g)$/.test(f)) out.push(f);
+    else if (/^overlay_.*\.(png|json)$/.test(f)) out.push(f);
+    else if (/^ui_check_.*\.png$/.test(f)) out.push(f);
+    else if (/^effect_.*\.png$/.test(f)) out.push(f);
+  }
+  return out;
+}
+
+// Uploads run after the version is already published, so a slow or failed
+// upload cannot hold up the render loop. A device that polls in the gap
+// re-fetches on the next version anyway.
+let uploading = false;
+async function pushToR2(reason) {
+  if (!assets.enabled() || uploading) return;
+  uploading = true;
+  try {
+    const t0 = Date.now();
+    const r = await assets.publish(__dirname, publishableFiles());
+    if (r.sent || (r.failed && r.failed.length)) {
+      log(
+        "r2:", r.sent, "file(s),", Math.round(r.bytes / 1024) + "KB in " + (Date.now() - t0) + "ms",
+        r.failed && r.failed.length ? "- " + r.failed.length + " failed, retried next render" : "",
+        "(" + reason + ")",
+      );
+    }
+  } catch (e) {
+    log("r2 upload failed:", e.message);
+  }
+  uploading = false;
 }
 
 function scheduleRender(reason) {

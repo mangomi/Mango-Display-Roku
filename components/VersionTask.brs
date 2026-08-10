@@ -8,7 +8,10 @@ sub init()
 end sub
 
 sub fetchManifest(ver as integer)
+    ' the service tells us where its assets live; fall back to whatever
+    ' was configured at build time so development still works
     url = m.top.manifestUrl
+    if m.top.assetBase <> "" then url = m.top.assetBase + "display.json"
     if url = "" then return
     req = CreateObject("roUrlTransfer")
     port = CreateObject("roMessagePort")
@@ -66,13 +69,27 @@ sub runVersionLoop()
             ' server holds up to 50s; give it 55 then re-arm
             msg = wait(55000, port)
             if type(msg) = "roUrlEvent" and msg.GetResponseCode() = 200
-                json = ParseJson(msg.GetString())
+                raw = msg.GetString()
+                if m.loggedReply <> true
+                    m.loggedReply = true
+                    print "[Mango] control reply: "; raw
+                end if
+                json = ParseJson(raw)
                 ' busy updates on every reply, including same-version ones
                 ' (the server flushes waiters when a user edit starts)
                 if json <> invalid and GetInterface(json, "ifAssociativeArray") <> invalid
                     b = false
                     if json.busy <> invalid and json.busy = true then b = true
                     if m.top.busy <> b then m.top.busy = b
+                    ' Where to fetch from is served, not compiled in: the
+                    ' per-display prefix must not be public, and moving to
+                    ' a custom domain later should not need a new channel.
+                    if json.assetBase <> invalid and json.assetBase <> ""
+                        if m.top.assetBase <> json.assetBase
+                            print "[Mango] asset base: "; json.assetBase
+                            m.top.assetBase = json.assetBase
+                        end if
+                    end if
                 end if
                 if json <> invalid and GetInterface(json, "ifAssociativeArray") <> invalid and json.version <> invalid
                     v = Int(json.version)

@@ -139,9 +139,22 @@ sub onPaired()
     m.versionTask.manifestUrl = m.pagesUrl
     m.versionTask.observeField("version", "onVersionChange")
     m.versionTask.observeField("busy", "onBusyChange")
+    m.versionTask.observeField("assetBase", "onAssetBase")
     m.versionTask.control = "RUN"
     ' fallback cadence + retry loop if a fetch fails
     m.refreshTimer.control = "start"
+end sub
+
+' The service can move its assets - a different bucket prefix, or a real
+' CDN domain instead of the development one - without a channel update.
+sub onAssetBase()
+    base = m.versionTask.assetBase
+    if base = "" then return
+    if Right(base, 1) <> "/" then base = base + "/"
+    m.assetBaseUrl = base
+    m.pagesUrl = base + "display.json"
+    m.interaction.assetBase = base
+    print "[Mango] fetching assets from "; base
 end sub
 
 sub onVersionChange()

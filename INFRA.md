@@ -35,6 +35,7 @@ per-GB processing.
 | 5 | IAM role | `roku-render-execution` + `AmazonECSTaskExecutionRolePolicy` | free |
 | 6 | IAM role | `roku-render-task` | free |
 | 7 | Security group | `sg-00d529710ca26dcc1` | free |
+| 8 | Inline policy `read-r2-credentials` on `roku-render-execution` | reads one secret ARN | free |
 
 **Current spend: effectively zero.** Nothing is running. No task, no load
 balancer, no data.
@@ -50,13 +51,40 @@ account was gone near.
 - **No ALB, no ECS service, no running task.** These are the parts that
   cost money, and they need the image and R2 first.
 
+## Cloudflare R2
+
+| | |
+|---|---|
+| Account ID | `8ed09dea0b5cd688d9d200627603e0be` |
+| Bucket | `mango-display-assets` |
+| Public base | `https://pub-8ecd1ea9ae404328b96820980559dd49.r2.dev` |
+| Credentials | `mangomirror-staging-secrets` -> `CLOUDFLARE_ROKU_ACCESS_KEY`, `CLOUDFLARE_ROKU_SECRET_ACCESS_KEY` |
+| Local testing | AWS CLI profile `mango-r2` on Dave's Mac |
+
+Each display publishes under a random 16-byte prefix
+(`/<prefix>/display.json`). The bucket is public because TVs fetch
+without credentials, so the prefix is the only thing keeping one
+household's calendar, chores and photos out of reach of anyone who knows
+the hostname. It is handed to the device over the control channel, never
+published anywhere.
+
+The r2.dev URL is rate-limited and has no Cloudflare caching - fine for
+Stage 1, replace with a custom domain before real displays. The device
+reads its asset base from the control channel, so that swap is
+configuration, not a channel rebuild.
+
+**Worth fixing before production:** the R2 keys live in the shared
+`mangomirror-staging-secrets` bundle. ECS injects only the two Cloudflare
+values, but the IAM grant is on the whole secret, so a compromised render
+container could read every staging credential in it. A dedicated secret
+for this service removes that.
+
 ## Blocked on
 
-1. **Cloudflare**: create the R2 bucket and an S3-compatible API token.
-2. **The token into AWS Secrets Manager** via the console — not pasted
-   into chat. Tell me the secret name and the task role reads it by ARN.
-3. **DNS**: `roku-assets` → the R2 custom domain, `roku-control` → the
-   load balancer once it exists.
+1. ~~Cloudflare bucket and token~~ — done.
+2. ~~Credentials into Secrets Manager~~ — done.
+3. **DNS** for `roku-control` → the load balancer, once it exists. Assets
+   need no DNS while on the r2.dev URL.
 
 ## Teardown
 

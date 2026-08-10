@@ -270,7 +270,18 @@ async function handleInteract(u, res) {
       if (r && r.handled && waitPayload) {
         const payload = await waitPayload;
         if (!payload) {
-          log("no calendar payload arrived within 12s - screen left as it was");
+          // Some widgets get no push at all - the List calendar is one:
+          // the portal fetches the new range straight into the page it is
+          // on and the backend never announces it. That page is right
+          // there, already showing the new dates, so capture IT rather
+          // than leaving the screen stale.
+          if (r.changed) {
+            log("no push for this widget - capturing the page we swiped");
+            await getSession().recapture();
+            publishFromDisk("interaction");
+          } else {
+            log("no calendar payload and no visible change - nothing to publish");
+          }
         } else {
           await getSession().close("fresh page for capture");
           await getSession().open(pageIndex);

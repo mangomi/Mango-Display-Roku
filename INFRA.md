@@ -55,19 +55,9 @@ where images live, is learned from it at runtime.
 **Running cost: roughly $55/month** for one display. The load balancer is
 fixed; the task handles many displays once the fleet manager lands.
 
-**Current spend: effectively zero.** Nothing is running. No task, no load
-balancer, no data.
-
-Nothing existing was modified. The VPC, its subnets, route tables and
-internet gateway were read but not touched, and nothing else in the
-account was gone near.
-
-## Deliberately not done yet
-
-- **No inbound rule on the security group.** There is no service behind it
-  yet, so there is nothing to expose.
-- **No ALB, no ECS service, no running task.** These are the parts that
-  cost money, and they need the image and R2 first.
+Nothing pre-existing was modified. The VPC, its subnets, route tables and
+internet gateway were read but only added to; nothing else in the account
+was touched.
 
 ## Cloudflare R2
 
@@ -144,14 +134,22 @@ Two traps already hit, both fixed in the Dockerfile:
 
 1. ~~Cloudflare bucket and token~~ — done.
 2. ~~Credentials into Secrets Manager~~ — done.
-3. **DNS** for `roku-control` → the load balancer, once it exists. Assets
-   need no DNS while on the r2.dev URL.
+3. **DNS** — optional. `roku-control.mangodisplay.com` could point at the
+   load balancer instead of its AWS hostname, which would also let the
+   address survive rebuilding the ALB. Assets need no DNS on the r2.dev
+   URL. Neither blocks anything today.
 
 ## Teardown
 
 If any of this needs to disappear:
 
 ```
+# stop the running service FIRST - this is what costs money
+aws ecs update-service --cluster roku-render --service roku-render --desired-count 0
+aws ecs delete-service --cluster roku-render --service roku-render --force
+aws elbv2 delete-listener --listener-arn arn:aws:elasticloadbalancing:us-east-1:945710099949:listener/app/roku-control/943befa1af8d0dee/ca5a7ad5bd0cea45
+aws elbv2 delete-load-balancer --load-balancer-arn arn:aws:elasticloadbalancing:us-east-1:945710099949:loadbalancer/app/roku-control/943befa1af8d0dee
+aws elbv2 delete-target-group --target-group-arn arn:aws:elasticloadbalancing:us-east-1:945710099949:targetgroup/roku-control-tg/3f7379948f5b9ebf
 aws ecs delete-cluster --cluster roku-render
 aws ecr delete-repository --repository-name mango-display-render --force
 aws logs delete-log-group --log-group-name /ecs/roku-render

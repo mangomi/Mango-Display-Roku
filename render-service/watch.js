@@ -492,7 +492,15 @@ function publishFromDisk(reason) {
   fs.writeFileSync(
     path.join(__dirname, "display.json"),
     JSON.stringify(
-      { canvas: { width: DISPLAY.canvasW, height: DISPLAY.canvasH }, updateReason, imageOnly, effects, gestures, pages },
+      {
+        schema: man0.schema || 1,
+        canvas: { width: DISPLAY.canvasW, height: DISPLAY.canvasH },
+        updateReason,
+        imageOnly,
+        effects,
+        gestures,
+        pages,
+      },
       null,
       1,
     ),

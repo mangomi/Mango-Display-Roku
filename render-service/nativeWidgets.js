@@ -296,6 +296,9 @@ const gifHandler = {
         o.stripFile = fileName;
         o.frameW = frameW;
         o.frameH = frameH;
+        // the sheet is a Roku workaround for its texture limits; keep the
+        // original so a client that decodes GIFs itself can skip it
+        o.source = o.src;
         delete o.src;
       } catch (e) {
         console.error("gif strip failed (" + (o.src || "").slice(0, 80) + "):", e.message);
@@ -460,6 +463,7 @@ const weatherIconHandler = {
     if (hits.every(Boolean)) {
       live.forEach((o, i) => {
         const c = hits[i];
+        o.source = o.src;
         o.stripFile = c.stripFile;
         o.frameW = c.frameW;
         o.frameH = c.frameH;
@@ -604,6 +608,10 @@ const weatherIconHandler = {
           (o.src || "").split("/").pop().slice(0, 30),
           frames.length + "f @" + o.frameMs + "ms, cycle " + Math.round(periodMs / 100) / 10 + "s",
         );
+        // the sprite sheet is a Roku workaround for its texture limits;
+        // a client that can animate the SVG itself wants the original
+        o.source = o.src;
+        o.sourcePeriodMs = Math.round(periodMs);
         delete o.liveCapture;
         delete o.period;
         delete o.src;

@@ -12,6 +12,13 @@ const fs = require("fs");
 const path = require("path");
 const nativeWidgets = require("./nativeWidgets");
 
+// Manifest contract version - see MANIFEST.md. Bump on a BREAKING change
+// (a field removed or its meaning changed); additive fields do not need
+// it. Clients should refuse a major version they do not understand rather
+// than guess, which is the whole point of having it before there are two
+// of them.
+const SCHEMA_VERSION = 1;
+
 // `groups` lives on the MainCtrl child scope, so walk the scope tree
 // from $rootScope (works even with Angular debug info off)
 async function extractPageMeta(page) {
@@ -359,6 +366,7 @@ async function capturePage(page, opts) {
   const pageMeta = await extractPageMeta(page);
   const overlays = groups.flatMap((g) => g.items);
   const manifest = {
+    schema: SCHEMA_VERSION,
     canvas: { width, height },
     overlays,
     effects,

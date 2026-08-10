@@ -16,3 +16,4 @@ render-service/effect_*.json
 render-service/ui_check_*.png
 socket-dump.jsonl
 calendar-override.json
+.asset-prefix

@@ -36,14 +36,50 @@ function sampleToMinutes(sample) {
 // its own. Derive the display's UTC offset from the rendered time itself
 // (rounded to 15 min) so the native clock matches the portal exactly.
 // Re-derived every render, so DST shifts heal within a render cycle.
-function deriveTzOffsetMinutes(sample) {
+//
+// A 12-hour display without a meridiem renders "8:45" for both 08:45 and
+// 20:45, which makes the offset ambiguous by exactly 12 hours - and both
+// answers can be legal offsets. That shipped a clock showing tomorrow's
+// date every evening (+8h instead of -4h for an Eastern display). The
+// rendered DATE from the very same capture names which side of midnight
+// the portal was on, so it picks the candidate.
+function deriveTzOffsetMinutes(sample, dateText) {
   const sampleMin = sampleToMinutes(sample);
   if (sampleMin == null) return null;
   const now = new Date();
-  let diff = sampleMin - (now.getUTCHours() * 60 + now.getUTCMinutes());
-  while (diff > 840) diff -= 1440; // real offsets span -12h..+14h
-  while (diff < -780) diff += 1440;
-  return Math.round(diff / 15) * 15;
+  const utcMin = now.getUTCHours() * 60 + now.getUTCMinutes();
+  let base = sampleMin - utcMin;
+  while (base > 840) base -= 1440; // real offsets span -12h..+14h
+  while (base < -780) base += 1440;
+  const candidates = [base];
+  const ambiguous = !/am|pm/i.test(sample) && parseInt(sample, 10) <= 12;
+  if (ambiguous) {
+    for (const alt of [base - 720, base + 720]) {
+      if (alt >= -780 && alt <= 840) candidates.push(alt);
+    }
+  }
+  let best = candidates[0];
+  if (candidates.length > 1 && dateText) {
+    // "Monday, August 10" - compare day-of-month and weekday under each
+    // candidate offset; shifting the epoch and reading UTC getters gives
+    // that candidate's wall clock
+    const dm = dateText.match(/^([A-Za-z]+), ([A-Za-z]+) (\d{1,2})$/);
+    if (dm) {
+      const hit = candidates.find((c) => {
+        const local = new Date(now.getTime() + c * 60000);
+        const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        return local.getUTCDate() === parseInt(dm[3], 10) && days[local.getUTCDay()] === dm[1];
+      });
+      if (hit !== undefined) best = hit;
+    }
+  }
+  return Math.round(best / 15) * 15;
+}
+
+// True local minutes-since-midnight under an offset, for format detection
+function localMinutesAt(offsetMinutes) {
+  const now = new Date();
+  return (now.getUTCHours() * 60 + now.getUTCMinutes() + offsetMinutes + 1440) % 1440;
 }
 
 const clockHandler = {
@@ -90,9 +126,20 @@ const clockHandler = {
       .filter((c) => c.time || c.date)
       .map((c) => {
         const elements = {};
+        const tzOffsetMinutes = c.time
+          ? deriveTzOffsetMinutes(c.time.text, c.date ? c.date.text : null)
+          : null;
         if (c.time) {
           const sample = c.time.text;
-          const is24h = !/am|pm/i.test(sample);
+          // No meridiem does NOT imply a 24-hour clock: a 12-hour display
+          // renders "8:45" bare. If the disambiguated wall clock says the
+          // capture happened at 13:00+ while the sample shows an hour of
+          // 12 or less, the display is proven 12-hour. (A morning capture
+          // cannot tell them apart; the next afternoon render heals it.)
+          let is24h = !/am|pm/i.test(sample);
+          if (is24h && tzOffsetMinutes != null && parseInt(sample, 10) <= 12 && localMinutesAt(tzOffsetMinutes) >= 780) {
+            is24h = false;
+          }
           elements.time = {
             rect: c.time.rect,
             textRect: c.time.textRect,
@@ -127,7 +174,7 @@ const clockHandler = {
           type: "clock",
           widgetSettingId: c.widgetSettingId,
           page: c.page,
-          tzOffsetMinutes: c.time ? deriveTzOffsetMinutes(c.time.text) : null,
+          tzOffsetMinutes,
           elements,
         };
       })

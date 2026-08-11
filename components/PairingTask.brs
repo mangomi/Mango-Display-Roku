@@ -13,6 +13,10 @@ end sub
 sub runPairing()
     base = m.top.apiBase
     code = m.top.code
+    if base = ""
+        print "[Mango] PairingTask started with no apiBase - refusing (env not injected?)"
+        return
+    end if
     ' what this device actually renders at (720p on low-end sticks, 1080p on
     ' most TVs) - reported so the render service can match it per display
     res = CreateObject("roDeviceInfo").GetUIResolution()

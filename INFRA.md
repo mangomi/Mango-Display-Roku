@@ -73,12 +73,14 @@ was touched.
 | Credentials | `mangomirror-staging-secrets` -> `CLOUDFLARE_ROKU_ACCESS_KEY`, `CLOUDFLARE_ROKU_SECRET_ACCESS_KEY` |
 | Local testing | AWS CLI profile `mango-r2` on Dave's Mac |
 
-Each display publishes under a random 16-byte prefix
-(`/<prefix>/display.json`). The bucket is public because TVs fetch
-without credentials, so the prefix is the only thing keeping one
-household's calendar, chores and photos out of reach of anyone who knows
-the hostname. It is handed to the device over the control channel, never
-published anywhere.
+Each display publishes under an environment root plus its derived
+prefix (`/test/<prefix>/display.json`, `/prod/<prefix>/…` — `ASSET_ROOT`
+on the service). The bucket is public because TVs fetch without
+credentials, so the prefix is the only thing keeping one household's
+calendar, chores and photos out of reach of anyone who knows the
+hostname. It is handed to the device over the control channel, never
+published anywhere. Bucket-root objects from before the 2026-08-11
+folder split are orphans and can be deleted.
 
 The r2.dev URL is rate-limited and has no Cloudflare caching - fine for
 Stage 1, replace with a custom domain before real displays. The device
@@ -155,13 +157,91 @@ Two traps already hit, both fixed in the Dockerfile:
   :80 listener is gone, not redirected. The cert is the product's
   existing `*.mangodisplay.com` wildcard; ACM renews it automatically.
 
+## Production runbook (decided 2026-08-11, execute on Dave's go)
+
+Same physical infrastructure, two running services — the deployable unit
+is the blast-radius boundary, so test deploys can never restart
+production households. Shared: ALB + cert + listener, cluster, ECR,
+CodeBuild, R2 bucket, IAM. Duplicated: target group, task definition,
+service, log group.
+
+The environment matrix (test values are live; prod confirmed from the
+portal's `environment_config.js` and the webapp's `environment.prod.ts`):
+
+| | test | prod |
+|---|---|---|
+| Control | `roku-control-test.mangodisplay.com` | `roku-control.mangodisplay.com` |
+| API | `testapi.mangomirror.com/v1.0.5/` | `api.mangomirror.com/<VERSION>/` — **Dave decides VERSION** (portal prod block and Tizen both use v1.0.5; prod webapp uses v1.0.16) |
+| Portal | `testportal.mangodisplay.com` | `portal.mangodisplay.com` |
+| Socket | `testsocket.mangomirror.com` | `socket.mangomirror.com` |
+| Setup host | `testapp.mangodisplay.com` | `app.mangodisplay.com` |
+| `ASSET_ROOT` | `test` | `prod` |
+| Channel build | `./package.sh` (default) | `PROD_API_VERSION=vX ./package.sh prod` |
+
+Prerequisites, in order:
+1. Device API version confirmed (Dave).
+2. `saveMirror` verified working **on prod api** — it is pairing's front
+   door; a broken prod saveMirror means no Roku can ever join.
+3. The dedicated secret (`roku-render-prod`: R2 keys, optionally
+   `ASSET_PREFIX_SECRET`) + execution-role grant for it.
+
+Steps (each is one CLI call unless noted):
+1. Create target group `roku-control-prod-tg` — copy of
+   `roku-control-tg` (port 8091, health `/version`, same VPC), and set
+   its deregistration delay to 60s.
+2. Register task definition `roku-render-prod`: same container, image
+   pinned to an **immutable tag** (see promotion below), env from the
+   prod column, `ASSET_ROOT=prod`, **no `DISPLAY_*`**, prod secret ARNs.
+3. Create service `roku-render-prod` on the same cluster (1 task, same
+   subnets + task security group, prod target group). Check the log
+   banner prints `*** PRODUCTION ***`.
+4. Verify prod health via the ALB with a host header before exposing it:
+   `curl -H "Host: roku-control.mangodisplay.com" https://roku-control-test.mangodisplay.com/version --resolve ...`
+   (any hostname reaches the ALB; rules are what matter next).
+5. Add listener host rules on the :443 listener:
+   `roku-control-test.…` → `roku-control-tg` (the existing default keeps
+   serving until this moment), `roku-control.…` → `roku-control-prod-tg`;
+   then set the default action to fixed-response 404 so scanners and
+   stale names get nothing.
+6. Build the prod channel (`PROD_API_VERSION=vX ./package.sh prod`) and
+   pair a real device end to end: fresh code on screen → claim at
+   app.mangodisplay.com → content renders → R2 keys land under `prod/`.
+
+Promotion flow (how prod updates after that): CodeBuild pushes every
+build to the mutable `v1`/`latest` tags, which is what the TEST service
+tracks — fine for test, never for prod. To promote a build that proved
+out on the test TV, re-tag that exact image immutably and move prod to
+it:
+```
+MANIFEST=$(aws ecr batch-get-image --repository-name mango-display-render \
+  --image-ids imageTag=v1 --query 'images[0].imageManifest' --output text)
+aws ecr put-image --repository-name mango-display-render \
+  --image-tag prod-YYYYMMDD --image-manifest "$MANIFEST"
+# then register a roku-render-prod revision pointing at :prod-YYYYMMDD
+# and update-service --force-new-deployment
+```
+Test keeps deploying freely the whole time; the two services never share
+a deploy.
+
+Idle thrift: the test service can sit at zero between sessions —
+`aws ecs update-service --cluster roku-render --service roku-render --desired-count 0`
+(and `1` to wake it; TVs resurrect their workers by polling). Running
+both 24/7 is ~$91/month, prod alone ~$55.
+
+Also before real customers: a custom domain for assets — the r2.dev URL
+is rate-limited and uncached. One domain serves both `test/` and `prod/`
+folders, and devices pick it up at runtime with no channel change.
+
 ## Blocked on
 
 1. ~~Cloudflare bucket and token~~ — done.
 2. ~~Credentials into Secrets Manager~~ — done.
-3. ~~DNS~~ — done 2026-08-11: `roku-control.mangodisplay.com` CNAMEs to
-   the ALB from WordPress.com DNS. Assets still ride the r2.dev URL
-   (custom domain for them remains a pre-production item).
+3. ~~DNS~~ — done 2026-08-11: `roku-control.mangodisplay.com` and
+   `roku-control-test.mangodisplay.com` CNAME to the ALB from
+   WordPress.com DNS. Assets still ride the r2.dev URL (custom domain
+   for them remains a pre-production item, above).
+4. **Production go** — waiting on the device API version (Dave) and a
+   prod `saveMirror` check; everything else is written above.
 
 ## Teardown
 

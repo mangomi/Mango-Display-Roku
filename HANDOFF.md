@@ -32,7 +32,8 @@ backend before a worker is born, and refused with 404.
 | | |
 |---|---|
 | Render service | ECS Fargate, cluster `roku-render`, 1 task, ARM64 — **single-task by design** (see INFRA cutover notes) |
-| Control endpoint | `https://roku-control.mangodisplay.com` — HTTPS only, `*.mangodisplay.com` ACM cert, the :80 listener is gone |
+| Control endpoint | `https://roku-control-test.mangodisplay.com` — HTTPS only, `*.mangodisplay.com` ACM cert, no :80. The bare `roku-control.…` name is **reserved for production** (it currently also reaches the test service; host rules split it when prod exists — runbook in INFRA.md) |
+| Environments | channel builds via `./package.sh [test\|prod]` (env.brs is generated; checked-in default is test; prod requires `PROD_API_VERSION`); assets live under `test/` and `prod/` folders in the one bucket (`ASSET_ROOT`) |
 | Images | Cloudflare R2, `mango-display-assets`, free egress, HMAC-derived prefix per display |
 | Backend | **TEST only** (`testapi` / `testportal` / `testsocket`) |
 | Cost | ~$55/month — $36 task, $17 load balancer, ~$2 rest |

@@ -1,11 +1,7 @@
 sub init()
-    ' ENVIRONMENT — spike runs against the TEST backend only. For production
-    ' use api.mangomirror.com + app.mangodisplay.com (codes registered on one
-    ' backend can only be claimed from the matching webapp).
-    m.env = {
-        apiBase: "https://testapi.mangomirror.com/v1.0.5/"
-        setupHost: "testapp.mangodisplay.com"
-    }
+    ' ENVIRONMENT - everything env-specific comes from source/env.brs,
+    ' which package.sh generates per build (checked-in default: test)
+    m.env = envConfig()
 
     m.codeLabel = m.top.findNode("codeLabel")
     m.pairingGroup = m.top.findNode("pairingGroup")
@@ -40,8 +36,8 @@ sub init()
     ' prefix, the only secret protecting a household's rendered content.
     ' Everything else (where images live) is learned from it at runtime,
     ' so moving assets does not need a channel update. Only this address
-    ' is compiled in.
-    m.versionBaseUrl = "https://roku-control.mangodisplay.com"
+    ' (per environment, from env.brs) is compiled in.
+    m.versionBaseUrl = m.env.controlBase
     ' placeholders until the control channel says where assets live
     m.assetBaseUrl = ""
     m.pagesUrl = ""

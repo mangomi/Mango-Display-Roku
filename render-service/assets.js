@@ -34,6 +34,12 @@ const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const BUCKET = process.env.R2_BUCKET || "mango-display-assets";
 const ACCOUNT = process.env.R2_ACCOUNT_ID || "";
 const PUBLIC_BASE = (process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
+// Environment folder inside the shared bucket ("test", "prod"): both
+// pipelines share one bucket and one r2.dev hostname, split by top-level
+// key. Devices never see this decision - they are handed the full
+// assetBase at runtime. Empty means bucket-root (the pre-split layout).
+const ROOT = (process.env.ASSET_ROOT || "").replace(/^\/+|\/+$/g, "");
+const rootedKey = (rest) => (ROOT ? ROOT + "/" : "") + rest;
 
 const TYPES = {
   ".json": "application/json",
@@ -98,7 +104,7 @@ class AssetPublisher {
   // so the prefix never appears anywhere public.
   publicBase() {
     if (!PUBLIC_BASE) return "";
-    return PUBLIC_BASE + "/" + this.prefix + "/";
+    return PUBLIC_BASE + "/" + rootedKey(this.prefix + "/");
   }
 
   async putFile(localPath, key, attempt = 1) {
@@ -149,7 +155,7 @@ class AssetPublisher {
       const stamp = stat.size + ":" + Math.round(stat.mtimeMs);
       if (this.uploaded.get(name) === stamp) continue;
       try {
-        bytes += await this.putFile(local, this.prefix + "/" + name);
+        bytes += await this.putFile(local, rootedKey(this.prefix + "/" + name));
         this.uploaded.set(name, stamp);
         sent++;
       } catch (e) {

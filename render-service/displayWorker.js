@@ -90,6 +90,7 @@ class DisplayWorker {
     // when a device request last arrived - the fleet evicts workers whose
     // TV has gone dark, so a powered-off display stops costing renders
     this.lastSeen = Date.now();
+    this.lastPublishAt = 0;
 
     this.janitor = null;
     this.probeTimer = null;
@@ -609,6 +610,7 @@ class DisplayWorker {
       ),
     );
     this.version = this.version + 1;
+    this.lastPublishAt = Date.now();
     try {
       fs.writeFileSync(this.versionFile(), String(this.version));
     } catch (e) {}
@@ -699,9 +701,16 @@ class DisplayWorker {
 
     ws.on("open", () => {
       this.log("socket open");
-      // always render once on (re)connect: covers service restarts (stale
-      // clock/date on disk) and any pushes missed while offline
-      this.scheduleRender("startup");
+      // Render on (re)connect: covers service restarts (stale clock/date
+      // on disk) and pushes missed while offline. But NOT when we
+      // published moments ago - during a deploy the old and new task
+      // fight over this identity and the socket cycles every ~10s until
+      // the old one drains; rendering on each cycle turned that into a
+      // render storm (and half-loaded portals published wrong pageMeta).
+      // The 20-min schedule and the meta probe cover anything a skipped
+      // reconnect render would have caught.
+      if (Date.now() - this.lastPublishAt > 60000) this.scheduleRender("startup");
+      else this.log("(reconnect render skipped - published " + Math.round((Date.now() - this.lastPublishAt) / 1000) + "s ago)");
       this.keepalive = setInterval(() => {
         try {
           ws.send(JSON.stringify({ type: "check_socket_status" }));

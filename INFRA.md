@@ -99,8 +99,10 @@ zip -qr /tmp/source.zip buildspec.yml render-service fonts \
   -x "render-service/node_modules/*" "render-service/display_p*" \
      "render-service/overlay_*" "render-service/effect_*" \
      "render-service/ui_check_*" "render-service/*.manifest.json" \
-     "render-service/display.json" "render-service/.version" \
-     "render-service/.asset-prefix" "render-service/calendar-override.json"
+     "render-service/display.json" "render-service/display.jpg" \
+     "render-service/.version" \
+     "render-service/.asset-prefix" "render-service/calendar-override.json" \
+     "render-service/displays/*"
 aws s3 cp /tmp/source.zip s3://roku-render-build-945710099949/source.zip
 aws codebuild start-build --project-name roku-render-build
 ```
@@ -120,13 +122,22 @@ Two traps already hit, both fixed in the Dockerfile:
 - **The ALB idle timeout is 120s, not the default 60s.** The control
   channel is a long poll held for ~50s and the client waits 55s; the
   default would sever it.
-- **One socket per display identity.** While the Mac and the container
-  were both connected as RK569557324 the backend kept closing one of
-  them. The Mac has to be stopped, not merely ignored. This matters for
-  the fleet manager: a display must have exactly one owner.
-- **The container generated its own asset prefix** on first run, so the
-  live objects are under a different prefix from the Mac's. The old ones
-  are orphans and can be deleted; nothing points at them.
+- **One socket per display identity.** The backend closes duplicate
+  connections for the same display. The fleet manager guarantees one
+  worker per display *within* one task — which is why the service is
+  **single-task by design**. Scaling desired-count past 1 puts two
+  sockets on every display and they fight forever; scaling out needs a
+  partitioner in front, not a bigger number.
+- **Asset prefixes are derived, not stored** —
+  HMAC(secret, deviceId), where the secret is `ASSET_PREFIX_SECRET` or,
+  failing that, the R2 secret key. They survive redeploys (the ephemeral
+  `.asset-prefix` file did not — every deploy used to orphan the
+  display's objects). Rotating the R2 key rotates every prefix: devices
+  learn the new base on their next poll, the old objects orphan once.
+- **`DISPLAY_*` env vars are now the legacy fallback**, serving requests
+  that carry no identity: the pre-identity channel and the balancer's
+  health check. Keep them until every fielded channel sends identity;
+  after that they can be dropped and the fleet starts empty.
 - **HTTP, not HTTPS.** Fine for the test backend, needs a certificate
   before production - the device would need the new scheme.
 

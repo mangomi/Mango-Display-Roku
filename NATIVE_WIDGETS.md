@@ -171,16 +171,15 @@ with many pages, raise it as a trade-off first.
 | Widget data (weather, calendar, …) | Scheduled re-render every 20 min | ≤ 20 min |
 | Date rollover | Scheduled re-render at local midnight | ~instant |
 | Clock time | Native overlay, ticks on-device | live |
-| Service restart | Startup render on watcher boot | ~5 s |
+| Service restart | Startup render on worker (re)creation | ~5 s |
 
-## Resume here (2026-08-05)
+## Historical: the fast-path resume notes (2026-08-05)
 
-Everything below is committed and pushed (`0d470f4`). Services are stopped
-— restart per the runbook, then verify `watch.js` DISPLAY.deviceId still
-matches the display's code before anything else.
-
-**The one unfinished thing: `renderPool.js`, currently `FAST_PATH_ENABLED =
-false`.**
+Since 2026-08-10 the watcher is `fleet.js` + `displayWorker.js` (one
+worker per display, identity on every request — see HANDOFF.md), and
+`renderPool.js` ships `FAST_PATH_ENABLED = true`: the re-measure below
+was completed and the pool now beats the cold render it replaces. The
+notes are kept because they explain the pool's design constraints.
 
 It keeps a portal page warm per display page so a data-only socket push (a
 new calendar event, refreshed weather, a new quote) is applied through the

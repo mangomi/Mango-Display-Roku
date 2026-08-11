@@ -18,20 +18,30 @@ rendering architecture and the per-widget decisions.
 
 ## State as of 2026-08-10
 
-**It runs entirely on AWS.** Nothing on anyone's laptop. Verified on a
-real Roku Express with every local process stopped.
+**It runs entirely on AWS and serves a fleet.** Nothing on anyone's
+laptop. The service manages one `DisplayWorker` per display — its socket
+(exactly one owner per identity), render queue, version counter, working
+directory, and derived R2 prefix. Every control request carries the
+display's identity, so any request can create or resurrect a worker; the
+container keeps no registry, and after a restart the TVs' own long-polls
+rebuild exactly the fleet that really exists. Workers whose TV stops
+polling for 30 min are torn down (a dark display costs nothing) and come
+back on its next poll. Unknown device codes are validated against the
+backend before a worker is born, and refused with 404.
 
 | | |
 |---|---|
-| Render service | ECS Fargate, cluster `roku-render`, 1 task, ARM64 |
+| Render service | ECS Fargate, cluster `roku-render`, 1 task, ARM64 — **single-task by design** (see INFRA cutover notes) |
 | Control endpoint | `http://roku-control-1212257186.us-east-1.elb.amazonaws.com` |
-| Images | Cloudflare R2, `mango-display-assets`, free egress |
+| Images | Cloudflare R2, `mango-display-assets`, free egress, HMAC-derived prefix per display |
 | Backend | **TEST only** (`testapi` / `testportal` / `testsocket`) |
 | Cost | ~$55/month — $36 task, $17 load balancer, ~$2 rest |
 
 The channel has exactly **one** address compiled in: the control
 endpoint. It learns where images live at runtime, so assets can move
-without a channel update.
+without a channel update. Renders across displays share a semaphore
+(`RENDER_CONCURRENCY`, default 1 — the task is 1 vCPU/2GB and a render
+is a whole Chromium); the TVs' spinners cover the queueing.
 
 ### What works, verified on the device
 
@@ -45,23 +55,34 @@ calendar date navigation on both Weeks and List calendars.
 
 ## Next, in rough priority order
 
-1. **Multi-display fleet manager.** The service still serves ONE
-   hardcoded display (`DISPLAY_DEVICE_ID`, currently `RK569557324`).
-   This is the largest remaining piece and nothing else depends on it.
-   Note the constraint below about one socket per display.
-2. **HTTPS on the control endpoint.** HTTP today. Needs an ACM
+1. **HTTPS on the control endpoint.** HTTP today. Needs an ACM
    certificate and a channel change for the scheme.
+2. **`saveMirror` is 500ing on testapi (found 2026-08-10).** Every
+   registration attempt returns `{"error":{}}` HTTP 500 — from Node,
+   from a real browser context, with the exact Tizen payload. A bogus
+   probe at another endpoint returns a clean 405, so requests arrive
+   intact: the endpoint itself is failing. Until it is fixed, **no new
+   device can pair against the test backend** (already-registered
+   devices are fine — they never re-POST). Likely the in-flight staging
+   validation tweak for the iOS/Android linked-browser flow. Backend
+   fix, Dave's side; `tools/fake-device.js` re-tests it in seconds.
 3. **Production backend.** Still test. The startup banner prints
    `*** PRODUCTION ***` when that changes — check the logs after any
    cutover.
 4. **A dedicated secret.** R2 keys currently live in the shared
    `mangomirror-staging-secrets`; the IAM grant covers the whole bundle.
+   Adding `ASSET_PREFIX_SECRET` there at the same time would decouple
+   asset prefixes from R2 key rotation (today the R2 secret key doubles
+   as the HMAC key).
 5. **Webapp exclusions.** `ROKU_EXCLUSIONS.md` is a list of settings the
    webapp should hide for `RK` displays. Nobody has implemented it, so a
    user can still pick Fireworks or the video widget and get nothing.
 6. **Backend fix B1** (also in `ROKU_EXCLUSIONS.md`): to-do status
    updates do not broadcast `refreshLayout`, but chores do. Probably
    affects every platform, not just Roku.
+7. **Drop the `DISPLAY_*` legacy env** once the identity-sending channel
+   is on every fielded device, and retire `serve.py`/`display.jpg`
+   single-display leftovers.
 
 Apple TV is planned but deliberately not started. The manifest is already
 platform-neutral for it.

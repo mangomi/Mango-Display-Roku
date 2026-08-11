@@ -124,6 +124,27 @@ A client should make these visibly interactive when its cursor or focus
 is over them. On Roku that is a drawn outline; on tvOS the focus engine
 is the natural fit.
 
+## Identity
+
+The service manages a fleet, so **every** control request carries the
+display's identity:
+
+```
+&device=RK...&major=1&minor=2336&w=1280&h=720
+```
+
+The device knows all five after pairing (`w`/`h` is its own UI
+resolution, re-read each boot). Identity is not a session: there is no
+handshake to lose. Any identified request can create — or, after a
+service restart, resurrect — the display's worker, which is the entire
+recovery story. Unknown devices are checked against the backend
+(`GET mirrors/deviceId/{code}` must say `isActive`) and refused with 404
+otherwise.
+
+Requests with no identity route to the display named by the service's
+`DISPLAY_*` environment, which keeps pre-identity channels working and
+gives the load balancer's health check something to answer.
+
 ## Interaction endpoints
 
 Gestures go back to the service, which replays them into a live portal
@@ -131,9 +152,9 @@ session — the portal remains the only thing that knows what a gesture
 means.
 
 ```
-GET /interact?type=warm&page=N
-GET /interact?type=tap&page=N&x=&y=&id=
-GET /interact?type=swipeup|swipedown&page=N&x=&y=&id=
+GET /interact?type=warm&page=N&device=...
+GET /interact?type=tap&page=N&x=&y=&id=&device=...
+GET /interact?type=swipeup|swipedown&page=N&x=&y=&id=&device=...
 ```
 
 `id` is the target's `payload.id` for a tap, the region's `id` for a
@@ -143,8 +164,8 @@ the id cannot be resolved.
 ## Freshness
 
 ```
-GET /version           -> { version, busy }
-GET /wait?since=N&busy=0|1   long-poll, answered the moment either differs
+GET /version?device=...           -> { version, busy, assetBase }
+GET /wait?since=N&busy=0|1&device=...   long-poll, answered the moment either differs
 ```
 
 `version` is a **small integer** and must stay small. BrightScript's

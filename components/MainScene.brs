@@ -73,7 +73,10 @@ sub init()
     m.animCtx = invalid
     m.overlayState = {}
     m.overlaysKey = invalid
-    m.loadSeq = 0
+    ' fallback content tag for manifests without per-page image hashes;
+    ' bumped per applied manifest, never per load - a page turn must NOT
+    ' mint a new URL for pixels the device already holds
+    m.contentTag = 0
     m.loadWatchdog = m.top.findNode("loadWatchdog")
     m.loadWatchdog.observeField("fire", "onLoadWatchdog")
     m.forceInPlace = false
@@ -190,6 +193,12 @@ sub maybeApplyPages()
     if m.activeAnim <> invalid or m.pendingLoad <> invalid then return
     m.pages = m.latestPages
     m.latestPages = invalid
+    ' new manifest = pixels may have changed under the stable filenames.
+    ' Hash-carrying manifests make this precise per page; the tag only
+    ' matters as the fallback when a hash is missing.
+    m.contentTag = m.contentTag + 1
+    ' a hidden slot may still pin textures this manifest no longer uses
+    releaseStale(m.slots[backKey()])
     ' announce user edits once the new image is actually on screen;
     ' background refreshes (startup/scheduled/midnight) stay silent
     m.latestReason = ""
@@ -283,11 +292,12 @@ sub loadPage(index as integer, animated as boolean)
     if not animated and m.frontKey <> "" and index = m.pageIndex and (m.forceInPlace = true or overlaysUnchanged(pg.overlays))
         ' Deliberately does NOT track a pending load. There is no slot to
         ' swap and nothing to finalise - the visible Poster just picks up
-        ' the new bitmap. Waiting on loadStatus here wedged the display:
+        ' the new bitmap (or keeps it: identical uri = identical pixels =
+        ' nothing to do). Waiting on loadStatus here wedged the display:
         ' when Roku serves the image from its own cache the field never
         ' leaves "ready", so no change event arrives, pendingLoad is never
         ' cleared, and every later update is deferred behind it.
-        m.slots[m.frontKey].poster.uri = m.assetBaseUrl + pg.image + "?t=" + nextLoadTag()
+        m.slots[m.frontKey].poster.uri = pageUri(pg)
         m.pageIndex = index
         armPageTimer()
         return
@@ -302,20 +312,55 @@ sub loadPage(index as integer, animated as boolean)
     ' the page's overlays ride inside the slot, so they move/fade with it
     applyOverlays(pg.overlays, entry.overlays, entry.under)
     m.overlaysKey = overlayConfigKey(pg.overlays)
+    target = pageUri(pg)
+    ' The texture is often already on this poster - with two pages each
+    ' slot keeps showing the same page, so every turn after the first
+    ' cycle needs no fetch, no decode and no load event. Setting a field
+    ' to the value it already holds fires NO change event (that once
+    ' wedged the display), so when the uri matches we must not wait for
+    ' one: proceed as if the load just completed.
+    if entry.poster.uri = target and entry.poster.loadStatus = "ready"
+        if animated and m.frontKey <> ""
+            startTransition(pg.transition, bk, index)
+        else
+            entry.slot.visible = true
+            finalizeSwap(bk, index)
+        end if
+        return
+    end if
+    ' same uri but not ready (an earlier load failed): force a reload by
+    ' clearing first, so the assignment is a real change and fires events
+    if entry.poster.uri = target then entry.poster.uri = ""
     m.pendingLoad = { index: index, animated: animated, transition: pg.transition, slotKey: bk }
     m.loadWatchdog.control = "start"
-    entry.poster.uri = m.assetBaseUrl + pg.image + "?t=" + nextLoadTag()
+    entry.poster.uri = target
 end sub
 
-' Seconds are not unique enough: two refreshes in the same second build
-' the SAME uri, and setting a field to the value it already holds fires no
-' change event - so the load never completes, pendingLoad is never
-' cleared, and every later update is deferred forever. That wedged the
-' display. A counter cannot collide.
-function nextLoadTag() as string
-    m.loadSeq = m.loadSeq + 1
-    return CreateObject("roDateTime").AsSeconds().ToStr() + "_" + m.loadSeq.ToStr()
+' The image URL for a page. Keyed by CONTENT (the render service hashes
+' every page image), so unchanged pixels keep an unchanged URL: Roku's
+' texture cache reuses them and nothing is re-downloaded. Old-manifest
+' fallback: a per-manifest tag - coarser, but still bounded by content
+' changes rather than by page turns.
+function pageUri(pg as object) as string
+    tag = ""
+    if pg.imageHash <> invalid and pg.imageHash <> "" then tag = pg.imageHash
+    if tag = "" then tag = "v" + m.contentTag.ToStr()
+    return m.assetBaseUrl + pg.image + "?t=" + tag
 end function
+
+' Drop a slot's poster reference when it shows content no current page
+' uses - the last reference is what keeps the old texture resident, and
+' hours of retained stale versions is exactly the slow memory famine
+' that ends with the OS killing the channel.
+sub releaseStale(entry as object)
+    if entry = invalid or entry.poster.uri = "" then return
+    if m.pages <> invalid
+        for each pg in m.pages
+            if entry.poster.uri = pageUri(pg) then return
+        end for
+    end if
+    entry.poster.uri = ""
+end sub
 
 ' last line of defence: nothing may leave a load pending, or the display
 ' silently stops accepting updates
@@ -358,6 +403,10 @@ sub finalizeSwap(newKey as string, index as integer)
         clearOverlays(old.overlays)
         clearOverlays(old.under)
         resetSlotTransforms(old.slot)
+        ' keep the poster only if some current page still shows these
+        ' pixels (the two-page rotation reuses it on the next turn);
+        ' anything stale is released so its texture can be reclaimed
+        releaseStale(old)
     end if
     m.frontKey = newKey
     entry = m.slots[newKey]

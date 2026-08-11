@@ -250,7 +250,17 @@ class DisplayWorker {
     // transition it missed while loading images is corrected the instant
     // it re-arms (event-only delivery left spinners running)
     const clientBusy = u.searchParams.get("busy") === "1";
-    this.log("/wait from device: since=" + since + " ours=" + this.version + " busy=" + clientBusy);
+    // the device's own memory level: the crash flight-recorder. A death
+    // preceded by low/critical here is the OS reclaiming memory, not a
+    // code crash - they are debugged completely differently.
+    const mem = u.searchParams.get("mem") || "";
+    this.log(
+      "/wait from device: since=" + since + " ours=" + this.version + " busy=" + clientBusy +
+      (mem ? " mem=" + mem : ""),
+    );
+    if (mem === "low" || mem === "critical") {
+      this.log("DEVICE MEMORY " + mem.toUpperCase() + " - watch for an OS kill");
+    }
     // Any DIFFERENCE, not just a higher number: the device accepts a
     // version change in either direction (a restarted service comes back
     // lower), and holding whenever ours was not strictly higher left it
@@ -574,6 +584,9 @@ class DisplayWorker {
       pages.push({
         // layered pages render as transparent PNG, not JPEG
         image: m.imageFile || path.basename(this.pageFile(i)),
+        // devices key their image caches on this: unchanged pixels keep
+        // an unchanged URL and are never re-fetched or re-decoded
+        imageHash: m.imageHash || null,
         delaySeconds: mp.delaySeconds || 60,
         transition: mp.transition || "fade",
         autoRotate: mp.autoRotate === true,

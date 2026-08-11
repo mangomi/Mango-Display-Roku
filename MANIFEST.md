@@ -55,6 +55,11 @@ pages[]       see below
 
 ```
 image         file name, relative to the asset base
+imageHash     content hash of the image file (or null from old services).
+              Clients MUST key their image caches on this, not on fetch
+              time: unchanged pixels keep an unchanged hash, and a page
+              rotation must never re-download or re-decode them. Memory
+              on TV hardware is the scarcest thing this contract touches.
 delaySeconds  dwell before advancing (only when autoRotate)
 transition    fade | slideleft | slideright | slideup | slidedown |
               pop | rotate | flip - played when ENTERING this page

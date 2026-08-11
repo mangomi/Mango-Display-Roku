@@ -65,6 +65,7 @@ sub runVersionLoop()
     base = m.top.waitUrl
     print "[Mango] version long-poll: "; base
     ver = 0
+    dev = CreateObject("roDeviceInfo")
     while true
         req = CreateObject("roUrlTransfer")
         setupTls(req)
@@ -75,9 +76,14 @@ sub runVersionLoop()
         ' offline while fetching the manifest and images) self-corrects
         bp = "0"
         if m.top.busy then bp = "1"
+        ' memory pressure rides along as a breadcrumb: the service logs
+        ' it, so if the OS ever kills this channel the flight recorder
+        ' shows normal -> low -> critical -> silence
+        mem = dev.GetGeneralMemoryLevel()
+        print "[Mango] mem: "; mem
         ' identity rides on every poll: it is how the fleet service routes
         ' this display, and how a restarted service resurrects its worker
-        req.SetUrl(base + "/wait?since=" + ver.ToStr() + "&busy=" + bp + m.top.identity)
+        req.SetUrl(base + "/wait?since=" + ver.ToStr() + "&busy=" + bp + "&mem=" + mem + m.top.identity)
         if req.AsyncGetToString()
             ' server holds up to 50s; give it 55 then re-arm
             msg = wait(55000, port)

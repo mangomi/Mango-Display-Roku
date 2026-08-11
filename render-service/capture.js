@@ -10,6 +10,7 @@
  */
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const nativeWidgets = require("./nativeWidgets");
 
 // Manifest contract version - see MANIFEST.md. Bump on a BREAKING change
@@ -376,6 +377,10 @@ async function capturePage(page, opts) {
     regions,
     pageMeta,
     imageFile: path.basename(outPath),
+    // Content identity for the image, so a device only re-fetches and
+    // re-decodes a page whose pixels actually changed. Filenames are
+    // stable across renders; without this every publish looked new.
+    imageHash: crypto.createHash("md5").update(fs.readFileSync(outPath)).digest("hex").slice(0, 12),
   };
   fs.writeFileSync(out.replace(/\.jpe?g$/i, "") + ".manifest.json", JSON.stringify(manifest, null, 1));
   mark("manifest");

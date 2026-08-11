@@ -55,15 +55,24 @@ calendar date navigation on both Weeks and List calendars.
 
 ## Next, in rough priority order
 
-1. **`saveMirror` is 500ing on testapi (found 2026-08-10).** Every
-   registration attempt returns `{"error":{}}` HTTP 500 — from Node,
-   from a real browser context, with the exact Tizen payload. A bogus
-   probe at another endpoint returns a clean 405, so requests arrive
-   intact: the endpoint itself is failing. Until it is fixed, **no new
-   device can pair against the test backend** (already-registered
-   devices are fine — they never re-POST). Likely the in-flight staging
-   validation tweak for the iOS/Android linked-browser flow. Backend
-   fix, Dave's side; `tools/fake-device.js` re-tests it in seconds.
+1. **`saveMirror` is 500ing on testapi (found 2026-08-10, with Dave's
+   backend dev as of 2026-08-11).** Every registration attempt returns
+   `{"error":{}}` HTTP 500. What is established, so nobody re-chases it:
+   requests arrive intact (a POST to the PUT-only `users/logIn` earns a
+   clean 405); fresh never-seen codes fail on first contact (not a
+   duplicate-ID conflict — the GET before and after says "Mirror not
+   registered" both times, nothing inserts); and it is
+   **payload-independent** — the Tizen payload, a stripped
+   `{deviceId}`-only body, a body without deviceWidth/Height, and the
+   `deviceType:"Linked Browser"` shape all 500 identically. So it is
+   not validation logic rejecting a field: the handler throws
+   unconditionally (bad staging deploy, missing config/dependency, or
+   the DB write path), and the empty error object means the real
+   message only exists in the server logs — e.g. 2026-08-11 01:45–01:49
+   UTC, codes RK425665818/RK166818393/RK876387572/RK849161885/
+   RK785579285. Until fixed, **no new device of any platform can pair
+   against the test backend** (already-registered devices are fine —
+   they never re-POST). `tools/fake-device.js` re-tests in seconds.
 2. **Production backend.** Still test. The startup banner prints
    `*** PRODUCTION ***` when that changes — check the logs after any
    cutover.

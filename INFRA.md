@@ -138,6 +138,14 @@ Two traps already hit, both fixed in the Dockerfile:
   that carry no identity: the pre-identity channel and the balancer's
   health check. Keep them until every fielded channel sends identity;
   after that they can be dropped and the fleet starts empty.
+- **During a deploy, both tasks publish the same R2 prefixes** — last
+  writer wins. A code fix in the new image can be transiently reverted
+  on R2 by the draining task's final renders and only sticks at the new
+  task's next publish (≤20 min, usually minutes via a data push). The
+  target group's deregistration delay is the size of that window; it
+  only needs to exceed the 50s long-poll hold, so set it to 60s
+  (default is 300):
+  `aws elbv2 modify-target-group-attributes --target-group-arn <roku-control-tg arn> --attributes Key=deregistration_delay.timeout_seconds,Value=60`
 - **HTTP, not HTTPS.** Fine for the test backend, needs a certificate
   before production - the device would need the new scheme.
 

@@ -32,7 +32,7 @@ backend before a worker is born, and refused with 404.
 | | |
 |---|---|
 | Render service | ECS Fargate, cluster `roku-render`, 1 task, ARM64 — **single-task by design** (see INFRA cutover notes) |
-| Control endpoint | `http://roku-control-1212257186.us-east-1.elb.amazonaws.com` |
+| Control endpoint | `https://roku-control.mangodisplay.com` — HTTPS only, `*.mangodisplay.com` ACM cert, the :80 listener is gone |
 | Images | Cloudflare R2, `mango-display-assets`, free egress, HMAC-derived prefix per display |
 | Backend | **TEST only** (`testapi` / `testportal` / `testsocket`) |
 | Cost | ~$55/month — $36 task, $17 load balancer, ~$2 rest |
@@ -55,9 +55,7 @@ calendar date navigation on both Weeks and List calendars.
 
 ## Next, in rough priority order
 
-1. **HTTPS on the control endpoint.** HTTP today. Needs an ACM
-   certificate and a channel change for the scheme.
-2. **`saveMirror` is 500ing on testapi (found 2026-08-10).** Every
+1. **`saveMirror` is 500ing on testapi (found 2026-08-10).** Every
    registration attempt returns `{"error":{}}` HTTP 500 — from Node,
    from a real browser context, with the exact Tizen payload. A bogus
    probe at another endpoint returns a clean 405, so requests arrive
@@ -66,21 +64,21 @@ calendar date navigation on both Weeks and List calendars.
    devices are fine — they never re-POST). Likely the in-flight staging
    validation tweak for the iOS/Android linked-browser flow. Backend
    fix, Dave's side; `tools/fake-device.js` re-tests it in seconds.
-3. **Production backend.** Still test. The startup banner prints
+2. **Production backend.** Still test. The startup banner prints
    `*** PRODUCTION ***` when that changes — check the logs after any
    cutover.
-4. **A dedicated secret.** R2 keys currently live in the shared
+3. **A dedicated secret.** R2 keys currently live in the shared
    `mangomirror-staging-secrets`; the IAM grant covers the whole bundle.
    Adding `ASSET_PREFIX_SECRET` there at the same time would decouple
    asset prefixes from R2 key rotation (today the R2 secret key doubles
    as the HMAC key).
-5. **Webapp exclusions.** `ROKU_EXCLUSIONS.md` is a list of settings the
+4. **Webapp exclusions.** `ROKU_EXCLUSIONS.md` is a list of settings the
    webapp should hide for `RK` displays. Nobody has implemented it, so a
    user can still pick Fireworks or the video widget and get nothing.
-6. **Backend fix B1** (also in `ROKU_EXCLUSIONS.md`): to-do status
+5. **Backend fix B1** (also in `ROKU_EXCLUSIONS.md`): to-do status
    updates do not broadcast `refreshLayout`, but chores do. Probably
    affects every platform, not just Roku.
-7. **Drop the `DISPLAY_*` legacy env** once the identity-sending channel
+6. **Drop the `DISPLAY_*` legacy env** once the identity-sending channel
    is on every fielded device, and retire `serve.py`/`display.jpg`
    single-display leftovers.
 

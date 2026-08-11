@@ -44,13 +44,17 @@ per-GB processing.
 | 14 | Security group | `roku-render-task-sg` (`sg-0cef8da8f496529ed`), 8091 from the ALB only | free |
 | 15 | Application Load Balancer | `roku-control`, idle timeout **120s** | ~$17/mo |
 | 16 | Target group | `roku-control-tg`, health check `/version` | free |
-| 17 | Listener | HTTP :80 -> target group | free |
+| 17 | ~~Listener HTTP :80~~ | removed 2026-08-11 with its :80 SG rule — the endpoint is HTTPS-only | — |
 | 18 | Task definition | `roku-render:1`, 1 vCPU / 2GB, ARM64 | free |
 | 19 | ECS service | `roku-render`, 1 task | ~$36/mo |
+| 20 | Listener | HTTPS :443 -> target group, `*.mangodisplay.com` ACM cert (shared with the main product — NOT ours to delete), TLS13-1-2-2021-06 | free |
+| 21 | Security group rule | port 443 from anywhere -> `sg-00d529710ca26dcc1` | free |
+| 22 | DNS | `roku-control` CNAME -> the ALB, in **WordPress.com** DNS (mangodisplay.com's host), added by Dave 2026-08-11 | free |
 
-**Live at** `http://roku-control-1212257186.us-east-1.elb.amazonaws.com`
-— the only address compiled into the channel. Everything else, including
-where images live, is learned from it at runtime.
+**Live at** `https://roku-control.mangodisplay.com`
+— the only address compiled into the channel, and it survives an ALB
+rebuild (re-point the CNAME). Everything else, including where images
+live, is learned from it at runtime.
 
 **Running cost: roughly $55/month** for one display. The load balancer is
 fixed; the task handles many displays once the fleet manager lands.
@@ -146,17 +150,18 @@ Two traps already hit, both fixed in the Dockerfile:
   only needs to exceed the 50s long-poll hold, so set it to 60s
   (default is 300):
   `aws elbv2 modify-target-group-attributes --target-group-arn <roku-control-tg arn> --attributes Key=deregistration_delay.timeout_seconds,Value=60`
-- **HTTP, not HTTPS.** Fine for the test backend, needs a certificate
-  before production - the device would need the new scheme.
+- **HTTPS-only since 2026-08-11.** The control reply carries the
+  display's asset prefix - the household's only content secret - so the
+  :80 listener is gone, not redirected. The cert is the product's
+  existing `*.mangodisplay.com` wildcard; ACM renews it automatically.
 
 ## Blocked on
 
 1. ~~Cloudflare bucket and token~~ — done.
 2. ~~Credentials into Secrets Manager~~ — done.
-3. **DNS** — optional. `roku-control.mangodisplay.com` could point at the
-   load balancer instead of its AWS hostname, which would also let the
-   address survive rebuilding the ALB. Assets need no DNS on the r2.dev
-   URL. Neither blocks anything today.
+3. ~~DNS~~ — done 2026-08-11: `roku-control.mangodisplay.com` CNAMEs to
+   the ALB from WordPress.com DNS. Assets still ride the r2.dev URL
+   (custom domain for them remains a pre-production item).
 
 ## Teardown
 
@@ -166,8 +171,10 @@ If any of this needs to disappear:
 # stop the running service FIRST - this is what costs money
 aws ecs update-service --cluster roku-render --service roku-render --desired-count 0
 aws ecs delete-service --cluster roku-render --service roku-render --force
-aws elbv2 delete-listener --listener-arn arn:aws:elasticloadbalancing:us-east-1:945710099949:listener/app/roku-control/943befa1af8d0dee/ca5a7ad5bd0cea45
+aws elbv2 delete-listener --listener-arn arn:aws:elasticloadbalancing:us-east-1:945710099949:listener/app/roku-control/943befa1af8d0dee/7c528dc40e20576f
 aws elbv2 delete-load-balancer --load-balancer-arn arn:aws:elasticloadbalancing:us-east-1:945710099949:loadbalancer/app/roku-control/943befa1af8d0dee
+# do NOT delete the *.mangodisplay.com ACM cert - it belongs to the main
+# product; also remove the roku-control CNAME in WordPress.com DNS by hand
 aws elbv2 delete-target-group --target-group-arn arn:aws:elasticloadbalancing:us-east-1:945710099949:targetgroup/roku-control-tg/3f7379948f5b9ebf
 aws ecs delete-cluster --cluster roku-render
 aws ecr delete-repository --repository-name mango-display-render --force

@@ -35,10 +35,13 @@ sub init()
     }
 
     ' The control endpoint - the hosted render service behind its load
-    ' balancer. Everything else (where images live) is learned from it at
-    ' runtime, so moving assets to another bucket or a CDN domain does not
-    ' need a channel update. Only this address is compiled in.
-    m.versionBaseUrl = "http://roku-control-1212257186.us-east-1.elb.amazonaws.com"
+    ' balancer, on our own hostname so the address survives infrastructure
+    ' rebuilds. HTTPS: the control reply carries the display's asset
+    ' prefix, the only secret protecting a household's rendered content.
+    ' Everything else (where images live) is learned from it at runtime,
+    ' so moving assets does not need a channel update. Only this address
+    ' is compiled in.
+    m.versionBaseUrl = "https://roku-control.mangodisplay.com"
     ' placeholders until the control channel says where assets live
     m.assetBaseUrl = ""
     m.pagesUrl = ""

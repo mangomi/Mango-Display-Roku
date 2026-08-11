@@ -8,6 +8,9 @@ end sub
 sub runInteract()
     url = m.top.serviceBase + "/interact?type=" + m.top.kind + "&page=" + m.top.pageIndex.ToStr() + "&x=" + Int(m.top.x).ToStr() + "&y=" + Int(m.top.y).ToStr() + "&id=" + m.top.targetId + m.top.identity
     req = CreateObject("roUrlTransfer")
+    ' https control endpoint: TLS needs the CA bundle per transfer object
+    req.SetCertificatesFile("common:/certs/ca-bundle.crt")
+    req.InitClientCertificates()
     port = CreateObject("roMessagePort")
     req.SetMessagePort(port)
     req.SetUrl(url)

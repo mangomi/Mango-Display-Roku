@@ -7,6 +7,13 @@ sub init()
     m.top.functionName = "runVersionLoop"
 end sub
 
+' every request in this task may target an https URL now; Roku needs the
+' CA bundle set per roUrlTransfer or TLS fails on older OS versions
+sub setupTls(req as object)
+    req.SetCertificatesFile("common:/certs/ca-bundle.crt")
+    req.InitClientCertificates()
+end sub
+
 sub fetchManifest(ver as integer)
     ' the service tells us where its assets live; fall back to whatever
     ' was configured at build time so development still works
@@ -14,6 +21,7 @@ sub fetchManifest(ver as integer)
     if m.top.assetBase <> "" then url = m.top.assetBase + "display.json"
     if url = "" then return
     req = CreateObject("roUrlTransfer")
+    setupTls(req)
     port = CreateObject("roMessagePort")
     req.SetMessagePort(port)
     req.SetUrl(url + "?t=" + ver.ToStr())
@@ -37,6 +45,7 @@ end sub
 ' connection can never leave the display stale for long.
 function heartbeatCheck(base as string, ver as integer) as dynamic
     req = CreateObject("roUrlTransfer")
+    setupTls(req)
     port = CreateObject("roMessagePort")
     req.SetMessagePort(port)
     ' identity begins with "&": swap the first joiner for "?"
@@ -58,6 +67,7 @@ sub runVersionLoop()
     ver = 0
     while true
         req = CreateObject("roUrlTransfer")
+        setupTls(req)
         port = CreateObject("roMessagePort")
         req.SetMessagePort(port)
         ' report the busy state we currently believe: the server replies

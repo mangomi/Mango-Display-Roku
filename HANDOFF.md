@@ -125,7 +125,16 @@ curl -s --digest -u rokudev:PASSWORD "http://10.0.0.50/plugin_inspect" \
 nc 10.0.0.50 8085
 ```
 
-Dave has the dev password. The TV is at `10.0.0.50`.
+Credentials for the TV are in `~/.mangodisplay/roku.env` on Dave's Mac
+(host, user, dev-mode password) — read them from there, they are
+deliberately not in this repo:
+
+```
+set -a; . ~/.mangodisplay/roku.env; set +a
+curl -s --digest -u "$ROKU_DEV_USER:$ROKU_DEV_PASSWORD" \
+  -F "mysubmit=Install" -F "archive=@MangoDisplayRoku.zip" \
+  "http://$ROKU_DEV_HOST/plugin_install"
+```
 
 ## Rebuilding and deploying
 

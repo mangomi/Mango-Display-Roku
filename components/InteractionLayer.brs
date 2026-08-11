@@ -388,6 +388,7 @@ end sub
 sub sendAction2(kind as string, x as float, y as float, id as string)
     task = CreateObject("roSGNode", "InteractTask")
     task.serviceBase = m.top.serviceBase
+    task.identity = m.top.identity
     task.kind = kind
     task.x = x
     task.y = y

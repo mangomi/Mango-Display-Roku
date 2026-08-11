@@ -28,12 +28,18 @@ if (!url) {
   process.exit(1);
 }
 
+// per-display state (the calendar override) lives in the display's own
+// directory; the watcher passes it explicitly, and a bare CLI run falls
+// back to the output file's directory
+const path = require("path");
+const stateDir = process.env.MANGO_STATE_DIR || (metaOnly ? __dirname : path.dirname(path.resolve(out)));
+
 (async () => {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: outWidth, height: outHeight } });
     wireDiagnostics(page);
-    const state = await openHarness(page, { url, width, height, outWidth, outHeight });
+    const state = await openHarness(page, { url, width, height, outWidth, outHeight, stateDir });
 
     if (metaOnly) {
       const meta = await extractPageMeta(page);

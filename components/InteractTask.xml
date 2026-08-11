@@ -2,6 +2,7 @@
 <component name="InteractTask" extends="Task">
     <interface>
         <field id="serviceBase" type="string" />
+        <field id="identity" type="string" value="" />
         <field id="kind" type="string" />
         <field id="x" type="float" value="0" />
         <field id="y" type="float" value="0" />

@@ -2,6 +2,7 @@
 <component name="VersionTask" extends="Task">
     <interface>
         <field id="waitUrl" type="string" />
+        <field id="identity" type="string" value="" />
         <field id="manifestUrl" type="string" />
         <!-- where the service says to fetch assets from; may change -->
         <field id="assetBase" type="string" />

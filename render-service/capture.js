@@ -87,7 +87,7 @@ function wireDiagnostics(page) {
 }
 
 async function openHarness(page, opts) {
-  const { url, width, height, outWidth, outHeight } = opts;
+  const { url, width, height, outWidth, outHeight, stateDir } = opts;
   const th0 = Date.now();
   let thPrev = th0;
   const hm = [];
@@ -139,7 +139,7 @@ async function openHarness(page, opts) {
   }
   hmark("portal-ready");
   await page.waitForTimeout(400);
-  await applyCalendarOverride(page);
+  await applyCalendarOverride(page, stateDir);
   hmark("settle+override");
   console.log("harness: total=" + (Date.now() - th0) + "ms " + hm.join(" "));
   return state;
@@ -150,10 +150,12 @@ async function openHarness(page, opts) {
 // socket and forgets it. The watcher keeps the last one it saw, so every
 // render re-applies it and the view the user asked for survives the next
 // refresh instead of snapping back a few seconds later.
-async function applyCalendarOverride(page) {
+async function applyCalendarOverride(page, stateDir) {
   let saved = null;
   try {
-    const raw = JSON.parse(fs.readFileSync(path.join(__dirname, "calendar-override.json"), "utf8"));
+    // per-display state lives in the display's own directory; __dirname
+    // is only right for the single-display development flow
+    const raw = JSON.parse(fs.readFileSync(path.join(stateDir || __dirname, "calendar-override.json"), "utf8"));
     if (raw && raw.widgets && Date.now() - raw.at < (raw.holdMs || 600000)) saved = raw.widgets;
   } catch (e) {
     return;

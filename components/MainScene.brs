@@ -138,7 +138,15 @@ sub onPaired()
     r = m.task.result
     if r = invalid then return
     print "[Mango] paired (major "; r.major; " minor "; r.minor; "), waiting for display.json"
+    ' The render service manages a fleet: every control request carries
+    ' this display's identity so the service can route it - and, after a
+    ' service restart, rebuild the display's worker from the request
+    ' alone. w/h is what THIS device renders at, re-read each boot.
+    res = CreateObject("roDeviceInfo").GetUIResolution()
+    m.identity = "&device=" + m.deviceCode + "&major=" + r.major + "&minor=" + r.minor + "&w=" + res.width.ToStr() + "&h=" + res.height.ToStr()
+    m.interaction.identity = m.identity
     m.versionTask = CreateObject("roSGNode", "VersionTask")
+    m.versionTask.identity = m.identity
     m.versionTask.waitUrl = m.versionBaseUrl
     m.versionTask.manifestUrl = m.pagesUrl
     m.versionTask.observeField("version", "onVersionChange")

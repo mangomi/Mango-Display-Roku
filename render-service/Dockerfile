@@ -40,7 +40,7 @@ RUN mkdir -p /app/out
 # the long-poll / interact endpoint the displays talk to
 EXPOSE 8091
 
-# The display this serves comes from the environment. Deliberately no
-# default: a container that starts with no configuration would render the
-# development display, which is worse than refusing to start.
-CMD ["node", "watch.js"]
+# The fleet manager. Displays announce themselves with identity on every
+# control request; DISPLAY_* environment variables optionally pin one
+# legacy display for channels that predate identity.
+CMD ["node", "fleet.js"]

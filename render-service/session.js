@@ -18,7 +18,7 @@ const IDLE_MS = 120000;
 
 class InteractionSession {
   constructor(opts) {
-    this.opts = opts; // { designerUrl(pageIndex), canvasW, canvasH, outW, outH, pageFile, apiBase }
+    this.opts = opts; // { designerUrl(pageIndex), canvasW, canvasH, outW, outH, pageFile, apiBase, stateDir }
     this.browser = null;
     this.page = null;
     this.state = null;
@@ -72,6 +72,7 @@ class InteractionSession {
       height: this.opts.canvasH,
       outWidth: this.opts.outW,
       outHeight: this.opts.outH,
+      stateDir: this.opts.stateDir,
     });
     this.pageIndex = pageIndex;
     this.url = url;

@@ -39,7 +39,8 @@ function heartbeatCheck(base as string, ver as integer) as dynamic
     req = CreateObject("roUrlTransfer")
     port = CreateObject("roMessagePort")
     req.SetMessagePort(port)
-    req.SetUrl(base + "/version")
+    ' identity begins with "&": swap the first joiner for "?"
+    req.SetUrl(base + "/version?v=1" + m.top.identity)
     if not req.AsyncGetToString() then return invalid
     msg = wait(8000, port)
     if type(msg) = "roUrlEvent" and msg.GetResponseCode() = 200
@@ -64,7 +65,9 @@ sub runVersionLoop()
         ' offline while fetching the manifest and images) self-corrects
         bp = "0"
         if m.top.busy then bp = "1"
-        req.SetUrl(base + "/wait?since=" + ver.ToStr() + "&busy=" + bp)
+        ' identity rides on every poll: it is how the fleet service routes
+        ' this display, and how a restarted service resurrects its worker
+        req.SetUrl(base + "/wait?since=" + ver.ToStr() + "&busy=" + bp + m.top.identity)
         if req.AsyncGetToString()
             ' server holds up to 50s; give it 55 then re-arm
             msg = wait(55000, port)

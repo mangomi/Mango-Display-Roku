@@ -8,6 +8,7 @@
         <field id="pageIndex" type="integer" value="0" />
         <field id="assetBase" type="string" />
         <field id="serviceBase" type="string" />
+        <field id="identity" type="string" value="" />
         <!-- set by MainScene when a remote key arrives -->
         <field id="keyPress" type="string" />
         <field id="keyRelease" type="string" />

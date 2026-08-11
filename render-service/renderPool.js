@@ -88,6 +88,7 @@ class RenderPool {
       height: this.opts.canvasH,
       outWidth: this.opts.outW,
       outHeight: this.opts.outH,
+      stateDir: this.opts.stateDir,
     });
     e = { page, state, url, uses: 0, born: Date.now() };
     this.pages.set(index, e);

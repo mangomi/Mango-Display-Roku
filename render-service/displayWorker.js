@@ -622,14 +622,27 @@ class DisplayWorker {
         1,
       ),
     );
-    this.version = this.version + 1;
-    this.lastPublishAt = Date.now();
-    try {
-      fs.writeFileSync(this.versionFile(), String(this.version));
-    } catch (e) {}
-    this.log("display.json:", pages.length, "page(s); version ->", this.version);
-    this.flushWaiters();
-    this.pushToR2(reason);
+    // The version number is the ANNOUNCEMENT, and a device answers it by
+    // fetching display.json from R2. Raising it before the upload lands
+    // makes the device race us and re-fetch the PREVIOUS manifest: it then
+    // holds the new version number with the OLD image identity, sees a uri
+    // it already has, and never repaints. New pixels under an old name is
+    // invisible - which is exactly what a swipe looked like. The exposure
+    // was measured at ~380ms per publish, and a swipe's notification lands
+    // inside it every time.
+    const announce = () => {
+      this.version = this.version + 1;
+      this.lastPublishAt = Date.now();
+      try {
+        fs.writeFileSync(this.versionFile(), String(this.version));
+      } catch (e) {}
+      this.log("display.json:", pages.length, "page(s); version ->", this.version);
+      this.flushWaiters();
+    };
+    // announce on failure too: a device left waiting is worse than one
+    // that re-fetches something slightly stale
+    if (r2Enabled()) this.pushToR2(reason).then(announce, announce);
+    else announce();
   }
 
   // Everything a device fetches: the manifest, the page images, and the
@@ -650,9 +663,19 @@ class DisplayWorker {
   // Uploads run after the version is already published, so a slow or
   // failed upload cannot hold up the render loop. A device that polls in
   // the gap re-fetches on the next version anyway.
-  async pushToR2(reason) {
-    if (!r2Enabled() || this.uploading) return;
-    this.uploading = true;
+  // Serialized, never skipped: the caller now waits on this before it
+  // announces a new version, so returning early while another upload is
+  // in flight would announce content that is not on R2 yet - the very
+  // race this is here to close. Concurrent publishes queue instead.
+  pushToR2(reason) {
+    if (!r2Enabled()) return Promise.resolve();
+    this.uploadChain = (this.uploadChain || Promise.resolve())
+      .catch(() => {})
+      .then(() => this.uploadOnce(reason));
+    return this.uploadChain;
+  }
+
+  async uploadOnce(reason) {
     try {
       const t0 = Date.now();
       const r = await this.publisher.publish(this.dir, this.publishableFiles());
@@ -666,7 +689,6 @@ class DisplayWorker {
     } catch (e) {
       this.log("r2 upload failed:", e.message);
     }
-    this.uploading = false;
   }
 
   // ---- page-settings probe -----------------------------------------------

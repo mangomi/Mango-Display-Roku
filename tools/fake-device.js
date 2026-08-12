@@ -36,6 +36,13 @@ function request(method, url, body) {
         method,
         headers: {
           Accept: "application/json, text/plain, */*",
+          // REQUIRED by the backend: without Accept-Language, saveMirror
+          // throws server-side and answers {"error":{}} HTTP 500 with no
+          // message, for every payload shape. That cost two days of
+          // chasing a "broken endpoint" that was only ever a missing
+          // header - the channel itself always sent it (PairingTask.brs),
+          // which is why real devices paired fine the whole time.
+          "Accept-Language": "en-US,en;q=0.9",
           "User-Agent": "MangoDisplayRoku/0.1 (fake-device)",
           ...(data ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) } : {}),
         },

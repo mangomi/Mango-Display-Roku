@@ -56,24 +56,20 @@ calendar date navigation on both Weeks and List calendars.
 
 ## Next, in rough priority order
 
-1. **`saveMirror` is 500ing on testapi (found 2026-08-10, with Dave's
-   backend dev as of 2026-08-11).** Every registration attempt returns
-   `{"error":{}}` HTTP 500. What is established, so nobody re-chases it:
-   requests arrive intact (a POST to the PUT-only `users/logIn` earns a
-   clean 405); fresh never-seen codes fail on first contact (not a
-   duplicate-ID conflict — the GET before and after says "Mirror not
-   registered" both times, nothing inserts); and it is
-   **payload-independent** — the Tizen payload, a stripped
-   `{deviceId}`-only body, a body without deviceWidth/Height, and the
-   `deviceType:"Linked Browser"` shape all 500 identically. So it is
-   not validation logic rejecting a field: the handler throws
-   unconditionally (bad staging deploy, missing config/dependency, or
-   the DB write path), and the empty error object means the real
-   message only exists in the server logs — e.g. 2026-08-11 01:45–01:49
-   UTC, codes RK425665818/RK166818393/RK876387572/RK849161885/
-   RK785579285. Until fixed, **no new device of any platform can pair
-   against the test backend** (already-registered devices are fine —
-   they never re-POST). `tools/fake-device.js` re-tests in seconds.
+1. ~~`saveMirror` 500s on testapi~~ — **RESOLVED 2026-08-12**. Not a
+   broken endpoint: the backend requires an **`Accept-Language` header**,
+   and without it saveMirror throws server-side and answers
+   `{"error":{}}` HTTP 500 for every payload shape. That is why the
+   failure looked payload-independent and why it seemed to appear from
+   nowhere — **the channel always sent the header**
+   (`PairingTask.brs`, `Accept-Language: en-US,en;q=0.9`), so real
+   device pairing was never affected; only the curl/Node test tooling
+   was missing it. `tools/fake-device.js` and
+   `tools/register-via-browser.js` now set it explicitly and register
+   successfully (verified: mirror 3639). Lesson: an empty `{"error":{}}`
+   from this API means a REQUEST HEADER is missing, not a bad body —
+   compare against what the channel sends before blaming the server.
+
 2. **Production backend.** Still test. The startup banner prints
    `*** PRODUCTION ***` when that changes — check the logs after any
    cutover.

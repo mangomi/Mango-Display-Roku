@@ -36,7 +36,11 @@ if (!code || !/^RK[1-9]{9}$/.test(code)) {
         try {
           const r = await fetch(api + "mirrors/saveMirror", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            // Accept-Language is REQUIRED: without it saveMirror 500s with
+            // an empty error body regardless of payload. Set explicitly
+            // rather than trusting the browser's default - headless
+            // Chromium does not always send one.
+            headers: { "Content-Type": "application/json", "Accept-Language": "en-US,en;q=0.9" },
             body: JSON.stringify(body),
           });
           return { ok: true, status: r.status, text: (await r.text()).slice(0, 300) };

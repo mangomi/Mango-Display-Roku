@@ -494,16 +494,37 @@ const weatherIconHandler = {
         .digest("hex")
         .slice(0, 16);
     };
+    // Look up ANY sheet filmed for this icon+size, whatever its content
+    // tag. The tag exists because filming is not deterministic: the same
+    // sun filmed twice yields different frame counts (the sampling rate
+    // follows the FASTEST icon on the page, so adding a rain icon
+    // re-samples every sheet). Writing that under the old name left TVs
+    // pairing a cached 14-frame texture with a 44-column grid - the icons
+    // crawl sideways through garbage. Content in the name, always.
     const cachedFor = (o) => {
       const key = wxKey(o);
-      const sheet = pathHandlers.join(ctx.outDir, "overlay_wxc_" + key + ".png");
-      const meta = sheet.replace(/\.png$/, ".json");
-      if (!fsHandlers.existsSync(sheet) || !fsHandlers.existsSync(meta)) return null;
+      let metas;
       try {
-        return { key, file: "overlay_wxc_" + key + ".png", ...JSON.parse(fsHandlers.readFileSync(meta, "utf8")) };
+        metas = fsHandlers
+          .readdirSync(ctx.outDir)
+          .filter((f) => f.startsWith("overlay_wxc_" + key + "_") && f.endsWith(".json"))
+          .sort(
+            (a, b) =>
+              fsHandlers.statSync(pathHandlers.join(ctx.outDir, b)).mtimeMs -
+              fsHandlers.statSync(pathHandlers.join(ctx.outDir, a)).mtimeMs,
+          );
       } catch (e) {
         return null;
       }
+      for (const m of metas) {
+        try {
+          const c = JSON.parse(fsHandlers.readFileSync(pathHandlers.join(ctx.outDir, m), "utf8"));
+          if (c.stripFile && fsHandlers.existsSync(pathHandlers.join(ctx.outDir, c.stripFile))) {
+            return { key, file: c.stripFile, ...c };
+          }
+        } catch (e) {}
+      }
+      return null;
     };
 
     const hits = live.map(cachedFor);
@@ -607,10 +628,13 @@ const weatherIconHandler = {
         for (const idx of picked) frames.push(await sharp(shots[idx]).extract(dr).png().toBuffer());
         const cols = Math.max(1, Math.min(Math.floor(2048 / dr.width), frames.length));
         const rows = Math.ceil(frames.length / cols);
-        // keyed by icon + size so the next render reuses it instead of
-        // spending another animation cycle filming the same sun
-        const fileName = "overlay_wxc_" + wxKey(o) + ".png";
-        await sharp({
+        // Keyed by icon + size (so the next render reuses it instead of
+        // filming the same sun again) PLUS a hash of the sheet's own
+        // pixels. A device caches these textures by URL, so re-filmed
+        // content MUST get a new URL - otherwise the manifest's new
+        // cols/rows/frameCount are applied to the old cached image and
+        // the icon crawls sideways.
+        const sheetBuf = await sharp({
           create: {
             width: cols * dr.width,
             height: rows * dr.height,
@@ -626,7 +650,20 @@ const weatherIconHandler = {
             })),
           )
           .png()
-          .toFile(pathHandlers.join(ctx.outDir, fileName));
+          .toBuffer();
+        const contentTag = crypto.createHash("md5").update(sheetBuf).digest("hex").slice(0, 8);
+        const fileName = "overlay_wxc_" + wxKey(o) + "_" + contentTag + ".png";
+        fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, fileName), sheetBuf);
+        // older variants of this icon linger 10 min for manifests still
+        // live on devices, then go
+        for (const f of fsHandlers.readdirSync(ctx.outDir)) {
+          if (!f.startsWith("overlay_wxc_" + wxKey(o) + "_")) continue;
+          if (f.startsWith(fileName.replace(/\.png$/, ""))) continue;
+          try {
+            const p = pathHandlers.join(ctx.outDir, f);
+            if (Date.now() - fsHandlers.statSync(p).mtimeMs > 600000) fsHandlers.unlinkSync(p);
+          } catch (e) {}
+        }
 
         o.stripFile = fileName;
         o.frameW = o.rect.w;

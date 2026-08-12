@@ -190,10 +190,7 @@ end sub
 
 sub maybeApplyPages()
     if m.latestPages = invalid then return
-    if m.activeAnim <> invalid or m.pendingLoad <> invalid
-        print "[Trace] maybeApplyPages DEFERRED (anim in flight or load pending)"
-        return
-    end if
+    if m.activeAnim <> invalid or m.pendingLoad <> invalid then return
     m.pages = m.latestPages
     m.latestPages = invalid
     ' new manifest = pixels may have changed under the stable filenames.
@@ -292,8 +289,6 @@ sub loadPage(index as integer, animated as boolean)
     ' rebuilding them: a rebuild restarts every GIF from frame one and
     ' blanks them while their sheets reload, which reads as the screen
     ' freezing whenever anything updates.
-    print "[Trace] loadPage index="; index; " animated="; animated; " showing="; m.pageIndex; " front="; m.frontKey; " forceInPlace="; m.forceInPlace
-    print "[Trace]   want uri: "; pageUri(pg)
     if not animated and m.frontKey <> "" and index = m.pageIndex and (m.forceInPlace = true or overlaysUnchanged(pg.overlays))
         ' Deliberately does NOT track a pending load. There is no slot to
         ' swap and nothing to finalise - the visible Poster just picks up
@@ -302,14 +297,11 @@ sub loadPage(index as integer, animated as boolean)
         ' when Roku serves the image from its own cache the field never
         ' leaves "ready", so no change event arrives, pendingLoad is never
         ' cleared, and every later update is deferred behind it.
-        print "[Trace]   IN-PLACE path; poster had: "; m.slots[m.frontKey].poster.uri
         m.slots[m.frontKey].poster.uri = pageUri(pg)
-        print "[Trace]   IN-PLACE assigned; loadStatus now: "; m.slots[m.frontKey].poster.loadStatus
         m.pageIndex = index
         armPageTimer()
         return
     end if
-    print "[Trace]   SWAP path (A/B slots)"
 
     bk = backKey()
     entry = m.slots[bk]
@@ -327,9 +319,7 @@ sub loadPage(index as integer, animated as boolean)
     ' to the value it already holds fires NO change event (that once
     ' wedged the display), so when the uri matches we must not wait for
     ' one: proceed as if the load just completed.
-    print "[Trace]   back slot "; bk; " had: "; entry.poster.uri; " status="; entry.poster.loadStatus
     if entry.poster.uri = target and entry.poster.loadStatus = "ready"
-        print "[Trace]   EARLY RETURN - uri already on poster, no load will happen"
         if animated and m.frontKey <> ""
             startTransition(pg.transition, bk, index)
         else
@@ -344,7 +334,6 @@ sub loadPage(index as integer, animated as boolean)
     m.pendingLoad = { index: index, animated: animated, transition: pg.transition, slotKey: bk }
     m.loadWatchdog.control = "start"
     entry.poster.uri = target
-    print "[Trace]   LOAD STARTED on "; bk
 end sub
 
 ' The image URL for a page. Keyed by CONTENT (the render service hashes
@@ -384,7 +373,6 @@ end sub
 
 sub onPosterLoad(ev as object)
     node = ev.getRoSGNode()
-    print "[Trace] posterLoad "; node.id; " status="; node.loadStatus; " pendingLoad?"; (m.pendingLoad <> invalid)
     if m.pendingLoad = invalid then return
     entry = m.slots[m.pendingLoad.slotKey]
     if node.id <> entry.poster.id then return
@@ -409,7 +397,6 @@ sub onPosterLoad(ev as object)
 end sub
 
 sub finalizeSwap(newKey as string, index as integer)
-    print "[Trace] finalizeSwap slot="; newKey; " index="; index
     old = frontEntry()
     if old <> invalid and m.frontKey <> newKey
         old.slot.visible = false

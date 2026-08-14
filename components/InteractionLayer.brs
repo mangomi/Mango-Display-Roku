@@ -49,6 +49,7 @@ sub init()
     m.top.observeField("targets", "onTargets")
     m.top.observeField("keyPress", "onKey")
     m.top.observeField("keyRelease", "onKeyUp")
+    m.top.observeField("swipeApplied", "onSwipeApplied")
 end sub
 
 ' ---- checkboxes ---------------------------------------------------------
@@ -266,6 +267,22 @@ end function
 ' the swipe has had its turn - accept gestures again
 sub onSwipeCooldown()
     m.swipeBusy = false
+end sub
+
+' The swipe's own manifest just applied - the round trip is genuinely
+' over, so release the one-swipe-at-a-time lock now instead of sitting
+' out the rest of the 8s cooldown (which used to add 4-5 dead seconds
+' after the new dates were already on screen, stacking on every
+' consecutive month-page). The cooldown timer stays armed as the
+' fallback for swipes that never produce a manifest (range edges,
+' service errors). Only imageOnly (interaction) manifests bump this
+' field, so a scheduled refresh mid-swipe cannot release the lock early.
+sub onSwipeApplied()
+    if m.swipeBusy
+        print "[Mango] swipe manifest applied - gestures unlocked"
+        m.swipeBusy = false
+        m.swipeCooldown.control = "stop"
+    end if
 end sub
 
 sub onDblWindowEnd()

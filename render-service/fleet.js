@@ -78,6 +78,23 @@ class RenderGate {
     return this.active === 0 && this.queue.length === 0;
   }
 
+  // Non-blocking claim for best-effort background work (the settings
+  // probe): either a slot is free RIGHT NOW and you get its release, or
+  // you get null and skip - background work must never queue ahead of a
+  // render someone is waiting on.
+  tryAcquire() {
+    if (this.active >= this.slots) return null;
+    this.active++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.active--;
+      const next = this.queue.shift();
+      if (next) next();
+    };
+  }
+
   acquire() {
     return new Promise((resolve) => {
       const grant = () => {

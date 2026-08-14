@@ -204,10 +204,15 @@ sub maybeApplyPages()
     m.latestReason = ""
     if m.pageIndex >= m.pages.Count() then m.pageIndex = 0
     ' quiet refresh of the current page (no transition)
-    m.forceInPlace = (m.latestImageOnly = true)
+    wasImageOnly = (m.latestImageOnly = true)
+    m.forceInPlace = wasImageOnly
     m.latestImageOnly = false
     loadPage(m.pageIndex, false)
     m.forceInPlace = false
+    ' an imageOnly manifest is a swipe's answer landing: tell the
+    ' interaction layer so its one-swipe-at-a-time lock releases now
+    ' rather than waiting out the fallback cooldown
+    if wasImageOnly then m.interaction.swipeApplied = m.interaction.swipeApplied + 1
 end sub
 
 sub onRefreshTick()

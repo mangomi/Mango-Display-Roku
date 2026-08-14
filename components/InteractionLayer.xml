@@ -9,6 +9,10 @@
         <field id="assetBase" type="string" />
         <field id="serviceBase" type="string" />
         <field id="identity" type="string" value="" />
+        <!-- bumped by the scene when a swipe's manifest actually applies,
+             so the one-swipe-at-a-time lock releases the moment the new
+             image is up instead of waiting out the fallback cooldown -->
+        <field id="swipeApplied" type="integer" value="0" />
         <!-- set by MainScene when a remote key arrives -->
         <field id="keyPress" type="string" />
         <field id="keyRelease" type="string" />

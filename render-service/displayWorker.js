@@ -218,19 +218,31 @@ class DisplayWorker {
 
   // ---- version + long-poll waiters ---------------------------------------
 
-  respondVersion(res) {
+  // since: the version the requesting device already holds (from /wait).
+  // When ours differs, the manifest rides INLINE in the reply - the
+  // device would otherwise turn around and fetch display.json from R2
+  // over a fresh TLS connection, a serialized 200-500ms it pays on every
+  // single update. Devices that predate the inline field ignore it and
+  // fetch as before; a device that fails to parse it falls back too.
+  respondVersion(res, since) {
     res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
     // The device is TOLD where to fetch rather than having it compiled in:
     // the per-display prefix must not be public, and moving to a custom
     // domain later should be configuration, not a channel rebuild.
-    res.end(JSON.stringify({ version: this.version, busy: this.busy, assetBase: this.publisher.publicBase() }));
+    const reply = { version: this.version, busy: this.busy, assetBase: this.publisher.publicBase() };
+    if (since !== undefined && since !== this.version) {
+      try {
+        reply.manifest = JSON.parse(fs.readFileSync(path.join(this.dir, "display.json"), "utf8"));
+      } catch (e) {} // nothing published yet: device falls back to R2
+    }
+    res.end(JSON.stringify(reply));
   }
 
   flushWaiters() {
     const flushed = this.waiters.splice(0);
     for (const w of flushed) {
       clearTimeout(w.timer);
-      this.respondVersion(w.res);
+      this.respondVersion(w.res, w.since);
     }
     if (flushed.length) this.log("notified", flushed.length, "long-poll waiter(s)");
   }
@@ -265,12 +277,13 @@ class DisplayWorker {
     // version change in either direction (a restarted service comes back
     // lower), and holding whenever ours was not strictly higher left it
     // deaf to publishes that landed while it was busy fetching images.
-    if (this.version !== since || this.busy !== clientBusy) return this.respondVersion(res);
+    if (this.version !== since || this.busy !== clientBusy) return this.respondVersion(res, since);
     const w = {
       res,
+      since,
       timer: setTimeout(() => {
         this.waiters = this.waiters.filter((x) => x !== w);
-        this.respondVersion(res); // timeout: answer with current so client re-arms
+        this.respondVersion(res, since); // timeout: answer with current so client re-arms
       }, WAIT_HOLD_MS),
     };
     this.waiters.push(w);
@@ -329,18 +342,46 @@ class DisplayWorker {
     } catch (e) {}
   }
 
+  // One waiter per widget, and a waiter only ever cleans up AFTER ITSELF.
+  // Both halves matter now that the device unlocks as soon as a swipe's
+  // pixels land: back-to-back swipes on the same calendar are routine, so
+  // an earlier waiter can still be armed when the next one registers. If
+  // the old timer were left running it would delete the NEW entry, and
+  // that swipe's payload would then miss pendingSwipes entirely - never
+  // remembered as the scrolled range (so the next render snaps the
+  // calendar back) and never handed to the waiter, which would sit until
+  // its own deadline with the spinner up.
   waitForCalendarPayload(widgetId, ms) {
+    const prev = this.pendingSwipes.get(widgetId);
+    if (prev) {
+      clearTimeout(prev.timer);
+      this.pendingSwipes.delete(widgetId);
+      prev.resolve(null); // never orphan the earlier waiter
+    }
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        this.pendingSwipes.delete(widgetId);
+      const entry = { resolve, timer: null };
+      entry.timer = setTimeout(() => {
+        // only if this record is still the live one
+        if (this.pendingSwipes.get(widgetId) === entry) this.pendingSwipes.delete(widgetId);
         resolve(null);
       }, ms);
-      this.pendingSwipes.set(widgetId, { resolve, timer });
+      this.pendingSwipes.set(widgetId, entry);
     });
+  }
+
+  // A swipe that resolved without needing its payload (the page repainted
+  // itself) must not leave a 12s zombie behind to trip the next one.
+  cancelCalendarWait(widgetId) {
+    const e = this.pendingSwipes.get(String(widgetId));
+    if (!e) return;
+    clearTimeout(e.timer);
+    this.pendingSwipes.delete(String(widgetId));
+    e.resolve(null);
   }
 
   async handleInteract(u, res) {
     this.lastSeen = Date.now();
+    this.killProbeForInteraction();
     const type = u.searchParams.get("type") || "tap";
     const pageIndex = parseInt(u.searchParams.get("page") || "0", 10);
     const x = parseFloat(u.searchParams.get("x") || "0");
@@ -374,14 +415,21 @@ class DisplayWorker {
         this.interacting = true;
         this.setBusy(true, type);
       }
-      const r = await this.getSession().interact({ type, x, y, id, page: pageIndex });
+      // the payload promise doubles as the interrupt for the session's
+      // self-repaint wait: socket-path widgets answer in ~150ms, and
+      // waiting out the full repaint window with the answer in hand was
+      // 6 dead seconds on every Weeks-calendar swipe
+      const r = await this.getSession().interact({ type, x, y, id, page: pageIndex, interrupt: waitPayload });
       if (swipe) {
         // If the swiped page repainted itself, it IS the answer - capture
         // it now rather than waiting for a push that may never come.
         if (r && r.handled && r.changed) {
           this.log("swiped page updated itself - capturing it directly");
+          // this swipe never needs its payload; retire the waiter now so it
+          // cannot outlive the gesture and delete the NEXT swipe's entry
+          if (id) this.cancelCalendarWait(id);
           await this.getSession().recapture();
-          this.publishFromDisk("interaction");
+          await this.publishFromDisk("interaction");
         } else if (r && r.handled && waitPayload) {
           const payload = await waitPayload;
           if (!payload) {
@@ -393,7 +441,7 @@ class DisplayWorker {
             if (r.changed) {
               this.log("no push for this widget - capturing the page we swiped");
               await this.getSession().recapture();
-              this.publishFromDisk("interaction");
+              await this.publishFromDisk("interaction");
             } else {
               this.log("no calendar payload and no visible change - nothing to publish");
             }
@@ -402,7 +450,7 @@ class DisplayWorker {
             await this.getSession().open(pageIndex);
             if (await this.getSession().applyCalendar(payload)) {
               await this.getSession().recapture();
-              this.publishFromDisk("interaction");
+              await this.publishFromDisk("interaction");
             }
           }
         }
@@ -447,20 +495,29 @@ class DisplayWorker {
     if (!payload || this.stopped) return;
     if (this.rendering || this.interacting) return void this.scheduleRender("data update");
     this.rendering = true;
+    this.killProbeForInteraction(); // never queue real work behind a probe
     const release = await this.gate.acquire();
     const t0 = Date.now();
     let failed = null;
+    let released = false;
     try {
       for (let i = 0; i < this.knownPageCount(); i++) {
         if (!(await this.getPool().applyTo(i, payload))) throw new Error("page " + i + " would not take the update");
         await this.getPool().capture(i);
       }
-      this.publishFromDisk("data update");
+      // The gate exists to serialize CHROMIUM, not network I/O. publishFromDisk
+      // awaits the R2 upload (and its retry backoff), so holding the single
+      // fleet slot across it makes one display's slow upload delay every other
+      // display's render. this.rendering stays true, so re-entrancy is still
+      // covered. Announce-after-upload ordering is untouched.
+      release();
+      released = true;
+      await this.publishFromDisk("data update");
       this.log("fast update in " + (Date.now() - t0) + "ms (" + Object.keys(payload).join(",") + ")");
     } catch (e) {
       failed = e.message;
     }
-    release();
+    if (!released) release();
     this.rendering = false;
     if (failed) {
       this.log("fast path fell back to a full render:", failed);
@@ -521,7 +578,12 @@ class DisplayWorker {
     // tell the TV to spin now - including while this display queues behind
     // another display's render on the shared gate
     if (!AUTO.includes(reason)) this.setBusy(true, reason);
+    // A best-effort settings probe must never make a user's edit wait: it
+    // holds a gate slot for its whole run, and only /interact killed it, so
+    // a layout edit could sit spinning behind one.
+    this.killProbeForInteraction();
     const release = await this.gate.acquire();
+    let released = false;
     // the fleet may have evicted this worker while it sat in the queue
     if (this.stopped) {
       release();
@@ -539,7 +601,11 @@ class DisplayWorker {
       const meta = man0.pageMeta || { pageCount: 1, pages: [] };
       this.lastMetaJson = JSON.stringify(man0.pageMeta || null);
       for (let i = 1; i < meta.pageCount; i++) await this.renderPage(i);
-      this.publishFromDisk(reason);
+      // free the fleet's single Chromium slot before the network leg (see
+      // runFast); this.rendering still guards re-entrancy
+      release();
+      released = true;
+      await this.publishFromDisk(reason);
       // keep the warm pages ready for the next data push - but only while
       // fleet policy allows it (warm Chromium pages are the memory cost)
       if (this.prewarmOk()) {
@@ -550,7 +616,7 @@ class DisplayWorker {
     } catch (e) {
       this.log("render FAILED:", e.message);
     }
-    release();
+    if (!released) release();
     this.rendering = false;
     if (this.pendingRender) {
       this.pendingRender = false;
@@ -640,9 +706,13 @@ class DisplayWorker {
       this.flushWaiters();
     };
     // announce on failure too: a device left waiting is worse than one
-    // that re-fetches something slightly stale
-    if (r2Enabled()) this.pushToR2(reason).then(announce, announce);
-    else announce();
+    // that re-fetches something slightly stale. The promise is returned
+    // so callers that manage the busy flag can hold it until the
+    // announcement: clearing busy first cost the TV an extra /wait
+    // round trip (busy=false reply, re-arm, then the version reply).
+    if (r2Enabled()) return this.pushToR2(reason).then(announce, announce);
+    announce();
+    return Promise.resolve();
   }
 
   // Everything a device fetches: the manifest, the page images, and the
@@ -694,14 +764,29 @@ class DisplayWorker {
   // ---- page-settings probe -----------------------------------------------
 
   probePageSettings() {
-    // a probe is a full portal boot; never let it starve real renders on
-    // the shared gate, and never run one for a display already rendering
+    // A probe is a full portal boot (~10s of Chromium on a shared 1-vCPU
+    // box). It used to check gate.idle() only at START and then run
+    // ungated - so a render or a swipe landing mid-probe silently fought
+    // it for CPU, which is where the "sometimes the swipe takes 20s"
+    // variance came from. Now it HOLDS a gate slot (renders queue briefly
+    // behind it, never overlap it) and is killed outright the moment a
+    // gesture arrives - a probe is best-effort background work and a
+    // person holding a remote always outranks it.
     if (this.stopped || this.rendering || !this.gate.idle()) return;
-    execFile(
+    const release = this.gate.tryAcquire();
+    if (!release) return; // something real is running; probe next cycle
+    const child = execFile(
       process.execPath,
       [path.join(__dirname, "render.js"), this.designerUrl(0), "--meta"],
-      { timeout: 60000, env: { ...process.env, MANGO_STATE_DIR: this.dir } },
+      // Capped well under the old 60s: this is the worst case a real
+      // render can be stuck behind if it arrives just after the probe
+      // takes the slot (edits and swipes kill it outright, but a probe
+      // that hangs must not be able to sit on the fleet's only slot).
+      // A probe that cannot finish in 20s has nothing useful to say.
+      { timeout: 20000, env: { ...process.env, MANGO_STATE_DIR: this.dir } },
       (err, stdout) => {
+        this.probeChild = null;
+        release();
         if (err || this.rendering || this.stopped) return;
         const line = (stdout || "").split("\n").find((l) => l.startsWith("META:"));
         if (!line) return;
@@ -713,6 +798,18 @@ class DisplayWorker {
         }
       },
     );
+    this.probeChild = child;
+  }
+
+  // a live gesture outranks background maintenance: free the CPU now
+  killProbeForInteraction() {
+    if (this.probeChild) {
+      this.log("killing settings probe - gesture takes priority");
+      try {
+        this.probeChild.kill();
+      } catch (e) {}
+      this.probeChild = null;
+    }
   }
 
   armMidnightRender() {

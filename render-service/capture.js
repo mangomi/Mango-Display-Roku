@@ -188,13 +188,19 @@ async function applyCalendarOverride(page, stateDir) {
       }
       if (!wanted.length) return { skip: "already on the saved range" };
 
-      const el = wanted[0].el;
-      let sc = window.angular.element(el).scope();
+      let sc = window.angular.element(wanted[0].el).scope();
       while (sc && !sc.updateCalendarData) sc = sc.$parent;
       if (!sc) return { skip: "no handler" };
-      const before = (el.innerText || "").replace(/\s+/g, " ").slice(0, 60);
+      // watch EVERY out-of-date targeted calendar: a page can hold
+      // several, and watching only "the first visible calendar" meant
+      // the wait stared at an untouched sibling, burned its full
+      // timeout, and let the capture race the real widget's repaint
+      window.__mmOverrideWatch = wanted.map((w) => ({
+        el: w.el,
+        before: (w.el.innerText || "").replace(/\s+/g, " ").slice(0, 60),
+      }));
       sc.updateCalendarData(data); // runs its own $apply - never wrap it
-      return { before, ids: wanted.map((w) => w.id) };
+      return { ids: wanted.map((w) => w.id) };
     }, saved);
 
     if (res.skip) return;
@@ -202,13 +208,13 @@ async function applyCalendarOverride(page, stateDir) {
     // short wait for a change we know is coming, not a blind timeout
     await frame
       .waitForFunction(
-        (prev) => {
-          const el = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].find(
-            (e) => getComputedStyle(e).visibility !== "hidden",
+        () => {
+          const list = window.__mmOverrideWatch || [];
+          return list.every(
+            (w) => (w.el.innerText || "").replace(/\s+/g, " ").slice(0, 60) !== w.before,
           );
-          return el && (el.innerText || "").replace(/\s+/g, " ").slice(0, 60) !== prev;
         },
-        res.before,
+        null,
         { timeout: 3500 },
       )
       .catch(() => {});

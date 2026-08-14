@@ -14,7 +14,13 @@
 const { chromium } = require("playwright");
 const { openHarness, capturePage, wireDiagnostics } = require("./capture");
 
-const IDLE_MS = 120000;
+// How long a warm portal page survives without gestures. Two minutes
+// meant the FIRST swipe after any pause paid a full cold open (~4-7s on
+// the shared 1-vCPU task) - the difference between the user's "8s" and
+// "20s" experiences. Ten minutes keeps a session warm across a normal
+// interactive stretch; the memory cost is one Chromium page per display
+// that someone is actively pointing a remote at.
+const IDLE_MS = 600000;
 
 class InteractionSession {
   constructor(opts) {
@@ -36,8 +42,24 @@ class InteractionSession {
     this.idleTimer = setTimeout(() => this.close("idle"), IDLE_MS);
   }
 
-  // warm the page for a display page; safe to call repeatedly
+  // warm the page for a display page; safe to call repeatedly.
+  // Concurrent calls serialize: the TV's 'warm' request and a fast
+  // gesture used to race two opens, each closing the other's browser
+  // ("session warm failed: Target page ... has been closed").
   async open(pageIndex) {
+    while (this.opening) {
+      await this.opening.catch(() => {});
+    }
+    const p = this.openInner(pageIndex);
+    this.opening = p;
+    try {
+      return await p;
+    } finally {
+      this.opening = null;
+    }
+  }
+
+  async openInner(pageIndex) {
     this.touchIdle();
     // a page can be closed under us (idle timeout racing an incoming
     // gesture, or a crashed browser) - never hand back a dead handle
@@ -193,7 +215,9 @@ class InteractionSession {
   // instance. The `arrowDoubleTap` marker matters: updateCalendarView
   // checks for it and skips the scroll-the-widget path in favour of
   // moving the date range, which is what the remote gesture means.
-  async swipe(dir, x, y, id) {
+  // interrupt: an optional promise (the socket payload arriving) that
+  // cuts the self-repaint wait short - see the race note below
+  async swipe(dir, x, y, id, interrupt) {
     const frame = this.page.frames().find((f) => f.url().includes("designer=true"));
     if (!frame) throw new Error("portal frame missing");
     const type = dir === "swipeup" ? "swipeup" : "swipedown";
@@ -268,22 +292,58 @@ class InteractionSession {
     // Watch the element we actually swiped (not the first calendar on the
     // page, which is a different widget) and tell the caller, so it can
     // capture this page instead of waiting.
+    //
+    // RACED against the socket payload (opts.interrupt): a Weeks calendar
+    // never repaints itself - its answer arrives on the socket, measured
+    // ~150ms after dispatch - so waiting the full window here burned 6
+    // dead seconds ON TOP of a payload already in hand. The moment the
+    // payload wins the race we hand control back; the caller takes the
+    // payload path exactly as if this wait had timed out. If the widget
+    // repaints first, the old fast path still wins.
     let changed = false;
-    try {
-      await frame.waitForFunction(
+    let interrupted = false;
+    const repaintWait = frame
+      .waitForFunction(
         (prev) => {
           const el = window.__mmSwipeEl;
           return el && (el.innerText || "").replace(/\s+/g, " ").slice(0, 400) !== prev;
         },
         before.text,
         { timeout: 6000, polling: 150 },
+      )
+      .then(
+        () => "repainted",
+        () => "timeout",
       );
+    let outcome;
+    if (interrupt) {
+      // Only a REAL payload may cut the repaint wait short. waitForCalendarPayload
+      // also resolves - with null - when its 12s deadline expires, and that timer
+      // starts before the session is even opened: on a cold open behind the shared
+      // gate the null can land inside this window (or before it), skip the wait
+      // entirely, and report changed=false for a List calendar that repaints itself
+      // and never pushes. The swipe would then be silently dropped. A null loses
+      // the race by never settling; the repaint wait remains the only other exit.
+      outcome = await Promise.race([
+        repaintWait,
+        interrupt.then((p) => (p ? "payload" : new Promise(() => {}))),
+      ]);
+    } else {
+      outcome = await repaintWait;
+    }
+    if (outcome === "repainted") {
       changed = true;
       await this.page.waitForTimeout(500);
-    } catch (e) {}
+    } else if (outcome === "payload") {
+      interrupted = true;
+    }
     console.log(
       "swipe:", type,
-      changed ? "-> this page already shows the new range" : "-> dispatched, waiting on the socket payload",
+      changed
+        ? "-> this page already shows the new range"
+        : interrupted
+          ? "-> socket payload arrived, skipping the self-repaint wait"
+          : "-> dispatched, waiting on the socket payload",
     );
     return { handled: true, kind: "calendar", direction: type, changed };
   }
@@ -297,8 +357,39 @@ class InteractionSession {
     const frame = this.page.frames().find((f) => f.url().includes("designer=true"));
     if (!frame) throw new Error("portal frame missing");
     const r = await frame.evaluate((data) => {
-      const el = document.querySelector("[ng-swipe-up][ng-swipe-down]");
+      // Resolve the calendar the payload TARGETS - a page can hold
+      // several, and both the already-there check and the repaint watcher
+      // below must be about the same widget. Watching "the first
+      // calendar" once let captures run before the swiped widget had
+      // repainted (it stared at an untouched sibling until timeout).
+      const wantIds = Object.keys(data).map(String);
+      const els = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].filter(
+        (e) => getComputedStyle(e).visibility !== "hidden" && e.offsetParent !== null,
+      );
+      const widgetOf = (n) => {
+        let w = window.angular.element(n).scope();
+        while (w && !w.widgetData) w = w.$parent;
+        return w;
+      };
+      let el = els.find((e) => {
+        const w = widgetOf(e);
+        return w && wantIds.indexOf(String(w.widgetData.widgetSettingId)) >= 0;
+      });
+      if (!el) el = els[0];
       if (!el) return { ok: false, reason: "no calendar on page" };
+      window.__mmApplyWatch = el;
+
+      // This page was opened AFTER the swipe's range was remembered, so
+      // openHarness has usually applied this exact range already - and
+      // waited out its repaint. Re-applying it just burned a 3s watch on
+      // a view that will never change again. If the target widget's
+      // model is already on the payload's range, there is nothing to do.
+      const w = widgetOf(el);
+      const mine = w && data[String(w.widgetData.widgetSettingId)];
+      if (mine && w.widgetData.data && String(w.widgetData.data.initial_date) === String(mine.initial_date)) {
+        return { ok: true, already: true, widgets: Object.keys(data) };
+      }
+
       let sc = window.angular.element(el).scope();
       while (sc && !sc.updateCalendarData) sc = sc.$parent;
       if (!sc) return { ok: false, reason: "updateCalendarData not on scope chain" };
@@ -320,18 +411,24 @@ class InteractionSession {
       return false;
     }
 
+    if (r.already) {
+      // openHarness applied and settled this range when the page opened -
+      // a short settle covers any last paint, nothing else to wait for
+      await this.page.waitForTimeout(150);
+      console.log("calendar payload applied to widget(s)", r.widgets.join(","), "- already applied at page open");
+      return true;
+    }
+
     // The repaint is deferred behind a 2s $timeout inside the portal, so
-    // give it time to land - but do NOT require the text to change. This
-    // page is freshly opened and the saved range is re-applied at load, so
-    // it is often ALREADY showing the range we are about to set. Treating
-    // "no visible change" as failure meant those swipes were never
-    // published, even though the page was correct: the user saw nothing
-    // happen on roughly half of them.
+    // give it time to land - watching the TARGETED widget, and do NOT
+    // require the text to change (an identical-looking range repaints
+    // nothing; treating that as failure once meant half of all swipes
+    // were never published).
     let moved = false;
     try {
       await frame.waitForFunction(
         (prev) => {
-          const el = document.querySelector("[ng-swipe-up][ng-swipe-down]");
+          const el = window.__mmApplyWatch;
           return el && (el.innerText || "").replace(/\s+/g, " ").slice(0, 60) !== prev;
         },
         r.before,
@@ -380,7 +477,7 @@ class InteractionSession {
         return await this.tap(action.x, action.y, action.id);
       }
       if (action.type === "swipeup" || action.type === "swipedown") {
-        return await this.swipe(action.type, action.x, action.y, action.id);
+        return await this.swipe(action.type, action.x, action.y, action.id, action.interrupt);
       }
       throw new Error("unsupported action: " + action.type);
     } finally {

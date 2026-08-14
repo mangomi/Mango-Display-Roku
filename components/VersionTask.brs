@@ -119,8 +119,19 @@ sub runVersionLoop()
                     if v <> ver
                         ver = v
                         print "[Mango] new render version: "; ver
-                        ' manifest first, so it's readable when version fires
-                        fetchManifest(ver)
+                        ' manifest first, so it's readable when version fires.
+                        ' The service now sends it INLINE in the /wait reply
+                        ' (it knows our 'since' differs), saving the separate
+                        ' R2 round trip; fall back to fetching if absent or
+                        ' malformed so older services keep working.
+                        inline = false
+                        if json.manifest <> invalid and GetInterface(json.manifest, "ifAssociativeArray") <> invalid
+                            if json.manifest.pages <> invalid and json.manifest.pages.Count() > 0
+                                m.top.manifest = json.manifest
+                                inline = true
+                            end if
+                        end if
+                        if not inline then fetchManifest(ver)
                         m.top.version = ver
                     end if
                 end if

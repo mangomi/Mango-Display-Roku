@@ -144,6 +144,14 @@ class AssetPublisher {
     let sent = 0;
     let bytes = 0;
     const failed = [];
+    // Concurrent puts: the publish gates the version announcement now, so
+    // its wall-clock is user-visible latency on every swipe and edit. A
+    // typical publish is 2-3 small files; parallelizing turns ~400-600ms
+    // of serial round trips into the slowest single put. Capped so a
+    // first-boot publish (~30 files incl. megabyte sprite sheets) does
+    // not open thirty simultaneous TLS streams.
+    const MAX_PARALLEL = 6;
+    const work = [];
     for (const name of files) {
       const local = path.join(dir, name);
       let stat;
@@ -154,16 +162,27 @@ class AssetPublisher {
       }
       const stamp = stat.size + ":" + Math.round(stat.mtimeMs);
       if (this.uploaded.get(name) === stamp) continue;
-      try {
-        bytes += await this.putFile(local, rootedKey(this.prefix + "/" + name));
-        this.uploaded.set(name, stamp);
-        sent++;
-      } catch (e) {
-        // One bad file must not strand the rest - a missing sprite is a
-        // blank patch, a missing manifest is a display that never updates.
-        // Not marking it uploaded means the next render retries it.
-        failed.push(name);
-      }
+      work.push({ name, local, stamp });
+    }
+    for (let i = 0; i < work.length; i += MAX_PARALLEL) {
+      const batch = work.slice(i, i + MAX_PARALLEL);
+      const results = await Promise.allSettled(
+        batch.map((w) => this.putFile(w.local, rootedKey(this.prefix + "/" + w.name))),
+      );
+      results.forEach((r, j) => {
+        const w = batch[j];
+        if (r.status === "fulfilled") {
+          bytes += r.value;
+          this.uploaded.set(w.name, w.stamp);
+          sent++;
+        } else {
+          // One bad file must not strand the rest - a missing sprite is a
+          // blank patch, a missing manifest is a display that never
+          // updates. Not marking it uploaded means the next render
+          // retries it.
+          failed.push(w.name);
+        }
+      });
     }
     return { sent, bytes, prefix: this.prefix, failed };
   }

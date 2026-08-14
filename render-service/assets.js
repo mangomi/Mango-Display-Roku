@@ -29,7 +29,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 
 const BUCKET = process.env.R2_BUCKET || "mango-display-assets";
 const ACCOUNT = process.env.R2_ACCOUNT_ID || "";
@@ -39,6 +39,11 @@ const PUBLIC_BASE = (process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
 // key. Devices never see this decision - they are handed the full
 // assetBase at runtime. Empty means bucket-root (the pre-split layout).
 const ROOT = (process.env.ASSET_ROOT || "").replace(/^\/+|\/+$/g, "");
+// Only content-addressed sprite art is ever deleted from the bucket.
+// display.json and the page images keep stable names and must never be
+// reaped just because one publish did not list them (a page that failed
+// to render this cycle is still on a device's screen).
+const REAPABLE = /^(overlay_wxc_[0-9a-f]+_[0-9a-f]+|overlay_gif_[0-9a-f]+)\.(png|json)$/;
 const rootedKey = (rest) => (ROOT ? ROOT + "/" : "") + rest;
 
 const TYPES = {
@@ -184,7 +189,39 @@ class AssetPublisher {
         }
       });
     }
-    return { sent, bytes, prefix: this.prefix, failed };
+    const removed = await this.reap(files);
+    return { sent, bytes, prefix: this.prefix, failed, removed };
+  }
+
+  // Delete objects we uploaded that the display no longer publishes.
+  //
+  // Sprite sheets are named by their CONTENT (a re-filmed weather icon
+  // gets a new filename by design, so a device can never pair a cached
+  // texture with a new frame grid). The cost is a new object per filming:
+  // seven variants of the same sun had already piled up in the bucket,
+  // and nothing ever removed them. The generators prune superseded
+  // variants from local disk after a 10-minute grace - long past any
+  // manifest still live on a device - so "we uploaded it, it is gone
+  // locally, and this publish does not list it" is a safe delete.
+  //
+  // Best effort by design: a failed delete is retried on the next publish
+  // (the name stays in `uploaded`), and it never touches the version
+  // announcement.
+  async reap(files) {
+    const live = new Set(files);
+    const stale = [...this.uploaded.keys()].filter((name) => !live.has(name) && REAPABLE.test(name));
+    if (!stale.length) return 0;
+    let removed = 0;
+    for (const name of stale) {
+      try {
+        await s3().send(new DeleteObjectCommand({ Bucket: BUCKET, Key: rootedKey(this.prefix + "/" + name) }));
+        this.uploaded.delete(name);
+        removed++;
+      } catch (e) {
+        // leave it in `uploaded` so the next publish tries again
+      }
+    }
+    return removed;
   }
 }
 

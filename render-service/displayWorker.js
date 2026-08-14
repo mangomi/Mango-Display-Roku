@@ -91,6 +91,11 @@ class DisplayWorker {
     // TV has gone dark, so a powered-off display stops costing renders
     this.lastSeen = Date.now();
     this.lastPublishAt = 0;
+    // socket health, used to tell a duplicate-identity kick (deploy
+    // overlap) from a genuine outage before triggering a catch-up render
+    this.socketOpenedAt = 0;
+    this.socketClosedAt = 0;
+    this.lastSessionMs = 0;
 
     this.janitor = null;
     this.probeTimer = null;
@@ -776,9 +781,10 @@ class DisplayWorker {
     try {
       const t0 = Date.now();
       const r = await this.publisher.publish(this.dir, this.publishableFiles());
-      if (r.sent || (r.failed && r.failed.length)) {
+      if (r.sent || r.removed || (r.failed && r.failed.length)) {
         this.log(
           "r2:", r.sent, "file(s),", Math.round(r.bytes / 1024) + "KB in " + (Date.now() - t0) + "ms",
+          r.removed ? "- " + r.removed + " stale removed" : "",
           r.failed && r.failed.length ? "- " + r.failed.length + " failed, retried next render" : "",
           "(" + reason + ")",
         );
@@ -859,17 +865,33 @@ class DisplayWorker {
     this.ws = ws;
 
     ws.on("open", () => {
+      this.socketOpenedAt = Date.now();
       this.log("socket open");
-      // Render on (re)connect: covers service restarts (stale clock/date
-      // on disk) and pushes missed while offline. But NOT when we
-      // published moments ago - during a deploy the old and new task
-      // fight over this identity and the socket cycles every ~10s until
-      // the old one drains; rendering on each cycle turned that into a
-      // render storm (and half-loaded portals published wrong pageMeta).
-      // The 20-min schedule and the meta probe cover anything a skipped
-      // reconnect render would have caught.
-      if (Date.now() - this.lastPublishAt > 60000) this.scheduleRender("startup");
-      else this.log("(reconnect render skipped - published " + Math.round((Date.now() - this.lastPublishAt) / 1000) + "s ago)");
+      // Render on (re)connect to cover pushes missed while genuinely
+      // offline. A DUPLICATE KICK is not that: during a deploy the old
+      // and new task both hold this display's identity, the backend
+      // hangs up on one every ~10s, and each cycle used to trigger a full
+      // render. That storm republished full manifests, which makes every
+      // TV rebuild its overlays and re-download every sprite sheet - it
+      // is what got us rate-limited by R2 and killed the GIFs.
+      //
+      // So render only when this is a real gap: the first connect of this
+      // worker, or an outage long enough to have missed something. A
+      // short cycle is a fight over the identity, and the 20-min schedule
+      // plus the meta probe cover anything a skipped render would catch.
+      const downMs = this.socketClosedAt ? Date.now() - this.socketClosedAt : 0;
+      const flapping = this.lastSessionMs > 0 && this.lastSessionMs < 30000;
+      if (this.socketClosedAt && (flapping || downMs < 60000)) {
+        this.log(
+          "(reconnect render skipped - " +
+            (flapping ? "identity contested, last session " + Math.round(this.lastSessionMs / 1000) + "s" : "offline only " + Math.round(downMs / 1000) + "s") +
+            ")",
+        );
+      } else if (Date.now() - this.lastPublishAt > 60000) {
+        this.scheduleRender("startup");
+      } else {
+        this.log("(reconnect render skipped - published " + Math.round((Date.now() - this.lastPublishAt) / 1000) + "s ago)");
+      }
       this.keepalive = setInterval(() => {
         try {
           ws.send(JSON.stringify({ type: "check_socket_status" }));
@@ -882,8 +904,17 @@ class DisplayWorker {
     ws.on("close", (code) => {
       if (this.keepalive) clearInterval(this.keepalive);
       this.keepalive = null;
+      // remembered so the next open() can tell a duplicate kick (short
+      // session, immediate re-close) from a real outage
+      this.lastSessionMs = this.socketOpenedAt ? Date.now() - this.socketOpenedAt : 0;
+      this.socketClosedAt = Date.now();
+      this.socketOpenedAt = 0;
       if (this.stopped) return;
-      this.log("socket closed (" + code + "), reconnecting in", RECONNECT_MS / 1000, "s");
+      this.log(
+        "socket closed (" + code + ") after " + Math.round(this.lastSessionMs / 1000) + "s, reconnecting in",
+        RECONNECT_MS / 1000,
+        "s",
+      );
       this.reconnectTimer = setTimeout(() => this.connect(), RECONNECT_MS);
     });
 

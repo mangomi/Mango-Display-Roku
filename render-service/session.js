@@ -353,10 +353,17 @@ class InteractionSession {
   // display and this page end up in the same state - we're just carrying
   // the message across, since a preview-mode page has no socket of its
   // own to receive it on.
-  async applyCalendar(refreshCalenderData) {
+  // opts.preapplied: true only when this page was opened AFTER the range
+  // was remembered, so openHarness already applied it AND waited out the
+  // repaint. Only then may the "model is already on this range" shortcut
+  // skip the repaint wait. On a page we swiped into, the portal can have
+  // the new range in its model while the view is still the old one - and
+  // capturing there is exactly the premature-screenshot bug.
+  async applyCalendar(refreshCalenderData, opts) {
+    const preapplied = !!(opts && opts.preapplied);
     const frame = this.page.frames().find((f) => f.url().includes("designer=true"));
     if (!frame) throw new Error("portal frame missing");
-    const r = await frame.evaluate((data) => {
+    const r = await frame.evaluate(({ data, preapplied }) => {
       // Resolve the calendar the payload TARGETS - a page can hold
       // several, and both the already-there check and the repaint watcher
       // below must be about the same widget. Watching "the first
@@ -386,7 +393,12 @@ class InteractionSession {
       // model is already on the payload's range, there is nothing to do.
       const w = widgetOf(el);
       const mine = w && data[String(w.widgetData.widgetSettingId)];
-      if (mine && w.widgetData.data && String(w.widgetData.data.initial_date) === String(mine.initial_date)) {
+      if (
+        preapplied &&
+        mine &&
+        w.widgetData.data &&
+        String(w.widgetData.data.initial_date) === String(mine.initial_date)
+      ) {
         return { ok: true, already: true, widgets: Object.keys(data) };
       }
 
@@ -405,7 +417,7 @@ class InteractionSession {
         return { ok: false, reason: "updateCalendarData threw: " + e.message };
       }
       return { ok: true, widgets: Object.keys(data), before };
-    }, refreshCalenderData);
+    }, { data: refreshCalenderData, preapplied });
     if (!r.ok) {
       console.log("calendar payload not applied:", r.reason);
       return false;

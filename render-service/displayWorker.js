@@ -446,9 +446,36 @@ class DisplayWorker {
               this.log("no calendar payload and no visible change - nothing to publish");
             }
           } else {
-            await this.getSession().close("fresh page for capture");
-            await this.getSession().open(pageIndex);
-            if (await this.getSession().applyCalendar(payload)) {
+            // Capture the page we ALREADY have open - the one this swipe
+            // was dispatched into. It is a fully loaded portal showing
+            // this display; closing it and booting a replacement purely
+            // to take the screenshot cost ~2.8s, and worse, it serialized
+            // the portal's own ~2s repaint BEHIND that boot instead of
+            // letting it run from the moment we dispatched. Same pixels,
+            // several seconds sooner.
+            //
+            // Safety: applyCalendar with preapplied:false watches the
+            // TARGETED widget's own rendered text and will not return
+            // until it changes (or the wait times out), so the capture
+            // cannot outrun the repaint - which is the bug this path
+            // shipped the last time it was attempted.
+            let applied = false;
+            try {
+              applied = await this.getSession().applyCalendar(payload, { preapplied: false });
+            } catch (e) {
+              this.log("live page would not take the payload:", e.message);
+            }
+            if (!applied) {
+              // Fall back to the old behaviour rather than publish
+              // nothing: a fresh page with the range applied at load.
+              // Slower, always correct, now only paid when the live page
+              // refuses.
+              this.log("falling back to a fresh page for capture");
+              await this.getSession().close("fresh page for capture");
+              await this.getSession().open(pageIndex);
+              applied = await this.getSession().applyCalendar(payload, { preapplied: true });
+            }
+            if (applied) {
               await this.getSession().recapture();
               await this.publishFromDisk("interaction");
             }

@@ -107,7 +107,7 @@ function wireDiagnostics(page) {
 // ones nobody has written yet.
 const IDLE_PROBE = `(() => {
   if (window.__mmIdle) return;
-  const S = { pending: new Set(), track: false, trackUntil: 0, inTracked: false, lastMutation: Date.now() };
+  const S = { pending: new Set(), track: false, hardUntil: 0, inTracked: false, seen: 0, lastMutation: Date.now() };
   const st = window.setTimeout.bind(window);
   const ct = window.clearTimeout.bind(window);
   window.setTimeout = function (fn, delay) {
@@ -131,7 +131,17 @@ const IDLE_PROBE = `(() => {
     // right after we applied it, plus anything those spawn. Unrelated
     // recurring timers (clock ticks, refresh cadences) are ignored, or a
     // page that always has one pending would never look idle.
-    if (S.track && d <= 8000 && (Date.now() < S.trackUntil || S.inTracked)) S.pending.add(id);
+    // Track everything scheduled WHILE the payload is being applied (the
+    // window is closed explicitly when the apply returns, not after a
+    // guessed interval - $scope.$apply() runs a full digest first and
+    // outran a 600ms guess, so the calendar's 2000ms timer was missed
+    // and the page looked idle in 310ms), plus anything those callbacks
+    // schedule in turn, bounded so a self-rescheduling timer cannot keep
+    // the page "busy" forever.
+    if (d <= 8000 && (S.track || (S.inTracked && Date.now() < S.hardUntil))) {
+      S.pending.add(id);
+      S.seen++;
+    }
     return id;
   };
   window.clearTimeout = function (id) { S.pending.delete(id); return ct(id); };
@@ -161,8 +171,10 @@ async function markPortalWork(frame) {
       const S = window.__mmIdle;
       if (!S) return;
       S.pending.clear();
+      S.seen = 0;
       S.track = true;
-      S.trackUntil = Date.now() + 600;
+      // ceiling for follow-on work spawned by tracked callbacks
+      S.hardUntil = Date.now() + 6000;
       S.lastMutation = Date.now();
     })
     .catch(() => {});
@@ -176,6 +188,18 @@ async function awaitPortalIdle(frame, opts) {
   const cap = (opts && opts.capMs) || 8000;
   const t0 = Date.now();
   let timedOut = false;
+  // Close the scheduling window HERE: everything the apply scheduled is
+  // now counted, and timers started later (unrelated refresh cadences)
+  // are not. Report what was actually tracked - "idle in 310ms" told us
+  // nothing about whether the probe had seen the portal's work at all.
+  const stats = await frame
+    .evaluate(() => {
+      const S = window.__mmIdle;
+      if (!S) return null;
+      S.track = false;
+      return { pending: S.pending.size, seen: S.seen };
+    })
+    .catch(() => null);
   try {
     await frame.waitForFunction(
       (q) => {
@@ -189,14 +213,12 @@ async function awaitPortalIdle(frame, opts) {
   } catch (e) {
     timedOut = true;
   }
-  await frame
-    .evaluate(() => {
-      const S = window.__mmIdle;
-      if (S) S.track = false;
-    })
-    .catch(() => {});
   const waited = Date.now() - t0;
-  console.log("portal idle after " + waited + "ms" + (timedOut ? " (CAPPED - page never settled)" : ""));
+  console.log(
+    "portal idle after " + waited + "ms" +
+      (stats ? " (deferred callbacks tracked: " + stats.seen + ", pending at wait start: " + stats.pending + ")" : " (PROBE MISSING)") +
+      (timedOut ? " - CAPPED, page never settled" : ""),
+  );
   return waited;
 }
 

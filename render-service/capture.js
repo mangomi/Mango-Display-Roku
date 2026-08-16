@@ -107,51 +107,111 @@ function wireDiagnostics(page) {
 // ones nobody has written yet.
 const IDLE_PROBE = `(() => {
   if (window.__mmIdle) return;
-  const S = { pending: new Set(), track: false, hardUntil: 0, inTracked: false, seen: 0, lastMutation: Date.now() };
+  // "The portal has finished" means every kind of work a redraw can wait
+  // on, not just timers: a widget may redraw off a network response, an
+  // animation frame, or an image finishing decode. Anything missing here
+  // becomes a capture of a half-updated screen, which is the whole class
+  // of bug this exists to end.
+  const S = {
+    pending: new Set(),   // timers + animation frames still to run
+    net: 0,               // XHR/fetch in flight that we care about
+    track: false,         // true while a payload is being applied
+    activeUntil: 0,       // rolling window: extends while a cascade runs
+    hardUntil: 0,         // ceiling so nothing can pin the page busy
+    seen: 0,
+    lastMutation: Date.now(),
+  };
+  const now = () => Date.now();
+  // Work counts if it starts during the apply, or within a moment of
+  // other tracked work finishing - that is what makes a CASCADE (a timer
+  // that fetches, whose response schedules a redraw) hold the capture,
+  // while an unrelated background poll started later does not.
+  const wanted = () => (S.track || now() < S.activeUntil) && now() < S.hardUntil;
+  const chain = () => { S.activeUntil = now() + 350; };
+
   const st = window.setTimeout.bind(window);
   const ct = window.clearTimeout.bind(window);
   window.setTimeout = function (fn, delay) {
     const d = Number(delay) || 0;
-    const args = Array.prototype.slice.call(arguments, 2);
     if (typeof fn !== "function") return st.apply(null, arguments);
+    const args = Array.prototype.slice.call(arguments, 2);
     let id;
     const wrapped = function () {
       S.pending.delete(id);
-      // work scheduled BY this callback belongs to the same cascade
-      const prev = S.inTracked;
-      S.inTracked = true;
-      try {
-        return fn.apply(this, args);
-      } finally {
-        S.inTracked = prev;
-      }
+      try { return fn.apply(this, args); } finally { chain(); }
     };
     id = st(wrapped, d);
-    // Track only what this update caused: timers scheduled in the moments
-    // right after we applied it, plus anything those spawn. Unrelated
-    // recurring timers (clock ticks, refresh cadences) are ignored, or a
-    // page that always has one pending would never look idle.
-    // Track everything scheduled WHILE the payload is being applied (the
-    // window is closed explicitly when the apply returns, not after a
-    // guessed interval - $scope.$apply() runs a full digest first and
-    // outran a 600ms guess, so the calendar's 2000ms timer was missed
-    // and the page looked idle in 310ms), plus anything those callbacks
-    // schedule in turn, bounded so a self-rescheduling timer cannot keep
-    // the page "busy" forever.
-    if (d <= 8000 && (S.track || (S.inTracked && Date.now() < S.hardUntil))) {
-      S.pending.add(id);
-      S.seen++;
-    }
+    if (d <= 8000 && wanted()) { S.pending.add(id); S.seen++; }
     return id;
   };
   window.clearTimeout = function (id) { S.pending.delete(id); return ct(id); };
+
+  const raf = window.requestAnimationFrame && window.requestAnimationFrame.bind(window);
+  if (raf) {
+    window.requestAnimationFrame = function (fn) {
+      let id;
+      const wrapped = function (t) {
+        S.pending.delete("raf" + id);
+        try { return fn(t); } finally { chain(); }
+      };
+      id = raf(wrapped);
+      if (wanted()) { S.pending.add("raf" + id); S.seen++; }
+      return id;
+    };
+  }
+
+  // A widget that redraws when its data arrives - rather than on a timer
+  // - is invisible to timer tracking alone.
+  const XHR = window.XMLHttpRequest;
+  if (XHR && XHR.prototype && XHR.prototype.send) {
+    const send = XHR.prototype.send;
+    XHR.prototype.send = function () {
+      if (wanted()) {
+        S.net++; S.seen++;
+        let done = false;
+        const settle = () => { if (done) return; done = true; S.net--; chain(); };
+        this.addEventListener("loadend", settle);
+        // belt and braces: a request that never fires loadend must not
+        // hold the capture open past the ceiling
+        st(() => { if (!done) settle(); }, 8000);
+      }
+      return send.apply(this, arguments);
+    };
+  }
+  if (window.fetch) {
+    const f = window.fetch.bind(window);
+    window.fetch = function () {
+      if (!wanted()) return f.apply(null, arguments);
+      S.net++; S.seen++;
+      let done = false;
+      const settle = () => { if (done) return; done = true; S.net--; chain(); };
+      st(() => settle(), 8000);
+      return f.apply(null, arguments).then(
+        (r) => { settle(); return r; },
+        (e) => { settle(); throw e; },
+      );
+    };
+  }
+
   try {
-    new MutationObserver(() => { S.lastMutation = Date.now(); }).observe(document.documentElement, {
+    new MutationObserver(() => { S.lastMutation = now(); }).observe(document.documentElement, {
       subtree: true, childList: true, characterData: true, attributes: true,
     });
   } catch (e) {}
   window.__mmIdle = S;
 })()`;
+
+// Images are checked at wait time rather than tracked: a broken URL
+// still resolves (the error event marks it complete), so this cannot
+// hang on the portal's known 403 placeholders.
+const IDLE_TEST = `(q => {
+  const S = window.__mmIdle;
+  if (!S) return true;
+  if (S.pending.size || S.net > 0) return false;
+  const imgs = document.images || [];
+  for (let i = 0; i < imgs.length; i++) if (!imgs[i].complete) return false;
+  return Date.now() - S.lastMutation >= q;
+})`;
 
 async function installIdleProbe(frame) {
   try {
@@ -197,26 +257,22 @@ async function awaitPortalIdle(frame, opts) {
       const S = window.__mmIdle;
       if (!S) return null;
       S.track = false;
-      return { pending: S.pending.size, seen: S.seen };
+      // the ceiling starts from the moment we begin waiting
+      S.hardUntil = Date.now() + 8000;
+      return { pending: S.pending.size, net: S.net, seen: S.seen };
     })
     .catch(() => null);
   try {
-    await frame.waitForFunction(
-      (q) => {
-        const S = window.__mmIdle;
-        if (!S) return true;
-        return S.pending.size === 0 && Date.now() - S.lastMutation >= q;
-      },
-      quiet,
-      { timeout: cap, polling: 100 },
-    );
+    await frame.waitForFunction(IDLE_TEST, quiet, { timeout: cap, polling: 100 });
   } catch (e) {
     timedOut = true;
   }
   const waited = Date.now() - t0;
   console.log(
     "portal idle after " + waited + "ms" +
-      (stats ? " (deferred callbacks tracked: " + stats.seen + ", pending at wait start: " + stats.pending + ")" : " (PROBE MISSING)") +
+      (stats
+        ? " (tracked " + stats.seen + " deferred, pending at wait start: " + stats.pending + " timers/frames + " + stats.net + " requests)"
+        : " (PROBE MISSING)") +
       (timedOut ? " - CAPPED, page never settled" : ""),
   );
   return waited;

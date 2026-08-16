@@ -12,7 +12,7 @@
  * idle timeout - so the cost is per active user, not per display.
  */
 const { chromium } = require("playwright");
-const { openHarness, capturePage, wireDiagnostics } = require("./capture");
+const { openHarness, capturePage, wireDiagnostics, markPortalWork, awaitPortalIdle } = require("./capture");
 
 // How long a warm portal page survives without gestures. Two minutes
 // meant the FIRST swipe after any pause paid a full cold open (~4-7s on
@@ -363,6 +363,8 @@ class InteractionSession {
     const preapplied = !!(opts && opts.preapplied);
     const frame = this.page.frames().find((f) => f.url().includes("designer=true"));
     if (!frame) throw new Error("portal frame missing");
+    // attribute the portal's deferred redraws to this payload
+    await markPortalWork(frame);
     const r = await frame.evaluate(({ data, preapplied }) => {
       // Resolve the calendar the payload TARGETS - a page can hold
       // several, and both the already-there check and the repaint watcher
@@ -431,28 +433,15 @@ class InteractionSession {
       return true;
     }
 
-    // The repaint is deferred behind a 2s $timeout inside the portal, so
-    // give it time to land - watching the TARGETED widget, and do NOT
-    // require the text to change (an identical-looking range repaints
-    // nothing; treating that as failure once meant half of all swipes
-    // were never published).
-    let moved = false;
-    try {
-      await frame.waitForFunction(
-        (prev) => {
-          const el = window.__mmApplyWatch;
-          return el && (el.innerText || "").replace(/\s+/g, " ").slice(0, 60) !== prev;
-        },
-        r.before,
-        { timeout: 3000 },
-      );
-      moved = true;
-    } catch (e) {}
-    await this.page.waitForTimeout(600);
-    console.log(
-      "calendar payload applied to widget(s)", r.widgets.join(","),
-      moved ? "- view moved" : "- already on that range",
-    );
+    // Wait for the portal to FINISH redrawing, not just to start. The
+    // old test here - "the widget's text changed" - is satisfied by the
+    // immediate $apply, while the calendar's contents are redrawn ~2.4s
+    // later behind two chained timeouts. This path got away with it
+    // because capture and settle usually overran that window; it was
+    // luck, not correctness, and the fast path proved what happens
+    // without it.
+    await awaitPortalIdle(frame, { quietMs: 300, capMs: 8000 });
+    console.log("calendar payload applied to widget(s)", r.widgets.join(","), "- portal settled");
     return true;
   }
 

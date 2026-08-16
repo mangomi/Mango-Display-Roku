@@ -12,7 +12,7 @@
  * falls back to a normal cold render, which is always correct.
  */
 const { chromium } = require("playwright");
-const { openHarness, capturePage, wireDiagnostics } = require("./capture");
+const { openHarness, capturePage, wireDiagnostics, markPortalWork, awaitPortalIdle } = require("./capture");
 
 // socket payload key -> the portal's own handler for it, taken from
 // mainController's own socket dispatch so a warm page ends up in exactly
@@ -113,6 +113,8 @@ class RenderPool {
     const e = await this.pageFor(index, false);
     const frame = e.page.frames().find((f) => f.url().includes("designer=true"));
     if (!frame) return false;
+    // start attributing deferred work to this payload before applying it
+    await markPortalWork(frame);
     const ok = await frame.evaluate(
       ({ data, map }) => {
         const el = document.querySelector("[ng-app], body");
@@ -162,26 +164,6 @@ class RenderPool {
           if (want && w.widgetData.data) {
             alreadyThere = String(w.widgetData.data.initial_date) === String(want.initial_date);
           }
-        }
-
-        // Watch the whole document for mutations so the capture can wait
-        // for the page to go QUIET, not merely for the first flicker of
-        // change. Applying a payload updates the model almost instantly;
-        // the widgets keep redrawing for a second or more afterwards, and
-        // photographing that gap published half-drawn pages - a blank
-        // quote panel, a clipped header, and a calendar without the event
-        // that triggered the update.
-        window.__mmLastMutation = Date.now();
-        if (!window.__mmMo) {
-          window.__mmMo = new MutationObserver(() => {
-            window.__mmLastMutation = Date.now();
-          });
-          window.__mmMo.observe(document.body, {
-            subtree: true,
-            childList: true,
-            characterData: true,
-            attributes: true,
-          });
         }
 
         let applied = 0;
@@ -245,31 +227,13 @@ class RenderPool {
       console.log("pool page " + index + ": wanted " + wanted + ", page now on " + now);
     }
     // Whatever the payload was, do not photograph a page that is still
-    // redrawing. The updaters return the moment the MODEL changes; the
-    // widgets carry on rendering well past that, and capturing the gap
-    // published half-drawn pages. Wait for the DOM to hold still.
-    await this.settle(frame, e.page);
+    // redrawing. The updaters return the moment the MODEL changes; a
+    // calendar's real redraw lands ~2.4s later behind two chained
+    // timeouts, and capturing that gap published the user's calendar
+    // WITHOUT the event they had just added. Wait for the deferred work
+    // this payload scheduled to drain and the DOM to hold still.
+    await awaitPortalIdle(frame, { quietMs: 300, capMs: 8000 });
     return true;
-  }
-
-  // Resolves once the page has gone QUIET_MS without a DOM mutation, or
-  // at the cap. A ticking clock mutates once a second, so a short quiet
-  // window is reachable; anything that never settles still captures at
-  // the cap rather than hanging the update.
-  async settle(frame, page, quietMs, capMs) {
-    const QUIET = quietMs || 400;
-    const CAP = capMs || 3000;
-    const t0 = Date.now();
-    await frame
-      .waitForFunction(
-        (quiet) => Date.now() - (window.__mmLastMutation || 0) >= quiet,
-        QUIET,
-        { timeout: CAP, polling: 100 },
-      )
-      .catch(() => {});
-    const waited = Date.now() - t0;
-    if (waited >= CAP - 100) console.log("settle: page never went quiet, capturing at the " + CAP + "ms cap");
-    return waited;
   }
 
   async capture(index) {

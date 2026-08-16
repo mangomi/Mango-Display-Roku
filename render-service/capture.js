@@ -87,6 +87,119 @@ function wireDiagnostics(page) {
   });
 }
 
+// ---- portal idle probe --------------------------------------------------
+//
+// The portal updates in TWO stages: a socket payload changes the model and
+// Angular re-binds immediately, but the widget's real redraw is deferred.
+// A calendar is the worst case - updateCalendarData schedules
+// initializeCalendar 2000ms out, which schedules updatedCalendarView a
+// further 400ms out - so for ~2.4s the page shows NEW header text around
+// OLD contents. Every readiness test we had (text changed / DOM quiet)
+// is satisfied inside that gap, so captures published stale widgets: a
+// calendar event the user had just added was missing, and one they had
+// deleted was still there.
+//
+// Rather than special-case the calendar's magic numbers, this tracks the
+// WORK ITSELF. setTimeout is wrapped so we can see the deferred callbacks
+// a payload schedules - and the ones those schedule in turn - and the
+// capture waits until that whole cascade has drained and the DOM has
+// stopped changing. Any widget with any deferral is covered, including
+// ones nobody has written yet.
+const IDLE_PROBE = `(() => {
+  if (window.__mmIdle) return;
+  const S = { pending: new Set(), track: false, trackUntil: 0, inTracked: false, lastMutation: Date.now() };
+  const st = window.setTimeout.bind(window);
+  const ct = window.clearTimeout.bind(window);
+  window.setTimeout = function (fn, delay) {
+    const d = Number(delay) || 0;
+    const args = Array.prototype.slice.call(arguments, 2);
+    if (typeof fn !== "function") return st.apply(null, arguments);
+    let id;
+    const wrapped = function () {
+      S.pending.delete(id);
+      // work scheduled BY this callback belongs to the same cascade
+      const prev = S.inTracked;
+      S.inTracked = true;
+      try {
+        return fn.apply(this, args);
+      } finally {
+        S.inTracked = prev;
+      }
+    };
+    id = st(wrapped, d);
+    // Track only what this update caused: timers scheduled in the moments
+    // right after we applied it, plus anything those spawn. Unrelated
+    // recurring timers (clock ticks, refresh cadences) are ignored, or a
+    // page that always has one pending would never look idle.
+    if (S.track && d <= 8000 && (Date.now() < S.trackUntil || S.inTracked)) S.pending.add(id);
+    return id;
+  };
+  window.clearTimeout = function (id) { S.pending.delete(id); return ct(id); };
+  try {
+    new MutationObserver(() => { S.lastMutation = Date.now(); }).observe(document.documentElement, {
+      subtree: true, childList: true, characterData: true, attributes: true,
+    });
+  } catch (e) {}
+  window.__mmIdle = S;
+})()`;
+
+async function installIdleProbe(frame) {
+  try {
+    await frame.evaluate(IDLE_PROBE);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Call immediately BEFORE applying a payload, so the deferred work it
+// schedules is attributed to it.
+async function markPortalWork(frame) {
+  await installIdleProbe(frame);
+  await frame
+    .evaluate(() => {
+      const S = window.__mmIdle;
+      if (!S) return;
+      S.pending.clear();
+      S.track = true;
+      S.trackUntil = Date.now() + 600;
+      S.lastMutation = Date.now();
+    })
+    .catch(() => {});
+}
+
+// Resolves when the cascade has drained AND the DOM has held still, so a
+// screenshot taken after this shows what the user would see. Bounded: a
+// page that never settles still publishes rather than hanging the update.
+async function awaitPortalIdle(frame, opts) {
+  const quiet = (opts && opts.quietMs) || 300;
+  const cap = (opts && opts.capMs) || 8000;
+  const t0 = Date.now();
+  let timedOut = false;
+  try {
+    await frame.waitForFunction(
+      (q) => {
+        const S = window.__mmIdle;
+        if (!S) return true;
+        return S.pending.size === 0 && Date.now() - S.lastMutation >= q;
+      },
+      quiet,
+      { timeout: cap, polling: 100 },
+    );
+  } catch (e) {
+    timedOut = true;
+  }
+  await frame
+    .evaluate(() => {
+      const S = window.__mmIdle;
+      if (S) S.track = false;
+    })
+    .catch(() => {});
+  const waited = Date.now() - t0;
+  console.log("portal idle after " + waited + "ms" + (timedOut ? " (CAPPED - page never settled)" : ""));
+  return waited;
+}
+
 async function openHarness(page, opts) {
   const { url, width, height, outWidth, outHeight, stateDir } = opts;
   const th0 = Date.now();
@@ -164,6 +277,7 @@ async function applyCalendarOverride(page, stateDir) {
   if (!saved || !Object.keys(saved).length) return;
   const frame = page.frames().find((f) => f.url().includes("designer=true"));
   if (!frame) return;
+  await markPortalWork(frame);
   try {
     const res = await frame.evaluate((data) => {
       // Only the page being rendered matters. Designer mode keeps every
@@ -206,19 +320,10 @@ async function applyCalendarOverride(page, stateDir) {
     if (res.skip) return;
     // the portal defers its repaint behind a 2s timeout, so this is a
     // short wait for a change we know is coming, not a blind timeout
-    await frame
-      .waitForFunction(
-        () => {
-          const list = window.__mmOverrideWatch || [];
-          return list.every(
-            (w) => (w.el.innerText || "").replace(/\s+/g, " ").slice(0, 60) !== w.before,
-          );
-        },
-        null,
-        { timeout: 3500 },
-      )
-      .catch(() => {});
-    await page.waitForTimeout(200);
+    // Wait for the portal to FINISH, not merely to start: the text-change
+    // test this used to do is satisfied by the immediate $apply, ~2.4s
+    // before the calendar redraws its contents.
+    await awaitPortalIdle(frame, { quietMs: 300, capMs: 8000 });
     console.log("calendar: re-applied the scrolled range to widget(s)", res.ids.join(","));
   } catch (e) {
     console.error("calendar override failed:", e.message);
@@ -404,4 +509,12 @@ async function capturePage(page, opts) {
   return manifest;
 }
 
-module.exports = { openHarness, capturePage, extractPageMeta, wireDiagnostics };
+module.exports = {
+  openHarness,
+  capturePage,
+  extractPageMeta,
+  wireDiagnostics,
+  installIdleProbe,
+  markPortalWork,
+  awaitPortalIdle,
+};

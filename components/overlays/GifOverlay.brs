@@ -41,11 +41,27 @@ sub onConfig()
     if cfg.frameMs <> invalid then ms = Int(cfg.frameMs)
     if ms < 33 then ms = 33 ' cap at ~30fps
     m.tick.duration = ms / 1000.0
+
+    ' Start stepping NOW rather than waiting for loadStatus to change.
+    ' A sheet whose texture Roku already has cached - the normal case when
+    ' overlays are rebuilt and the sprite sheets have not changed - can be
+    ' "ready" before the observer above is even attached, and setting a
+    ' field to the value it already holds fires NO change event. The timer
+    ' then never started and the GIF sat on frame 0 for good: every GIF
+    ' and every weather icon frozen while the clock and photos, which arm
+    ' their timers directly, kept running.
+    ' Stepping before the pixels arrive is harmless - it only moves an
+    ' empty poster - so the load event is now a bonus, not the trigger.
+    startTicking()
+end sub
+
+sub startTicking()
+    if m.frameCount > 1 and m.tick.control <> "start" then m.tick.control = "start"
 end sub
 
 sub onStripLoad()
-    if m.strip.loadStatus = "ready" and m.frameCount > 1
-        m.tick.control = "start"
+    if m.strip.loadStatus = "ready"
+        startTicking()
     else if m.strip.loadStatus = "failed"
         print "[Mango] gif strip failed: "; m.strip.uri
     end if

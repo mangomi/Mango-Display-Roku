@@ -136,19 +136,52 @@ class RenderPool {
         }
         if (!sc) return false;
 
-        // read the BEFORE state: after the updaters run, the model already
-        // holds the new range and this comparison would always say yes
-        const calBefore = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].find(
+        // Read the BEFORE state from the calendar the payload TARGETS.
+        // "The first visible calendar" is a different widget whenever a
+        // page holds more than one, and watching it meant the repaint
+        // wait below was satisfied by a widget that never changed.
+        const widgetOf = (n) => {
+          let w = window.angular.element(n).scope();
+          while (w && !w.widgetData) w = w.$parent;
+          return w && w.widgetData ? w : null;
+        };
+        const cals = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].filter(
           (n) => getComputedStyle(n).visibility !== "hidden" && n.offsetParent !== null,
         );
+        const wantIds = data.refreshCalenderData ? Object.keys(data.refreshCalenderData).map(String) : [];
+        const calBefore =
+          cals.find((n) => {
+            const w = widgetOf(n);
+            return w && wantIds.indexOf(String(w.widgetData.widgetSettingId)) >= 0;
+          }) || null;
+        window.__mmCalWatch = calBefore;
         let alreadyThere = false;
         if (calBefore && data.refreshCalenderData) {
-          let w = window.angular.element(calBefore).scope();
-          while (w && !w.widgetData) w = w.$parent;
-          const want = w && w.widgetData && data.refreshCalenderData[String(w.widgetData.widgetSettingId)];
+          const w = widgetOf(calBefore);
+          const want = w && data.refreshCalenderData[String(w.widgetData.widgetSettingId)];
           if (want && w.widgetData.data) {
             alreadyThere = String(w.widgetData.data.initial_date) === String(want.initial_date);
           }
+        }
+
+        // Watch the whole document for mutations so the capture can wait
+        // for the page to go QUIET, not merely for the first flicker of
+        // change. Applying a payload updates the model almost instantly;
+        // the widgets keep redrawing for a second or more afterwards, and
+        // photographing that gap published half-drawn pages - a blank
+        // quote panel, a clipped header, and a calendar without the event
+        // that triggered the update.
+        window.__mmLastMutation = Date.now();
+        if (!window.__mmMo) {
+          window.__mmMo = new MutationObserver(() => {
+            window.__mmLastMutation = Date.now();
+          });
+          window.__mmMo.observe(document.body, {
+            subtree: true,
+            childList: true,
+            characterData: true,
+            attributes: true,
+          });
         }
 
         let applied = 0;
@@ -187,27 +220,22 @@ class RenderPool {
     // of the cost of a duplicate push.
     const slow = ok.calVisible && (payload.refreshCalenderData || payload.refreshMealPlan) && !ok.alreadyThere;
     if (slow) {
-      // Watch for the repaint rather than sleeping past it. The portal
-      // defers it behind a 2s $timeout, so the fixed wait was always the
-      // worst case plus a margin; this returns the moment it lands.
+      // The targeted widget must actually show new text. The portal
+      // defers its calendar repaint behind a ~2s timeout, so this is a
+      // wait for something we know is coming, not a blind sleep.
       await frame
         .waitForFunction(
           (prev) => {
-            const n = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].find(
-              (c) => getComputedStyle(c).visibility !== "hidden",
-            );
+            const n = window.__mmCalWatch;
             return n && (n.innerText || "").replace(/\s+/g, " ").slice(0, 60) !== prev;
           },
           ok.calText,
-          { timeout: 3000, polling: 100 },
+          { timeout: 4000, polling: 100 },
         )
         .catch(() => {});
-      await e.page.waitForTimeout(150);
       const now = await frame
         .evaluate(() => {
-          const n = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].find(
-            (c) => getComputedStyle(c).visibility !== "hidden",
-          );
+          const n = window.__mmCalWatch;
           if (!n) return "none";
           let w = window.angular.element(n).scope();
           while (w && !w.widgetData) w = w.$parent;
@@ -215,10 +243,33 @@ class RenderPool {
         })
         .catch(() => "err");
       console.log("pool page " + index + ": wanted " + wanted + ", page now on " + now);
-    } else {
-      await e.page.waitForTimeout(350);
     }
+    // Whatever the payload was, do not photograph a page that is still
+    // redrawing. The updaters return the moment the MODEL changes; the
+    // widgets carry on rendering well past that, and capturing the gap
+    // published half-drawn pages. Wait for the DOM to hold still.
+    await this.settle(frame, e.page);
     return true;
+  }
+
+  // Resolves once the page has gone QUIET_MS without a DOM mutation, or
+  // at the cap. A ticking clock mutates once a second, so a short quiet
+  // window is reachable; anything that never settles still captures at
+  // the cap rather than hanging the update.
+  async settle(frame, page, quietMs, capMs) {
+    const QUIET = quietMs || 400;
+    const CAP = capMs || 3000;
+    const t0 = Date.now();
+    await frame
+      .waitForFunction(
+        (quiet) => Date.now() - (window.__mmLastMutation || 0) >= quiet,
+        QUIET,
+        { timeout: CAP, polling: 100 },
+      )
+      .catch(() => {});
+    const waited = Date.now() - t0;
+    if (waited >= CAP - 100) console.log("settle: page never went quiet, capturing at the " + CAP + "ms cap");
+    return waited;
   }
 
   async capture(index) {

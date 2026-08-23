@@ -32,7 +32,11 @@ const { capturePage } = require("./capture");
  * ticking once a second must never cost a screenshot; the same goes for
  * countdowns and GIFs, which the TV plays from sprite sheets. This is
  * exactly why the signal carries widgetType. */
-const DEVICE_DRAWN = new Set(["clock", "countdown", "gif", "day-rollover"]);
+/* NOT day-rollover: the device draws the clock itself, but midnight also
+ * moves the calendar's "today" highlight and its week range, and those
+ * are baked into the captured image. Ignoring it left the display showing
+ * yesterday until the next catch-up render. */
+const DEVICE_DRAWN = new Set(["clock", "countdown", "gif"]);
 
 /* A live portal costs real memory (~a browser tab per display) and holds
  * the display's socket, so it runs ONLY while a TV is actually watching.
@@ -138,6 +142,13 @@ class PaintedWorker extends DisplayWorker {
     if (message.source === "reload") {
       this.log("change: full reload - capturing every page");
       this.queueCapture(null, "portal reload");
+      return;
+    }
+    /* The date changing affects EVERY page that shows one, not just the
+     * page the portal happens to be on. */
+    if (type === "day-rollover") {
+      this.log("change: day rollover - capturing every page");
+      this.queueCapture(null, "midnight");
       return;
     }
     const page = typeof message.pageIndex === "number" ? message.pageIndex : null;

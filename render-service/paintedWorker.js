@@ -38,6 +38,9 @@ const { capturePage } = require("./capture");
  * yesterday until the next catch-up render. */
 const DEVICE_DRAWN = new Set(["clock", "countdown", "gif"]);
 
+/* Only these raise the TV's spinner - see renderPages */
+const SHOWS_SPINNER = new Set(["interaction", "layout change"]);
+
 /* A live portal costs real memory (~a browser tab per display) and holds
  * the display's socket, so it runs ONLY while a TV is actually watching.
  * The channel long-polls about every 55s, so three missed polls means the
@@ -140,8 +143,12 @@ class PaintedWorker extends DisplayWorker {
       return;
     }
     if (message.source === "reload") {
-      this.log("change: full reload - capturing every page");
-      this.queueCapture(null, "portal reload");
+      /* the first one is the portal booting; later ones mean someone
+       * applied a new layout, which IS worth showing a spinner for */
+      const reason = this.sawFirstReload ? "layout change" : "startup";
+      this.sawFirstReload = true;
+      this.log("change: full reload - capturing every page (" + reason + ")");
+      this.queueCapture(null, reason);
       return;
     }
     /* The date changing affects EVERY page that shows one, not just the
@@ -199,8 +206,15 @@ class PaintedWorker extends DisplayWorker {
   async renderPages(indexes, reason) {
     if (!this.portal || !this.portal.ready) return;
     this.rendering = true;
-    const AUTO = ["startup", "scheduled", "midnight", "portal reload"];
-    if (!AUTO.includes(reason)) this.setBusy(true, reason);
+    /* The spinner means "the change YOU made is being applied", so it
+     * belongs to user-initiated work only: a gesture on the TV, or an
+     * edit someone just made in the webapp. Data arriving on its own -
+     * weather, quotes, a calendar syncing from Google - must stay silent,
+     * or the display spins at people all day for changes they did not
+     * make. It also has nowhere sensible to point: the spinner sits on
+     * the widget a gesture touched, and background updates have no
+     * gesture, so it fell back to the middle of the screen. */
+    if (SHOWS_SPINNER.has(reason)) this.setBusy(true, reason);
     const release = await this.gate.acquire();
     const t0 = Date.now();
     try {

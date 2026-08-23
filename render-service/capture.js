@@ -497,15 +497,12 @@ async function capturePage(page, opts) {
 
   // layered mode: a rotating background or a video widget needs the
   // widgets captured as a transparent PNG
-  /* Painted mode is ALWAYS layered: the portal renders with a transparent
-   * background because the device draws the page photo underneath. A JPEG
-   * has no alpha, so Chromium flattens that transparency onto WHITE - and
-   * the portal's white text (dates, the greeting) then vanishes into it.
-   * The page looked half-rendered when it was fully drawn and simply
-   * invisible. */
-  const painted = !!(portalFrame && portalFrame.url().includes("painted=true"));
-  const layered =
-    painted || groups.some((g) => g.handler.type === "background" && g.items.length);
+  /* Transparency is per PAGE, not per mode: only a page whose background
+   * the device draws underneath may be captured with alpha. Forcing it
+   * for every painted page cost every OTHER page its background - they
+   * published transparent with nothing behind them and went black on the
+   * TV. */
+  const layered = groups.some((g) => g.handler.type === "background" && g.items.length);
   let outPath = out;
   if (layered && portalFrame) {
     await portalFrame.addStyleTag({

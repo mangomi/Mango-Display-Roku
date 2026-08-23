@@ -190,28 +190,23 @@
     };
   };
 
-  /* The page background is transparent because the device draws the page
-   * photo underneath the captured PNG.
+  /* Deliberately no styling changes at all.
    *
-   * NOTE: this deliberately does NOT disable animations. An earlier
-   * version did, for capture determinism, and it broke the calendar: the
-   * portal renders the old and new date range together during a scroll
-   * and removes the old copy when the animation ENDS. With animations
-   * off that event never fired, so both copies stayed - the calendar
-   * appeared doubled and mirrored on the TV, permanently. Determinism
-   * comes from the ready signal now: we capture when the portal says it
-   * has settled, which is after its animations have run. */
-  function freeze() {
-    var css = "html,body,#main,#pageTransition{background-color:transparent !important;}";
-    var tag = document.createElement("style");
-    tag.setAttribute("data-mm-painted", "true");
-    tag.appendChild(document.createTextNode(css));
-    (document.head || document.documentElement).appendChild(tag);
-  }
+   * Two earlier attempts here both broke the TV, and both are worth
+   * remembering:
+   *
+   *   - disabling animations: the portal draws the old and new calendar
+   *     range together during a scroll and drops the old copy on
+   *     animationend, which then never fired. The calendar showed
+   *     doubled and mirrored, permanently.
+   *
+   *   - forcing a transparent background: correct for pages whose photo
+   *     the device draws underneath, wrong for every other page, which
+   *     lost its background entirely and went black.
+   *
+   * Both are decisions only the client can make, per page, because only
+   * the client knows what it will draw natively. It already injects
+   * transparency for exactly those pages. This file reports what changed
+   * and nothing else. */
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", freeze);
-  } else {
-    freeze();
-  }
 })();

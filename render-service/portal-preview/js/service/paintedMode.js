@@ -190,15 +190,19 @@
     };
   };
 
-  /* No animation: the device animates its own layers, hundreds of live
-   * portals each running CSS animations forever is pure waste, and it
-   * makes captures deterministic - a screenshot can never land
-   * mid-transition. The transparent background lets the device draw the
-   * page background photo beneath the captured PNG. */
+  /* The page background is transparent because the device draws the page
+   * photo underneath the captured PNG.
+   *
+   * NOTE: this deliberately does NOT disable animations. An earlier
+   * version did, for capture determinism, and it broke the calendar: the
+   * portal renders the old and new date range together during a scroll
+   * and removes the old copy when the animation ENDS. With animations
+   * off that event never fired, so both copies stayed - the calendar
+   * appeared doubled and mirrored on the TV, permanently. Determinism
+   * comes from the ready signal now: we capture when the portal says it
+   * has settled, which is after its animations have run. */
   function freeze() {
-    var css =
-      "*,*::before,*::after{animation:none !important;transition:none !important;}" +
-      "html,body,#main,#pageTransition{background-color:transparent !important;}";
+    var css = "html,body,#main,#pageTransition{background-color:transparent !important;}";
     var tag = document.createElement("style");
     tag.setAttribute("data-mm-painted", "true");
     tag.appendChild(document.createTextNode(css));

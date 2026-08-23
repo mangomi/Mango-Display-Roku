@@ -20,10 +20,20 @@ const nativeWidgets = require("./nativeWidgets");
 // of them.
 const SCHEMA_VERSION = 1;
 
+/* The portal is an IFRAME in designer mode (the old pipeline) and the
+ * PAGE ITSELF in painted mode, where it runs live at top level. Every
+ * extractor needs whichever one is actually holding the portal. */
+function portalFrameOf(page) {
+  const embedded = page.frames().find((f) => f.url().includes("designer=true"));
+  if (embedded) return embedded;
+  const main = page.mainFrame();
+  return main && main.url().includes("painted=true") ? main : null;
+}
+
 // `groups` lives on the MainCtrl child scope, so walk the scope tree
 // from $rootScope (works even with Angular debug info off)
 async function extractPageMeta(page) {
-  const portalFrame = page.frames().find((f) => f.url().includes("designer=true"));
+  const portalFrame = portalFrameOf(page);
   if (!portalFrame) return null;
   try {
     return await portalFrame.evaluate(() => {
@@ -353,7 +363,7 @@ async function applyCalendarOverride(page, stateDir) {
     return;
   }
   if (!saved || !Object.keys(saved).length) return;
-  const frame = page.frames().find((f) => f.url().includes("designer=true"));
+  const frame = portalFrameOf(page);
   if (!frame) return;
   await markPortalWork(frame);
   try {
@@ -428,7 +438,7 @@ async function capturePage(page, opts) {
   const pageIdxMatch = url.match(/[?&]page=(\d+)/);
   const pageIdx = pageIdxMatch ? parseInt(pageIdxMatch[1], 10) : 0;
   const groups = [];
-  const portalFrame = page.frames().find((f) => f.url().includes("designer=true"));
+  const portalFrame = portalFrameOf(page);
 
   if (portalFrame) {
     for (const handler of nativeWidgets.handlers) {
@@ -487,7 +497,15 @@ async function capturePage(page, opts) {
 
   // layered mode: a rotating background or a video widget needs the
   // widgets captured as a transparent PNG
-  const layered = groups.some((g) => g.handler.type === "background" && g.items.length);
+  /* Painted mode is ALWAYS layered: the portal renders with a transparent
+   * background because the device draws the page photo underneath. A JPEG
+   * has no alpha, so Chromium flattens that transparency onto WHITE - and
+   * the portal's white text (dates, the greeting) then vanishes into it.
+   * The page looked half-rendered when it was fully drawn and simply
+   * invisible. */
+  const painted = !!(portalFrame && portalFrame.url().includes("painted=true"));
+  const layered =
+    painted || groups.some((g) => g.handler.type === "background" && g.items.length);
   let outPath = out;
   if (layered && portalFrame) {
     await portalFrame.addStyleTag({
@@ -513,6 +531,19 @@ async function capturePage(page, opts) {
     layered,
     outScale: outWidth / width,
     reenableAnimations: async () => {
+      /* painted mode: the portal froze its own animations, so filming the
+       * weather icons means lifting THAT style, not ours */
+      if (portalFrame) {
+        await portalFrame
+          .evaluate(() => {
+            const tag = document.querySelector("style[data-mm-painted]");
+            if (tag) {
+              window.__mmPaintedFreeze = tag;
+              tag.remove();
+            }
+          })
+          .catch(() => {});
+      }
       if (state.noAnimStyle) {
         await state.noAnimStyle.evaluate((n) => n.remove()).catch(() => {});
         state.noAnimStyle = null;

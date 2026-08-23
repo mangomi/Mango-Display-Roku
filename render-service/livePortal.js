@@ -225,6 +225,105 @@ class LivePortal {
     return true;
   }
 
+  /* ---- gestures -----------------------------------------------------
+   * The portal is LIVE here, so its own click and swipe bindings work -
+   * no invoking Angular handlers by hand, and no intercepting the
+   * backend's socket reply to work out when the result arrived. Dispatch
+   * the gesture, then wait for the portal to say it has redrawn.
+   *
+   * Coordinates arrive in canvas space (1920x1080), which is also this
+   * page's CSS viewport, so they need no scaling.
+   * ------------------------------------------------------------------ */
+
+  async tap(x, y, id) {
+    const hit = await this.page.evaluate(
+      (pt) => {
+        const boxes = [...document.querySelectorAll("input.todocheckbox")].filter(
+          (c) => getComputedStyle(c).visibility !== "hidden",
+        );
+        const taskOf = (c) => {
+          const sc = window.angular.element(c).scope();
+          const model = (c.getAttribute("ng-model") || "").replace(/\.status\s*$/, "");
+          return sc && model ? sc.$eval(model) : null;
+        };
+        /* identity beats geometry: the list reshuffles as items complete,
+         * so the row the user pressed may have moved since that render */
+        let el = null;
+        if (pt.id) {
+          el = boxes.find((c) => {
+            const t = taskOf(c);
+            return t && String(t.id) === String(pt.id);
+          });
+        }
+        if (!el) {
+          const pad = 14;
+          el = boxes.find((c) => {
+            const r = c.getBoundingClientRect();
+            return pt.x >= r.x - pad && pt.x <= r.right + pad && pt.y >= r.y - pad && pt.y <= r.bottom + pad;
+          });
+        }
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      },
+      { x, y, id },
+    );
+    if (!hit) return { handled: false, reason: "no checkbox for id/point" };
+    /* a real click: the portal updates its model, calls the backend and
+     * redraws itself, exactly as it does for a finger on a touch TV */
+    await this.page.mouse.click(hit.x, hit.y);
+    return { handled: true, kind: "tap" };
+  }
+
+  async swipe(direction, x, y, id) {
+    const type = direction === "swipeup" ? "swipeup" : "swipedown";
+    const fired = await this.page.evaluate(
+      ({ pt, type }) => {
+        const els = [...document.querySelectorAll("[ng-swipe-up][ng-swipe-down]")].filter(
+          (e) => getComputedStyle(e).visibility !== "hidden" && e.offsetParent !== null,
+        );
+        let el = null;
+        if (pt.id) {
+          el = els.find((e) => {
+            let w = window.angular.element(e).scope();
+            while (w && !w.widgetData) w = w.$parent;
+            return w && w.widgetData && String(w.widgetData.widgetSettingId) === String(pt.id);
+          });
+        }
+        if (!el) {
+          el = els.find((e) => {
+            const r = e.getBoundingClientRect();
+            return pt.x >= r.x && pt.x <= r.right && pt.y >= r.y && pt.y <= r.bottom;
+          });
+        }
+        if (!el) return { ok: false, reason: "no swipe surface for id/point" };
+        const attr = type === "swipeup" ? "ng-swipe-up" : "ng-swipe-down";
+        const expr = el.getAttribute(attr);
+        if (!expr) return { ok: false, reason: "no " + attr + " on surface" };
+        const sc = window.angular.element(el).scope();
+        if (!sc) return { ok: false, reason: "no scope on surface" };
+        /* the marker updateCalendarView checks for: it means "move the
+         * date range", not "scroll the widget" */
+        const evt = {
+          type: type,
+          target: el,
+          pointerType: "touch",
+          mangoMirrorRemoteGesture: "arrowDoubleTap",
+          preventDefault() {},
+          stopPropagation() {},
+        };
+        const run = () => sc.$eval(expr, { $event: evt });
+        const inDigest = !!(sc.$root && sc.$root.$$phase) || !!sc.$$phase;
+        if (inDigest) run();
+        else sc.$apply(run);
+        return { ok: true };
+      },
+      { pt: { x, y, id }, type },
+    );
+    if (!fired.ok) return { handled: false, reason: fired.reason };
+    return { handled: true, kind: "calendar", direction: type };
+  }
+
   async close(why) {
     this.ready = false;
     const browser = this.browser;

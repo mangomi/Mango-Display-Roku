@@ -27,6 +27,7 @@ const http = require("http");
 const https = require("https");
 const path = require("path");
 const { DisplayWorker } = require("./displayWorker");
+const { PaintedWorker } = require("./paintedWorker");
 
 const env = (name, fallback) => process.env[name] || fallback;
 
@@ -171,8 +172,21 @@ function identityFrom(u) {
   };
 }
 
+/* Which architecture serves a display.
+ *
+ * PAINTED_DISPLAYS is a comma-separated list of device ids (or "all") that
+ * run the live portal: the portal owns the socket, reports what changed,
+ * and we only capture. Anything not listed keeps the original pipeline,
+ * so this can be rolled out one display at a time and rolled back by
+ * editing an environment variable rather than deploying code. */
+const PAINTED_LIST = (process.env.PAINTED_DISPLAYS || "").split(",").map((s) => s.trim()).filter(Boolean);
+function isPainted(deviceId) {
+  return PAINTED_LIST.includes("all") || PAINTED_LIST.includes(deviceId);
+}
+
 async function startWorker(cfg) {
-  const worker = new DisplayWorker({
+  const Worker = isPainted(cfg.deviceId) ? PaintedWorker : DisplayWorker;
+  const worker = new Worker({
     deviceId: cfg.deviceId,
     major: cfg.major,
     minor: cfg.minor,
@@ -186,7 +200,7 @@ async function startWorker(cfg) {
   });
   await worker.start();
   workers.set(cfg.deviceId, worker);
-  log("fleet:", workers.size, "worker(s)");
+  log("fleet:", workers.size, "worker(s)", isPainted(cfg.deviceId) ? "| " + cfg.deviceId + " is PAINTED (live portal)" : "");
   return worker;
 }
 
@@ -324,6 +338,10 @@ function banner() {
   log("socket", ENV.socketBase);
   log("data root", DATA_ROOT);
   log("render concurrency", RENDER_CONCURRENCY, "| idle eviction", Math.round(IDLE_EVICT_MS / 60000) + "min");
+  log("painted displays:", PAINTED_LIST.length ? PAINTED_LIST.join(",") : "(none - all on the original pipeline)");
+  if (PAINTED_LIST.length && process.env.PORTAL_PREVIEW_DIR) {
+    log("*** painted portal files come from " + process.env.PORTAL_PREVIEW_DIR + " (pre-merge) ***");
+  }
   log("environment:", prod ? "*** PRODUCTION ***" : "test");
 }
 

@@ -434,6 +434,13 @@
       status: function () {
         return window.mmScreenshotStatus || null;
       },
+      /* the DISPLAY's IANA timezone (from the widget list) - the client
+       * runs this page's browser in it so every local-time computation
+       * (day rollover, calendar "today", moment()) behaves exactly as on
+       * a TV in the user's home */
+      timeZoneId: function () {
+        return scope.timeZoneId || null;
+      },
       /* is this a good moment to screenshot? - nothing queued, nothing
        * loading. For captures the client takes on its own schedule (page
        * steps, catch-up renders), which no ready signal precedes. */

@@ -88,10 +88,98 @@ const clockHandler = {
   async extract(frame) {
     const raw = await frame.evaluate(() => {
       const out = [];
+
+      // The widget's OWN settings decide the format - the user's 12/24h
+      // toggle, the show-AM/PM toggle, the account language, the
+      // display timezone. The portal renders from exactly these, so the
+      // manifest must too; inferring them from the rendered text broke
+      // for meridiem-off clocks and for every non-English language.
+      const readSettings = (container) => {
+        try {
+          const sc = window.angular.element(container).scope();
+          let w = sc;
+          while (w && !w.widgetData) w = w.$parent;
+          const d = w && w.widgetData && w.widgetData.data;
+          if (!d) return null;
+          return {
+            hour24Format: d.hour24Format === true,
+            isMeridiemEnabled: d.isMeridiemEnabled === true,
+            userLanguage: d.user_language || "en",
+            timeZoneOffset: typeof d.timeZoneOffset === "number" ? d.timeZoneOffset : null,
+          };
+        } catch (e) {
+          return null;
+        }
+      };
+
+      // Everything language-shaped comes from the SAME Intl API the
+      // portal renders with, so the device composes exactly what the
+      // portal would have drawn - any language, meridiem prefixes
+      // (Japanese) included. The device only ticks the values.
+      const deriveFormat = (s) => {
+        try {
+          const lang = s.userLanguage;
+          const probe = (h, hour12) =>
+            new Intl.DateTimeFormat(lang, { hour: "numeric", minute: "2-digit", hour12: hour12, timeZone: "UTC" })
+              .formatToParts(new Date(Date.UTC(2026, 0, 5, h, 8)));
+          const am = probe(9, true);
+          const pm = probe(21, true);
+          const dpIdx = am.findIndex((p) => p.type === "dayPeriod");
+          const hourIdx = am.findIndex((p) => p.type === "hour");
+          const dpOf = (parts) => {
+            const p = parts.find((x) => x.type === "dayPeriod");
+            return p ? p.value : null;
+          };
+          const meridiemPrefix = dpIdx !== -1 && dpIdx < hourIdx;
+          let meridiemSpaced = false;
+          if (dpIdx !== -1) {
+            const adj = am[meridiemPrefix ? dpIdx + 1 : dpIdx - 1];
+            meridiemSpaced = !!(adj && adj.type === "literal" && /\s/.test(adj.value));
+          }
+          const hourLen = (parts) => {
+            const p = parts.find((x) => x.type === "hour");
+            return p ? p.value.length : 1;
+          };
+          // The tables MUST come from the composite format's own part
+          // values, not the standalone month/weekday formats: Japanese
+          // renders the month as a numeric part plus a literal 月 in the
+          // pattern, while the standalone format returns "1月" whole -
+          // mixing them would compose the 月 twice.
+          const dateFmt = new Intl.DateTimeFormat(lang, { weekday: "long", month: "long", day: "numeric", timeZone: "UTC" });
+          const partOf = (date, type) => {
+            const p = dateFmt.formatToParts(date).find((x) => x.type === type);
+            return p ? p.value : "";
+          };
+          const weekdays = [];
+          // 2026-01-04 is a Sunday; index 0 = Sunday, matching the
+          // device's day-of-week numbering
+          for (let d = 0; d < 7; d++) weekdays.push(partOf(new Date(Date.UTC(2026, 0, 4 + d)), "weekday"));
+          const months = [];
+          for (let mo = 0; mo < 12; mo++) months.push(partOf(new Date(Date.UTC(2026, mo, 15)), "month"));
+          const datePattern = dateFmt
+            .formatToParts(new Date(Date.UTC(2026, 0, 5)))
+            .map((p) => (p.type === "literal" ? { t: "literal", v: p.value } : { t: p.type }));
+          return {
+            am: dpOf(am) || "AM",
+            pm: dpOf(pm) || "PM",
+            meridiemPrefix: meridiemPrefix,
+            meridiemSpaced: meridiemSpaced,
+            padHour12: hourLen(am) === 2,
+            padHour24: hourLen(probe(9, false)) === 2,
+            weekdays: weekdays,
+            months: months,
+            datePattern: datePattern,
+          };
+        } catch (e) {
+          return null;
+        }
+      };
+
       // one #clock_<widgetSettingId>_<page> container per clock instance
       document.querySelectorAll('[id^="clock_"]').forEach((container) => {
         const m = container.id.match(/^clock_(\d+)_(\d+)$/);
         if (!m) return;
+        const settings = readSettings(container);
         const measure = (el) => {
           if (!el || el.offsetParent === null) return null;
           const r = el.getBoundingClientRect();
@@ -115,6 +203,8 @@ const clockHandler = {
         out.push({
           widgetSettingId: parseInt(id, 10),
           page: parseInt(page, 10),
+          settings: settings,
+          format: settings ? deriveFormat(settings) : null,
           time: measure(document.getElementById("time_" + id + "_" + page)),
           date: measure(document.getElementById("clockDate_" + id + "_" + page)),
         });
@@ -126,19 +216,34 @@ const clockHandler = {
       .filter((c) => c.time || c.date)
       .map((c) => {
         const elements = {};
-        const tzOffsetMinutes = c.time
-          ? deriveTzOffsetMinutes(c.time.text, c.date ? c.date.text : null)
-          : null;
+        // the settings are the truth; the text-derivation below is only
+        // the fallback for a scope that could not be read
+        const authoritative = !!(c.settings && c.format);
+        const tzOffsetMinutes =
+          authoritative && c.settings.timeZoneOffset != null
+            ? c.settings.timeZoneOffset
+            : c.time
+              ? deriveTzOffsetMinutes(c.time.text, c.date ? c.date.text : null)
+              : null;
         if (c.time) {
           const sample = c.time.text;
-          // No meridiem does NOT imply a 24-hour clock: a 12-hour display
-          // renders "8:45" bare. If the disambiguated wall clock says the
-          // capture happened at 13:00+ while the sample shows an hour of
-          // 12 or less, the display is proven 12-hour. (A morning capture
-          // cannot tell them apart; the next afternoon render heals it.)
-          let is24h = !/am|pm/i.test(sample);
-          if (is24h && tzOffsetMinutes != null && parseInt(sample, 10) <= 12 && localMinutesAt(tzOffsetMinutes) >= 780) {
-            is24h = false;
+          let is24h;
+          let padHour;
+          if (authoritative) {
+            is24h = c.settings.hour24Format;
+            padHour = is24h ? c.format.padHour24 : c.format.padHour12;
+          } else {
+            // No meridiem does NOT imply a 24-hour clock: a 12-hour
+            // display renders "8:45" bare. If the disambiguated wall
+            // clock says the capture happened at 13:00+ while the sample
+            // shows an hour of 12 or less, the display is proven
+            // 12-hour. (A morning capture cannot tell them apart; the
+            // next afternoon render heals it.)
+            is24h = !/am|pm/i.test(sample);
+            if (is24h && tzOffsetMinutes != null && parseInt(sample, 10) <= 12 && localMinutesAt(tzOffsetMinutes) >= 780) {
+              is24h = false;
+            }
+            padHour = is24h ? /^\d\d:/.test(sample) : /^0\d:/.test(sample);
           }
           elements.time = {
             rect: c.time.rect,
@@ -148,16 +253,27 @@ const clockHandler = {
             align: c.time.align,
             color: cssColorToHex(c.time.color),
             is24h,
-            // reproduce the sample's shape: zero-padded hour? AM/PM casing?
-            padHour: is24h ? /^\d\d:/.test(sample) : /^0\d:/.test(sample),
+            padHour,
+            // legacy field for channels that predate showMeridiem
             upperMeridiem: /AM|PM/.test(sample),
             sample,
+            // the user's toggles and language, verbatim: the device
+            // composes only the VALUES, in this format
+            ...(authoritative
+              ? {
+                  showMeridiem: !is24h && c.settings.isMeridiemEnabled,
+                  am: c.format.am,
+                  pm: c.format.pm,
+                  meridiemPrefix: c.format.meridiemPrefix,
+                  meridiemSpaced: c.format.meridiemSpaced,
+                }
+              : {}),
           };
         }
         if (c.date) {
-          // only go native when it's the English "Friday, July 31" pattern;
-          // localized dates stay in the image (graceful degradation)
-          const nativeable = /^[A-Za-z]+, [A-Za-z]+ \d{1,2}$/.test(c.date.text);
+          // with the settings in hand any language goes native; without
+          // them only the English "Friday, July 31" shape is safe
+          const nativeable = authoritative || /^[A-Za-z]+, [A-Za-z]+ \d{1,2}$/.test(c.date.text);
           if (nativeable) {
             elements.date = {
               rect: c.date.rect,
@@ -167,6 +283,13 @@ const clockHandler = {
               align: c.date.align,
               color: cssColorToHex(c.date.color),
               sample: c.date.text,
+              ...(authoritative
+                ? {
+                    weekdays: c.format.weekdays,
+                    months: c.format.months,
+                    pattern: c.format.datePattern,
+                  }
+                : {}),
             };
           }
         }

@@ -95,12 +95,28 @@ class LivePortal {
 
     const canvasW = this.opts.canvasW || 1920;
     const canvasH = this.opts.canvasH || 1080;
-    this.page = await this.browser.newPage({
+    const pageOpts = {
       viewport: { width: canvasW, height: canvasH },
       /* renders at canvas size, outputs at the TV's resolution */
       deviceScaleFactor: (this.opts.outW || canvasW) / canvasW,
       hasTouch: true,
-    });
+    };
+    /* The page runs in the DISPLAY's timezone, not the container's. The
+     * portal's whole notion of "now" - the day-rollover timer, the
+     * calendar's today highlight, every moment()/new Date() - follows
+     * the browser clock, which on a real TV sits in the user's home. A
+     * UTC container flipped everyone's "today" at UTC midnight (8pm US
+     * Eastern). The zone comes from the display's own settings; see
+     * paintedWorker.openPortal for how it is learned and corrected. */
+    if (this.opts.timezoneId) pageOpts.timezoneId = this.opts.timezoneId;
+    try {
+      this.page = await this.browser.newPage(pageOpts);
+    } catch (e) {
+      if (!pageOpts.timezoneId) throw e;
+      this.log("timezone '" + pageOpts.timezoneId + "' rejected (" + e.message + ") - opening without it");
+      delete pageOpts.timezoneId;
+      this.page = await this.browser.newPage(pageOpts);
+    }
 
     await this.installRoutes();
     await this.installSignalBridge();
@@ -223,6 +239,19 @@ class LivePortal {
       return await this.page.evaluate(() => (window.mmScreenshot ? window.mmScreenshot.pageCount() : 1));
     } catch (e) {
       return 1;
+    }
+  }
+
+  /* what zone the page is actually running in vs what the display's
+   * settings say it should be - the caller reconciles them */
+  async timezones() {
+    try {
+      return await this.page.evaluate(() => ({
+        effective: Intl.DateTimeFormat().resolvedOptions().timeZone || null,
+        display: window.mmScreenshot && window.mmScreenshot.timeZoneId ? window.mmScreenshot.timeZoneId() : null,
+      }));
+    } catch (e) {
+      return null;
     }
   }
 

@@ -127,25 +127,80 @@ class PaintedWorker extends DisplayWorker {
   /* the portal reports layout changes itself - nothing to poll for */
   probePageSettings() {}
 
+  timezoneFile() {
+    return path.join(this.dir, "timezone");
+  }
+
+  savedTimezone() {
+    try {
+      const tz = fs.readFileSync(this.timezoneFile(), "utf8").trim();
+      return tz || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   async openPortal() {
     if (this.portal && this.portal.ready) return this.portal;
-    this.portal = new LivePortal({
-      portalBase: this.env.portalBase,
-      major: this.display.major,
-      minor: this.display.minor,
-      deviceId: this.display.deviceId,
-      canvasW: this.display.canvasW,
-      canvasH: this.display.canvasH,
-      outW: this.display.outW,
-      outH: this.display.outH,
-      log: (...a) => this.log(...a),
-      onChange: (message) => this.onPortalChange(message),
-    });
-    await this.portal.open();
+    const openWith = async (timezoneId) => {
+      this.portal = new LivePortal({
+        portalBase: this.env.portalBase,
+        major: this.display.major,
+        minor: this.display.minor,
+        deviceId: this.display.deviceId,
+        canvasW: this.display.canvasW,
+        canvasH: this.display.canvasH,
+        outW: this.display.outW,
+        outH: this.display.outH,
+        timezoneId,
+        log: (...a) => this.log(...a),
+        onChange: (message) => this.onPortalChange(message),
+      });
+      await this.portal.open();
+    };
+    await openWith(this.savedTimezone());
+    /* The display's timezone is IN the widget list the portal just
+     * loaded, but the browser's zone must be set before the page exists
+     * - so the first boot ever learns it, persists it, and reopens once
+     * in the right zone. Every later open starts correct. */
+    const zones = await this.portal.timezones();
+    if (zones && zones.display && zones.display !== zones.effective) {
+      this.log("portal timezone: display is " + zones.display + ", page ran in " + zones.effective + " - reopening in the display's zone");
+      try {
+        fs.writeFileSync(this.timezoneFile(), zones.display);
+      } catch (e) {}
+      const stale = this.portal;
+      this.portal = null;
+      await stale.close("timezone correction").catch(() => {});
+      await openWith(zones.display);
+      const check = await this.portal.timezones();
+      if (check && check.display && check.display !== check.effective) {
+        /* unknown zone name: stay up rather than loop - dates follow the
+         * container's clock until the zone is fixed in settings */
+        this.log("portal timezone: '" + check.display + "' did not take (page runs in " + check.effective + ") - continuing");
+      }
+    }
     /* No direct startup render: the portal's reload announcement queues
      * it through onPortalChange like every other capture. A second
      * renderAll here doubled every boot. */
     return this.portal;
+  }
+
+  /* A relayout may carry a CHANGED display timezone (the user edited it
+   * in settings). Persist and close; the TV's next poll reopens the
+   * portal in the new zone and its boot re-renders everything. */
+  async checkPortalTimezone() {
+    if (!this.portal || !this.portal.ready || this.rendering) return;
+    const zones = await this.portal.timezones();
+    if (!zones || !zones.display || zones.display === zones.effective) return;
+    this.log("portal timezone changed to " + zones.display + " (page runs in " + zones.effective + ") - closing to reopen in the new zone");
+    try {
+      fs.writeFileSync(this.timezoneFile(), zones.display);
+    } catch (e) {}
+    const stale = this.portal;
+    this.portal = null;
+    this.portalPage = null;
+    await stale.close("timezone changed").catch(() => {});
   }
 
   /* ---- the portal tells us something changed --------------------------
@@ -191,6 +246,9 @@ class PaintedWorker extends DisplayWorker {
        * capture-everything covers the gesture's result too. */
       this.portalPage = null;
       this.gestureInFlight = false;
+      /* a relayout may carry a changed display timezone (no-op during
+       * boot: the portal is not ready yet and openPortal reconciles) */
+      this.checkPortalTimezone().catch(() => {});
       this.log("change: full reload - capturing every page (" + reason + ")");
       this.queueCapture(null, reason);
       return;

@@ -312,9 +312,13 @@ window.myApp.controller("MainCtrl", [
      * Media suppression lives in js/service/paintedMode.js. */
     $scope.isPaintedModeEnabled = previewUrlParams.get("painted") === "true";
     /* everything painted mode does lives in js/service/paintedMode.js;
-     * it just needs the scope once to drive paging */
+     * it just needs the scope once to drive paging. showNextPage rides
+     * along (hoisted function declaration, so it exists here) because
+     * quoteIndex alone only moves bindings - page visibility and z-order
+     * are applied imperatively by showNextPage, and stepping pages
+     * without it leaves the old page on screen. */
     if ($scope.isPaintedModeEnabled === true && window.mmPaintedBridge) {
-      window.mmPaintedBridge($scope, $timeout);
+      window.mmPaintedBridge($scope, $timeout, showNextPage);
     }
     var designerPageParam = Number(previewUrlParams.get("page"));
     $scope.designerPageIndex =
@@ -2905,6 +2909,7 @@ window.myApp.controller("MainCtrl", [
             if ($scope.currentOrientation == 0) {
               window.location.reload();
             } else {
+              if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "orientation", null);
               var payload = {
                 type: MANGO_MIRROR_CONSTANT.DISPLAY_ORIENTATION_UPDATE,
                 data: { orientation: obj.orientation },
@@ -4425,7 +4430,7 @@ window.myApp.controller("MainCtrl", [
     };
 
     $scope.updateImageWidgetData = function (updatedImageWidgetData) {
-      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "image", null);
+      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "image", updatedImageWidgetData && updatedImageWidgetData.widgetId);
       var dataToInitialize = [];
       $scope.checkAndRemoveCurrentRendering(updatedImageWidgetData);
       $scope.removedExistingImageSetting(updatedImageWidgetData.widgetId);
@@ -4470,7 +4475,7 @@ window.myApp.controller("MainCtrl", [
 
     // weather update code
     $scope.updateWeatherData = function (updatedWeather) {
-      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "weather", null);
+      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "weather", Object.keys(updatedWeather || {}));
       angular.forEach(updatedWeather, function (weatherData, widgetId) {
         for (var i = 0; i < $scope.groups.length; i++) {
           for (var j = 0; j < $scope.groups[i].widgets.length; j++) {
@@ -4497,6 +4502,7 @@ window.myApp.controller("MainCtrl", [
     clearNewsWidgetsData = function () {};
 
     $scope.updateNewsData = function (updatedNewsData) {
+      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "news", Object.keys(updatedNewsData || {}));
       angular.forEach(updatedNewsData, function (newsData, widgetId) {
         for (var i = 0; i < $scope.groups.length; i++) {
           for (var j = 0; j < $scope.groups[i].widgets.length; j++) {
@@ -4792,6 +4798,7 @@ window.myApp.controller("MainCtrl", [
     };
 
     $scope.updateChoresData = function (updatedChoresData) {
+      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "chores", Object.keys(updatedChoresData || {}));
       angular.forEach(updatedChoresData, function (todoData, widgetId) {
         for (var i = 0; i < $scope.groups.length; i++) {
           for (var j = 0; j < $scope.groups[i].widgets.length; j++) {
@@ -4876,6 +4883,7 @@ window.myApp.controller("MainCtrl", [
       };
     
     $scope.updateTodoData = function (updatedTodoData) {
+      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "todo", Object.keys(updatedTodoData || {}));
     	angular.forEach(
     			updatedTodoData,
     	        function (todoData, widgetId) {
@@ -5081,7 +5089,7 @@ window.myApp.controller("MainCtrl", [
 
     // notes update code
     $scope.updateNotes = function (updatedNotes) {
-      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "notes", null);
+      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "notes", Object.keys(updatedNotes || {}));
       angular.forEach(updatedNotes, function (notesData, widgetId) {
         for (var i = 0; i < $scope.groups.length; i++) {
           for (var j = 0; j < $scope.groups[i].widgets.length; j++) {
@@ -5107,6 +5115,7 @@ window.myApp.controller("MainCtrl", [
 
     // updatemarketwatch
     $scope.updateMarketWatch = function (updatedMarketWatch) {
+      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "marketwatch", Object.keys(updatedMarketWatch || {}));
       angular.forEach(updatedMarketWatch, function (marketWatchData, widgetId) {
         for (var i = 0; i < $scope.groups.length; i++) {
           for (var j = 0; j < $scope.groups[i].widgets.length; j++) {
@@ -5129,7 +5138,7 @@ window.myApp.controller("MainCtrl", [
 
     // quotes update code
     $scope.updateQuotes = function (updatedQuotes) {
-      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "quotes", null);
+      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "quotes", Object.keys(updatedQuotes || {}));
       angular.forEach(updatedQuotes, function (quotesData, widgetId) {
         for (var i = 0; i < $scope.groups.length; i++) {
           for (var j = 0; j < $scope.groups[i].widgets.length; j++) {
@@ -16915,11 +16924,13 @@ window.myApp.controller("MainCtrl", [
     };
 
     $scope.updateGesture = function (updatedGesture) {
+      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "gesture", null);
       var parsedGestureData = JSON.parse(updatedGesture);
       $scope.gesture = parsedGestureData.gesture;
     };
 
     $scope.updateOverlayData = function (updatedOverlay) {
+      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "overlay", null);
       var parsedOverlayData = JSON.parse(updatedOverlay);
       $scope.overlaySetting = parsedOverlayData.overlay;
       $rootScope.updateOverLay();

@@ -110,13 +110,15 @@ class LivePortal {
       this.ready = false;
     });
 
-    const first = this.nextSignal(60000);
+    /* The portal announces "reload" exactly once per boot, and only
+     * after every deferred widget on the shown page has reported drawn
+     * (paintedMode holds the announcement until then - completion
+     * tracking, not timing). That one signal IS boot-complete; there is
+     * no burst to wait out. */
+    const first = this.nextSignal(60000, (m) => m.source === "reload");
     await this.page.goto(this.url(), { waitUntil: "domcontentloaded", timeout: 60000 });
     const hello = await first;
     if (!hello) throw new Error("portal never signalled ready - is painted mode present?");
-    /* the boot burst continues after the first signal (widgets report as
-     * they draw), so let it finish before anyone screenshots */
-    await this.waitForQuiet(1200, 20000);
     this.ready = true;
     this.log("live portal ready (" + hello.source + ", " + (await this.pageCount()) + " page(s))");
     return "opened";
@@ -155,10 +157,20 @@ class LivePortal {
 
   onSignal(message) {
     if (!message || typeof message.seq !== "number") return;
-    if (message.seq <= this.lastSeq) return;
+    /* seq only increases within one document. A LOWER seq means the
+     * portal reloaded itself (restart-display push, orientation change)
+     * and started counting again - resync, or every signal after a
+     * self-reload would be dropped as stale and the display would go
+     * quiet until the catch-up render. */
+    if (message.seq < this.lastSeq) this.lastSeq = 0;
+    if (message.seq === this.lastSeq) return;
     this.lastSeq = message.seq;
     const waiters = this.waiters.splice(0);
     for (const w of waiters) {
+      if (w.pred && !w.pred(message)) {
+        this.waiters.push(w); /* not what this waiter is waiting for */
+        continue;
+      }
       clearTimeout(w.timer);
       w.resolve(message);
     }
@@ -191,10 +203,13 @@ class LivePortal {
   }
 
   /* Resolves on the portal's next settled state, or null at the timeout.
-   * Never throws: a display must not stall because one signal was late. */
-  nextSignal(ms) {
+   * Never throws: a display must not stall because one signal was late.
+   * An optional predicate keeps waiting through signals it rejects - a
+   * caller waiting for its OWN operation to finish must not be satisfied
+   * by unrelated data landing in between. */
+  nextSignal(ms, pred) {
     return new Promise((resolve) => {
-      const w = { resolve };
+      const w = { resolve, pred };
       w.timer = setTimeout(() => {
         this.waiters = this.waiters.filter((x) => x !== w);
         resolve(null);
@@ -212,16 +227,26 @@ class LivePortal {
   }
 
   /* Step to a page and wait for it to draw. One live portal serves every
-   * page, instead of booting a browser per page as the old renderer did. */
+   * page, instead of booting a browser per page as the old renderer did.
+   * Wait for THIS SWAP'S completion signal: source "page" AND the target
+   * page index (a swap signal reports the page that finished entering).
+   * Anything looser let the capture photograph the crossfade - a data
+   * push landing mid-fade, or the PREVIOUS step's own late "page" signal
+   * - and the picture was mostly the OLD page. That is how every
+   * "page 1" published as page 0. */
   async gotoPage(index) {
-    const settled = this.nextSignal(15000);
+    /* 20s: the page announcement itself waits for the target page's
+     * deferred widgets (calendar init) with a 10s safety cap */
+    const settled = this.nextSignal(20000, (m) => m.source === "page" && m.pageIndex === index);
     const ok = await this.page.evaluate(
       (i) => (window.mmScreenshot ? window.mmScreenshot.gotoPage(i) : false),
       index,
     );
     if (!ok) return false;
+    /* that signal IS the completion - the portal emits it only once the
+     * swap is fully on screen (transitions, images, spinners settled).
+     * No quiet-timer after it: the portal is the only readiness source. */
     await settled;
-    await this.waitForQuiet(800, 10000);
     return true;
   }
 

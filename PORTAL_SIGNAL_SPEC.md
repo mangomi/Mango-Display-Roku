@@ -1,7 +1,11 @@
 # Portal → host signal: `mm-screenshot-ready`
 
-**For the portal team (Mangomirror-Portal). Nothing in this document is
-implemented yet.**
+**HISTORICAL — this proposal has since been implemented** as
+`WebContent/js/service/paintedMode.js` on the portal's `painted-mode-roku`
+branch (PR #68), with a different shape than sketched here: the mechanism
+lives in its own file behind `?painted=true`, and the signal carries
+`source`/`widgetType`/`widgetSettingId`/`pageIndexes` instead of a
+free-form reason. See `LIVE_PORTAL.md` for the current contract.
 
 ## Why
 

@@ -41,6 +41,13 @@ const DEVICE_DRAWN = new Set(["clock", "countdown", "gif"]);
 /* Only these raise the TV's spinner - see renderPages */
 const SHOWS_SPINNER = new Set(["interaction", "layout change"]);
 
+/* Changes that are display-wide, not per page. Gesture settings decide
+ * which checkboxes exist (targets are extracted per page), overlay
+ * settings live in the manifest's display-level effects block - which is
+ * read from page 0's capture - and orientation reshapes everything. A
+ * single-page capture would publish only part of any of these. */
+const DISPLAY_WIDE = new Set(["gesture", "overlay", "orientation"]);
+
 /* A live portal costs real memory (~a browser tab per display) and holds
  * the display's socket, so it runs ONLY while a TV is actually watching.
  * The channel long-polls about every 55s, so three missed polls means the
@@ -118,8 +125,9 @@ class PaintedWorker extends DisplayWorker {
       onChange: (message) => this.onPortalChange(message),
     });
     await this.portal.open();
-    /* the portal reaching its first settled state IS the startup render */
-    await this.renderAll("startup");
+    /* No direct startup render: the portal's reload announcement queues
+     * it through onPortalChange like every other capture. A second
+     * renderAll here doubled every boot. */
     return this.portal;
   }
 
@@ -142,11 +150,30 @@ class PaintedWorker extends DisplayWorker {
        * signal, and step again - forever. */
       return;
     }
+    /* A gesture we dispatched redraws the portal, and THIS announcement
+     * is that redraw. Same capture as any other signal - only the reason
+     * differs: "interaction" publishes imageOnly, so the TV swaps just
+     * the page image instead of rebuilding every native layer (which
+     * restarts GIFs and blanks them while sheets reload). A reload
+     * outranks it: that is a fresh start, handled below as one. */
+    if (this.gestureInFlight && message.source !== "reload") {
+      this.gestureInFlight = false;
+      const page = typeof message.pageIndex === "number" ? message.pageIndex : null;
+      this.log("change: " + message.source + "/" + (type || "?") + " - the dispatched gesture's redraw");
+      this.queueCapture(page, "interaction");
+      return;
+    }
     if (message.source === "reload") {
       /* the first one is the portal booting; later ones mean someone
        * applied a new layout, which IS worth showing a spinner for */
       const reason = this.sawFirstReload ? "layout change" : "startup";
       this.sawFirstReload = true;
+      /* a relayout (or a portal self-reload) starts over on page 0, so
+       * whatever page we last stepped to is no longer where the portal is.
+       * It also supersedes any gesture in flight - the fresh start's
+       * capture-everything covers the gesture's result too. */
+      this.portalPage = null;
+      this.gestureInFlight = false;
       this.log("change: full reload - capturing every page (" + reason + ")");
       this.queueCapture(null, reason);
       return;
@@ -158,9 +185,24 @@ class PaintedWorker extends DisplayWorker {
       this.queueCapture(null, "midnight");
       return;
     }
-    const page = typeof message.pageIndex === "number" ? message.pageIndex : null;
-    this.log("change: " + message.source + "/" + (type || "page") + " on page " + (page === null ? "?" : page));
-    this.queueCapture(page, message.source + (type ? ":" + type : ""));
+    if (type && DISPLAY_WIDE.has(type)) {
+      this.log("change: " + type + " settings - capturing every page");
+      this.queueCapture(null, type + " settings");
+      return;
+    }
+    /* the portal reports the page each changed widget LIVES on
+     * (pageIndexes); older signals carry only the visible page */
+    const pages =
+      Array.isArray(message.pageIndexes) && message.pageIndexes.length
+        ? message.pageIndexes.filter((p) => typeof p === "number")
+        : typeof message.pageIndex === "number"
+          ? [message.pageIndex]
+          : [null];
+    const label = pages.length && pages[0] !== null ? pages.join(",") : "?";
+    this.log("change: " + message.source + "/" + (type || "page") + " on page " + label);
+    const reason = message.source + (type ? ":" + type : "");
+    if (!pages.length) this.queueCapture(null, reason);
+    for (const page of pages) this.queueCapture(page, reason);
   }
 
   /* A burst of signals should cost one capture, not one each. */
@@ -299,17 +341,32 @@ class PaintedWorker extends DisplayWorker {
 
     this.log("interact:", type, "at", Math.round(x) + "," + Math.round(y), "page", pageIndex, id ? "id " + id : "");
     const swipe = type === "swipeup" || type === "swipedown";
-    if (swipe) this.setBusy(true, type);
+    /* THE RULE (Dave): the portal is the ONLY source of
+     * ready-to-snapshot information. The gesture path dispatches the
+     * gesture and waits for the portal's own redraw announcement -
+     * no quiet-timers, and no capture of its own: that announcement
+     * flows through onPortalChange like every other signal and queues
+     * THE capture (reason "interaction" via gestureInFlight). An
+     * earlier version captured after a 900ms quiet heuristic, which
+     * elapsed inside the calendar's silent loading window and baked
+     * its blurred "Loading" spinner overlay into the published image. */
+    const redraw = swipe ? this.portal.nextSignal(15000, (m) => m.source !== "page") : null;
+    if (swipe) {
+      this.setBusy(true, type);
+      this.gestureInFlight = true;
+    }
     let result;
     try {
       result = swipe
         ? await this.portal.swipe(type, x, y, id)
         : await this.portal.tap(x, y, id);
     } catch (e) {
+      this.gestureInFlight = false;
       this.setBusy(false, "gesture failed");
       return reply(500, { ok: false, error: e.message });
     }
     if (!result.handled) {
+      this.gestureInFlight = false;
       this.setBusy(false, "gesture ignored");
       return reply(200, result);
     }
@@ -319,9 +376,14 @@ class PaintedWorker extends DisplayWorker {
      * needs no capture - the device already drew its own tick, and the
      * portal's own refresh will report anything else that changed. */
     if (swipe) {
-      await this.portal.waitForQuiet(900, 15000);
-      await this.renderPages([pageIndex], "interaction");
-      this.setBusy(false, "swipe done");
+      const done = await redraw;
+      if (!done) {
+        /* the portal never announced a redraw: nothing will capture, so
+         * do not leave the TV spinning until the catch-up render */
+        this.gestureInFlight = false;
+        this.setBusy(false, "no redraw signal");
+      }
+      /* busy clears when the queued interaction capture publishes */
     }
     return reply(200, result);
   }

@@ -432,13 +432,39 @@ async function capturePage(page, opts) {
   const state = opts.state || { noAnimStyle: null };
   const outDir = path.dirname(path.resolve(out));
 
-  // designer mode keeps every page in the DOM (hidden pages use
+  // The portal keeps every page in the DOM (hidden pages use
   // visibility:hidden), so extractors see all pages' widgets - keep only
-  // the rendered page's
+  // the rendered page's. Painted mode steps pages inside one URL, so the
+  // caller says which page this is; the page= param is the old designer
+  // pipeline, whose URL carries it. Defaulting to 0 with neither would
+  // stamp EVERY page's manifest with page 0's overlays.
   const pageIdxMatch = url.match(/[?&]page=(\d+)/);
-  const pageIdx = pageIdxMatch ? parseInt(pageIdxMatch[1], 10) : 0;
+  const pageIdx =
+    typeof opts.pageIndex === "number"
+      ? opts.pageIndex
+      : pageIdxMatch
+        ? parseInt(pageIdxMatch[1], 10)
+        : 0;
   const groups = [];
   const portalFrame = portalFrameOf(page);
+
+  // Ask the portal whether this is a good moment to screenshot. Painted
+  // mode owns the answer (mmScreenshot.settled(): nothing queued,
+  // nothing loading) - the portal knows its own internals; this side
+  // only asks. Matters for captures no ready signal precedes (page
+  // steps, catch-up renders). Capped so a stuck load cannot stall
+  // captures; absent mmScreenshot (the old designer pipeline) it is an
+  // immediate no-op.
+  if (portalFrame) {
+    await portalFrame
+      .waitForFunction(
+        () => !window.mmScreenshot || !window.mmScreenshot.settled || window.mmScreenshot.settled(),
+        null,
+        { timeout: 4000 },
+      )
+      .catch(() => {});
+  }
+  mark("portal-settled");
 
   if (portalFrame) {
     for (const handler of nativeWidgets.handlers) {

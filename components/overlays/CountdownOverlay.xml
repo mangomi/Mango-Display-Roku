@@ -7,4 +7,5 @@
         <Timer id="tick" repeat="true" duration="1" />
     </children>
     <script type="text/brightscript" uri="pkg:/components/overlays/CountdownOverlay.brs" />
+    <script type="text/brightscript" uri="pkg:/source/fontMap.brs" />
 </component>

@@ -9,6 +9,16 @@
  *                                      visibility on children)
  */
 
+// '"Playfair Display", sans-serif' -> "Playfair Display": the first
+// family of the CSS stack, which is what the browser actually rendered
+// (the portal preloads its whole catalog, so the first entry resolves).
+// The device maps it to a bundled TTF and falls back to Source Sans Pro.
+function primaryFontFamily(stack) {
+  if (!stack) return null;
+  const first = String(stack).split(",")[0].replace(/["']/g, "").trim();
+  return first || null;
+}
+
 function cssColorToHex(css) {
   // "rgb(255, 255, 255)" / "rgba(255,255,255,0.8)" -> "#RRGGBBAA"
   const m = css && css.match(/rgba?\(([^)]+)\)/);
@@ -252,6 +262,7 @@ const clockHandler = {
             bold: parseInt(c.time.fontWeight, 10) >= 600,
             align: c.time.align,
             color: cssColorToHex(c.time.color),
+            fontFamily: primaryFontFamily(c.time.fontFamily),
             is24h,
             padHour,
             // legacy field for channels that predate showMeridiem
@@ -282,6 +293,7 @@ const clockHandler = {
               bold: parseInt(c.date.fontWeight, 10) >= 600,
               align: c.date.align,
               color: cssColorToHex(c.date.color),
+              fontFamily: primaryFontFamily(c.date.fontFamily),
               sample: c.date.text,
               ...(authoritative
                 ? {
@@ -969,6 +981,7 @@ const countdownHandler = {
             fontSizePx: parseFloat(cs.fontSize),
             bold: parseInt(cs.fontWeight, 10) >= 600,
             align: cs.textAlign,
+            fontFamily: (cs.fontFamily || "").split(",")[0].replace(/["']/g, "").trim() || null,
             color: (() => {
               const mm = cs.color.match(/rgba?\(([^)]+)\)/);
               if (!mm) return "#FFFFFFFF";

@@ -37,7 +37,13 @@ function makeLabel(el as object) as object
     lbl.horizAlign = align
     lbl.color = el.color.Replace("#", "0x")
     fnt = CreateObject("roSGNode", "Font")
-    if el.bold = true
+    ' the user's chosen family from the bundled catalog; unknown or
+    ' absent -> Source Sans Pro, matching the old behavior
+    uri = ""
+    if el.fontFamily <> invalid then uri = rokuFontFile(el.fontFamily)
+    if uri <> ""
+        fnt.uri = uri
+    else if el.bold = true
         fnt.uri = "pkg:/fonts/SourceSansPro-Bold.otf"
     else
         fnt.uri = "pkg:/fonts/SourceSansPro-Regular.otf"

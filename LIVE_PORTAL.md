@@ -134,7 +134,11 @@ only while a TV is watching:
 
 - never opened at worker start
 - opened on first device contact; reopened by any later poll
-- `&launch=1` recaptures every page
+- `&launch=1` recaptures every page, and raises the TV's spinner from
+  that very reply until the launch render publishes (Dave, 2026-08-24:
+  the app shows cached screenshots at launch — old layouts, old events —
+  and the user must see it is fetching). `interacting` holds the busy
+  janitor off during the portal boot, when nothing is rendering yet.
 - closed after `PORTAL_IDLE_MS` (default 180s) with no poll — three
   missed long-polls means the app is gone
 - the 20-minute catch-up render stays: if a signal is ever missed or the

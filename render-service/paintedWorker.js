@@ -96,8 +96,25 @@ class PaintedWorker extends DisplayWorker {
    * up. handleWait runs on every poll, so this is the reopen path too. */
   handleWait(u, res, req) {
     const launching = u.searchParams.get("launch") === "1";
+    if (launching) {
+      /* The app just started and is showing whatever it cached - old
+       * layouts, old events - while a fresh portal boots and renders.
+       * Raise the spinner NOW, before this very reply goes out, so the
+       * user sees the display is fetching rather than done. It clears
+       * when the launch render publishes (clearBusySoon); interacting
+       * keeps the janitor from clearing it during the portal boot,
+       * when nothing is rendering yet. */
+      this.setBusy(true, "app launch");
+      this.interacting = true;
+    }
     if (!this.portal) {
-      this.openPortal().catch((e) => this.log("live portal failed to open:", e.message));
+      this.openPortal().catch((e) => {
+        this.log("live portal failed to open:", e.message);
+        if (launching) {
+          this.interacting = false;
+          this.setBusy(false, "portal failed to open");
+        }
+      });
     } else if (launching) {
       /* the app restarted: it has no picture yet and the portal may hold
        * a stale one, so rebuild from what the portal shows now */
@@ -218,6 +235,9 @@ class PaintedWorker extends DisplayWorker {
   }
 
   async runCapture() {
+    /* captures are starting: `rendering` takes over guarding the busy
+     * janitor from here, so the launch hold (see handleWait) can end */
+    this.interacting = false;
     if (this.rendering) {
       this.pendingRender = true;
       return;

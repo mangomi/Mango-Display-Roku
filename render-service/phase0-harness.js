@@ -8,7 +8,9 @@
  * painted-mode conditions. Logs PHASE0 lines to stdout -> CloudWatch.
  */
 const fs = require("fs");
-const { chromium } = require("/app/render-service/node_modules/playwright");
+// the image flattens render-service/ into /app, so this file runs at
+// /app/phase0-harness.js and resolves playwright from /app/node_modules
+const { chromium } = require("playwright");
 
 const MAX_N = 20;
 const SETTLE_MS = 90000;

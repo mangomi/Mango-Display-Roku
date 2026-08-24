@@ -97,6 +97,15 @@ class PaintedWorker extends DisplayWorker {
   handleWait(u, res, req) {
     const launching = u.searchParams.get("launch") === "1";
     if (launching) {
+      /* the channel reports WHY the previous run ended (GetLastExitInfo,
+       * Roku OS 13+): crash vs low-memory kill vs the OS's ~2h idle
+       * auto-exit vs a person pressing Home. Logged next to the poll
+       * history, which already gives each session's start and duration. */
+      const lastExit = u.searchParams.get("lastexit");
+      if (lastExit) {
+        const at = u.searchParams.get("lastexitat");
+        this.log("app launch: previous session ended '" + lastExit + "'" + (at ? " at " + at : ""));
+      }
       /* The app just started and is showing whatever it cached - old
        * layouts, old events - while a fresh portal boots and renders.
        * Raise the spinner NOW, before this very reply goes out, so the

@@ -90,7 +90,9 @@ sub runVersionLoop()
         ' identity rides on every poll: it is how the fleet service routes
         ' this display, and how a restarted service resurrects its worker
         lp = ""
-        if launchPending then lp = "&launch=1"
+        ' launchInfo carries the previous run's exit reason (empty when
+        ' unknown); it only matters alongside the launch announcement
+        if launchPending then lp = "&launch=1" + m.top.launchInfo
         req.SetUrl(base + "/wait?since=" + ver.ToStr() + "&busy=" + bp + "&mem=" + mem + lp + m.top.identity)
         if req.AsyncGetToString()
             ' server holds up to 50s; give it 55 then re-arm

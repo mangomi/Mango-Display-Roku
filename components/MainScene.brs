@@ -151,6 +151,12 @@ sub onPaired()
     m.versionTask.identity = m.identity
     m.versionTask.waitUrl = m.versionBaseUrl
     m.versionTask.manifestUrl = m.pagesUrl
+    ' why did the PREVIOUS run end? (crash, system kill, Roku idle exit,
+    ' user exit.) Read AFTER the fact via GetLastExitInfo - Roku gives no
+    ' shutdown hook to save anything in, so the answer is fetched at the
+    ' next boot and rides the launch poll for the service to log next to
+    ' the session's start/duration.
+    m.versionTask.launchInfo = lastExitQuery()
     m.versionTask.observeField("version", "onVersionChange")
     m.versionTask.observeField("busy", "onBusyChange")
     m.versionTask.observeField("assetBase", "onAssetBase")
@@ -714,4 +720,49 @@ function onKeyEvent(key as string, press as boolean) as boolean
         return true
     end if
     return false
+end function
+
+' Why did the previous run of this app end? Roku OS 13+ records it
+' (crash, low-memory kill, idle auto-exit, user exit) and hands it to
+' the NEXT launch - there is no shutdown hook to save anything in, so
+' asking afterwards is the only reliable way. Returns a ready-to-append
+' query fragment, or "" when the OS has nothing recorded.
+function lastExitQuery() as string
+    appMgr = CreateObject("roAppManager")
+    if appMgr = invalid then return ""
+    if FindMemberFunction(appMgr, "GetLastExitInfo") = invalid then return ""
+    info = appMgr.GetLastExitInfo()
+    if info = invalid then return ""
+    q = ""
+    if info.exit_code <> invalid
+        q = q + "&lastexit=" + sanitizeParam(info.exit_code)
+    end if
+    if info.timestamp <> invalid
+        q = q + "&lastexitat=" + sanitizeParam(info.timestamp)
+    end if
+    if q <> "" then print "[Mango] previous session exit: "; q
+    return q
+end function
+
+' query-safe subset only; anything else becomes an underscore
+function sanitizeParam(v as dynamic) as string
+    s = ""
+    if type(v) = "roString" or type(v) = "String"
+        s = v
+    else if v <> invalid
+        s = v.ToStr()
+    end if
+    out = ""
+    for i = 1 to Len(s)
+        c = Mid(s, i, 1)
+        ok = (c >= "0" and c <= "9") or (c >= "A" and c <= "Z") or (c >= "a" and c <= "z")
+        if ok = false then ok = (c = "_" or c = "-" or c = "." or c = ":")
+        if ok
+            out = out + c
+        else
+            out = out + "_"
+        end if
+    end for
+    if Len(out) > 64 then out = Left(out, 64)
+    return out
 end function

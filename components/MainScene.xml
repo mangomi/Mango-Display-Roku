@@ -1,6 +1,21 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <component name="MainScene" extends="Scene">
     <children>
+        <!-- Idle keep-alive. Roku force-closes any channel ~2h after the
+             last remote press (EXIT_IDLE_AUTO_EXIT - named by the OS's
+             own exit record and measured at 1h59m58s on this display,
+             2026-08-24) and offers no setting or flag to disable that.
+             Active VIDEO playback is the one thing besides button
+             presses that resets the clock (audio was tried 2026-08-11
+             and provably does not), so a bundled 2s silent clip loops
+             muted here while content is on screen.
+             PLACEMENT IS THE WHOLE TRICK: a Video node exposes the
+             video plane through its own rect, cutting through siblings
+             painted BEFORE it. As the FIRST child everything else
+             paints over it and nothing shows; as the LAST child it
+             blacked out the entire screen the moment playback started
+             (2026-08-24). Do not move it, do not enlarge it. -->
+        <Video id="idleKeepAlive" width="320" height="180" loop="true" mute="true" />
         <Rectangle id="bg" color="0x000000FF" width="1920" height="1080" />
 
         <!-- Mirrors the Tizen pairing screen: logo, heading, code, setup line -->

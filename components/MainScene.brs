@@ -11,6 +11,8 @@ sub init()
     m.spinnerPoster = m.top.findNode("spinnerPoster")
     m.spinnerWatchdog = m.top.findNode("spinnerWatchdog")
     m.spinnerWatchdog.observeField("fire", "onSpinnerWatchdog")
+    m.idleKeepAlive = m.top.findNode("idleKeepAlive")
+    m.idleKeepAlive.observeField("state", "onIdleKeepAliveState")
     m.spinAnim = invalid
     m.top.findNode("instructionsLabel").text = "Setup at " + m.env.setupHost + " using any browser"
 
@@ -112,6 +114,8 @@ function getOrCreateCode(forceNew as boolean) as string
 end function
 
 sub startPairing()
+    ' an unclaimed TV on the pairing screen is allowed to idle out
+    m.idleKeepAlive.control = "stop"
     m.refreshTimer.control = "stop"
     m.pageTimer.control = "stop"
     if m.versionTask <> invalid then m.versionTask.control = "STOP"
@@ -412,6 +416,8 @@ sub onPosterLoad(ev as object)
 end sub
 
 sub finalizeSwap(newKey as string, index as integer)
+    ' content is on screen: from here the channel must read as "playing"
+    keepAliveEnsureRunning()
     old = frontEntry()
     if old <> invalid and m.frontKey <> newKey
         old.slot.visible = false
@@ -721,6 +727,34 @@ function onKeyEvent(key as string, press as boolean) as boolean
     end if
     return false
 end function
+
+' --- idle keep-alive -------------------------------------------------
+' While content is up, looping the bundled silent clip makes the OS see
+' an actively playing channel, which is the only way (short of remote
+' presses) to stop the ~2h idle force-close. Started from finalizeSwap,
+' stopped by startPairing. See MainScene.xml for why the node must stay
+' the scene's FIRST child.
+sub keepAliveEnsureRunning()
+    state = m.idleKeepAlive.state
+    if state = "playing" or state = "buffering" then return
+    clip = CreateObject("roSGNode", "ContentNode")
+    clip.url = "pkg:/media/silent_loop.mp4"
+    clip.streamFormat = "mp4"
+    m.idleKeepAlive.content = clip
+    m.idleKeepAlive.control = "play"
+    print "[Mango] idle keep-alive: play requested (was "; state; ")"
+end sub
+
+sub onIdleKeepAliveState()
+    ' the console trail is the proof the mechanism runs - its first
+    ' incarnation failed with no visible symptom at all
+    print "[Mango] idle keep-alive: "; m.idleKeepAlive.state
+    ' loop=true should make both of these unreachable; restart only while
+    ' content is up, so the deliberate stop on pairing stays stopped
+    if m.idleKeepAlive.state = "finished" or m.idleKeepAlive.state = "error"
+        if m.pages <> invalid then m.idleKeepAlive.control = "play"
+    end if
+end sub
 
 ' Why did the previous run of this app end? Roku OS 13+ records it
 ' (crash, low-memory kill, idle auto-exit, user exit) and hands it to

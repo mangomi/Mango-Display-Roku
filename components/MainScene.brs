@@ -11,8 +11,6 @@ sub init()
     m.spinnerPoster = m.top.findNode("spinnerPoster")
     m.spinnerWatchdog = m.top.findNode("spinnerWatchdog")
     m.spinnerWatchdog.observeField("fire", "onSpinnerWatchdog")
-    m.keepAlive = m.top.findNode("keepAlive")
-    m.keepAlive.observeField("state", "onKeepAliveState")
     m.spinAnim = invalid
     m.top.findNode("instructionsLabel").text = "Setup at " + m.env.setupHost + " using any browser"
 
@@ -114,7 +112,6 @@ function getOrCreateCode(forceNew as boolean) as string
 end function
 
 sub startPairing()
-    m.keepAlive.control = "stop"
     m.refreshTimer.control = "stop"
     m.pageTimer.control = "stop"
     if m.versionTask <> invalid then m.versionTask.control = "STOP"
@@ -415,7 +412,6 @@ sub onPosterLoad(ev as object)
 end sub
 
 sub finalizeSwap(newKey as string, index as integer)
-    startKeepAlive()
     old = frontEntry()
     if old <> invalid and m.frontKey <> newKey
         old.slot.visible = false
@@ -725,36 +721,6 @@ function onKeyEvent(key as string, press as boolean) as boolean
     end if
     return false
 end function
-
-' While content is on the wall the channel must read as "playing" to the
-' OS or it is auto-exited after ~2h idle (EXIT_IDLE_AUTO_EXIT - proven
-' again by the exit-reason log, 2026-08-24, 1h59m58s). Only remote input
-' or VIDEO playback resets that clock - audio provably does not - so a
-' bundled 2s silent clip loops muted on the video plane, which renders
-' behind all graphics and is never visible. Not started during pairing on
-' purpose: an unclaimed TV going back to the Roku menu is fine.
-sub startKeepAlive()
-    if m.keepAlive.state = "playing" or m.keepAlive.state = "buffering" then return
-    c = CreateObject("roSGNode", "ContentNode")
-    c.url = "pkg:/media/silent_loop.mp4"
-    c.streamFormat = "mp4"
-    m.keepAlive.content = c
-    m.keepAlive.control = "play"
-    print "[Mango] keep-alive video starting"
-end sub
-
-sub onKeepAliveState()
-    ' every transition is logged: the audio round taught us this path
-    ' fails silently, and the console trail is how we prove it ran
-    s = m.keepAlive.state
-    print "[Mango] keep-alive state: "; s
-    ' loop=true should make "finished" unreachable; this is the backstop.
-    ' Deliberately NOT re-playing on "stopped": startPairing stops this on
-    ' purpose, and reviving it there would defeat the stop.
-    if s = "finished" or s = "error"
-        if m.pages <> invalid then m.keepAlive.control = "play"
-    end if
-end sub
 
 ' Why did the previous run of this app end? Roku OS 13+ records it
 ' (crash, low-memory kill, idle auto-exit, user exit) and hands it to

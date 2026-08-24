@@ -65,7 +65,7 @@ EOF
 esac
 
 rm -f MangoDisplayRoku.zip
-zip -r MangoDisplayRoku.zip manifest source components images fonts media -x '*.DS_Store'
+zip -r MangoDisplayRoku.zip manifest source components images fonts -x '*.DS_Store'
 echo ""
 echo "Created MangoDisplayRoku.zip  (environment: $ENV)"
 echo "Install via browser at http://ROKU_TV_IP (Application Installer), or:"

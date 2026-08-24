@@ -51,20 +51,6 @@
         <!-- clears a page load that never reported back, so a missed
              load event cannot stop the display updating for good -->
         <Timer id="loadWatchdog" repeat="false" duration="12" />
-        <!-- Media keep-alive: Roku's idle machinery exits channels after
-             ~2h without remote input (EXIT_IDLE_AUTO_EXIT), but active
-             VIDEO playback counts as activity - the same reason a movie
-             survives a whole evening untouched. A bundled generated 2s
-             320x180 silent clip loops muted here (the portal's 2x2 LG
-             clip never decodes on the Express - below the hardware
-             decoder's minimum dimensions). An Audio node was tried first
-             and does NOT satisfy the idle check (died at 2h with the
-             loop provably running, 2026-08-11). The video plane renders
-             behind all graphics, so this is never visible. This occupies
-             the channel's one Video node - if a real video widget ever
-             lands, pause this while it plays (real playback is activity
-             anyway). -->
-        <Video id="keepAlive" loop="true" mute="true" width="1920" height="1080" />
     </children>
     <script type="text/brightscript" uri="pkg:/source/env.brs" />
     <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />

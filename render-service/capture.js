@@ -448,6 +448,23 @@ async function capturePage(page, opts) {
   const groups = [];
   const portalFrame = portalFrameOf(page);
 
+  // Defensive sweep: a layered capture that DIED between injecting its
+  // transparency styles and removing them would leave the live portal
+  // poisoned for every later capture. Removing by tag at every start
+  // costs nothing and makes the leak impossible.
+  if (portalFrame) {
+    await portalFrame
+      .evaluate(() => {
+        document.querySelectorAll("style[data-mm-layered]").forEach((t) => t.remove());
+      })
+      .catch(() => {});
+  }
+  await page
+    .evaluate(() => {
+      document.querySelectorAll("style[data-mm-layered]").forEach((t) => t.remove());
+    })
+    .catch(() => {});
+
   // Ask the portal whether this is a good moment to screenshot. Painted
   // mode owns the answer (mmScreenshot.settled(): nothing queued,
   // nothing loading) - the portal knows its own internals; this side
@@ -531,13 +548,25 @@ async function capturePage(page, opts) {
   const layered = groups.some((g) => g.handler.type === "background" && g.items.length);
   let outPath = out;
   if (layered && portalFrame) {
-    await portalFrame.addStyleTag({
-      content:
-        "html,body{background:transparent !important;}" +
+    /* tagged so they can be found and REMOVED: the live portal is one
+     * persistent page, so anything injected here outlives this capture.
+     * Leaving these in made the NEXT page screenshot transparent, and
+     * the JPEG encoder flattens transparency onto white - a layered
+     * page 1 turned every later page's background white (Dave's page 2,
+     * 2026-08-24) where the portal's own page color belongs. */
+    const inject = (css) => {
+      const tag = document.createElement("style");
+      tag.setAttribute("data-mm-layered", "1");
+      tag.textContent = css;
+      document.head.appendChild(tag);
+    };
+    await portalFrame.evaluate(
+      inject,
+      "html,body{background:transparent !important;}" +
         "#main{background:transparent !important;}" +
         "#pageTransition,#pageTransition>div{background-color:transparent !important;}",
-    });
-    await page.addStyleTag({ content: "html,body{background:transparent !important;}" });
+    );
+    await page.evaluate(inject, "html,body{background:transparent !important;}");
     await page.waitForTimeout(120);
     outPath = out.replace(/\.jpe?g$/i, "") + ".png";
   }
@@ -546,6 +575,13 @@ async function capturePage(page, opts) {
     await page.screenshot({ path: outPath, type: "png", omitBackground: true });
   } else {
     await page.screenshot({ path: outPath, type: "jpeg", quality: 85 });
+  }
+  if (layered) {
+    const removeLayered = () => {
+      document.querySelectorAll("style[data-mm-layered]").forEach((t) => t.remove());
+    };
+    if (portalFrame) await portalFrame.evaluate(removeLayered).catch(() => {});
+    await page.evaluate(removeLayered).catch(() => {});
   }
   mark("screenshot");
 

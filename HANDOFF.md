@@ -1,5 +1,10 @@
 # Start here
 
+**The architecture changed on 2026-08-24. Read `LIVE_PORTAL.md` first** —
+the portal now runs live and tells us when to screenshot. This file still
+describes the fleet, pairing, HTTPS and the device side, which are all
+unchanged, but its rendering sections are superseded.
+
 Read this first, then `INFRA.md`. Everything is committed and pushed to
 `main` at https://github.com/mangomi/Mango-Display-Roku.
 

@@ -193,6 +193,10 @@ sub maybeApplyPages()
     if m.activeAnim <> invalid or m.pendingLoad <> invalid then return
     m.pages = m.latestPages
     m.latestPages = invalid
+    ' busy may have arrived while no page was up yet (app launch): the
+    ' pages-guard in onBusyChange dropped it then, so re-evaluate now.
+    ' Idempotent: start/stop both no-op when already in that state.
+    onBusyChange()
     ' new manifest = pixels may have changed under the stable filenames.
     ' Hash-carrying manifests make this precise per page; the tag only
     ' matters as the fallback when a hash is missing.

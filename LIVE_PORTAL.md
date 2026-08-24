@@ -102,14 +102,15 @@ decides readiness.
 | `socket` / `calendar` | in `initializeCalendar` after `updatedCalendarView()` | calendar AND meal-plan data (both flow through `updateCalendarData`), range scrolls |
 | `socket` / `weather` \| `notes` \| `quotes` \| `image` \| `news` \| `chores` \| `todo` \| `marketwatch` | top of each updater | that widget's data |
 | `socket` / `gesture` \| `overlay` | top of `updateGesture` / `updateOverlayData` | those settings |
+| `socket` / `clock-setting` \| `countdown-setting` | top of `updateClock` / `updateCountDownData` | clock/countdown SETTINGS pushes (refreshClock/refreshCountDown). Distinct types on purpose: a plain `clock`/`countdown` would be filtered as a device-drawn tick, and a toggled meridiem then sat stale until the next unrelated capture (bit Dave live 2026-08-24) |
 | `socket` / `orientation` | REFRESH_ORIENTATION non-reload branch | orientation while rotated; the orientation-0 branch reloads, which signals as `reload` |
 | `portal` / `day-rollover` | `refreshdataOnNextday` | midnight |
 | `page` | `mmScreenshot.gotoPage` | only when WE step pages — fires after the swap has finished ON SCREEN (transitions included, capped 4.5s) |
 
 No hook: `traffic` (dead code in the portal — a constant, no handler, no
-template), and `clock`/`countdown`/`gif`/`steps`/`iframely`/
-`browser_snapshot`/`powerbi` data pushes (first three are device-drawn;
-the rest are still catch-up-only, see Open).
+template), and `gif`/`steps`/`iframely`/`browser_snapshot`/`powerbi`
+data pushes (gif is device-drawn; the rest are still catch-up-only, see
+Open).
 
 What the service does with each (`paintedWorker.js`):
 

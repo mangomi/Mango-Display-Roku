@@ -4742,6 +4742,7 @@ window.myApp.controller("MainCtrl", [
     };
 
     $scope.updateCountDownData = function (updatedCountDown) {
+      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "countdown-setting", Object.keys(updatedCountDown || {}));
       angular.forEach(
         updatedCountDown,
         function (updatedCountDownData, widgetId) {
@@ -5182,6 +5183,7 @@ window.myApp.controller("MainCtrl", [
     };
 
     $scope.updateClock = function (updatedClockData) {
+      if (window.mmPaintedNotify) window.mmPaintedNotify("socket", "clock-setting", Object.keys(updatedClockData || {}));
       $scope.updatedClockData = updatedClockData;
       angular.forEach(updatedClockData, function (clockData, widgetId) {
         for (var i = 0; i < $scope.groups.length; i++) {

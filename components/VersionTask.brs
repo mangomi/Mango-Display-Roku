@@ -65,6 +65,12 @@ sub runVersionLoop()
     base = m.top.waitUrl
     print "[Mango] version long-poll: "; base
     ver = 0
+    ' The first successful poll of this app run announces the launch: the
+    ' service raises the busy spinner in that very reply and recaptures
+    ' every page, so the stale cached screens are visibly "loading"
+    ' instead of silently old. Cleared only once a reply arrives, so a
+    ' failed first request re-announces on retry.
+    launchPending = true
     dev = CreateObject("roDeviceInfo")
     while true
         req = CreateObject("roUrlTransfer")
@@ -83,11 +89,14 @@ sub runVersionLoop()
         print "[Mango] mem: "; mem
         ' identity rides on every poll: it is how the fleet service routes
         ' this display, and how a restarted service resurrects its worker
-        req.SetUrl(base + "/wait?since=" + ver.ToStr() + "&busy=" + bp + "&mem=" + mem + m.top.identity)
+        lp = ""
+        if launchPending then lp = "&launch=1"
+        req.SetUrl(base + "/wait?since=" + ver.ToStr() + "&busy=" + bp + "&mem=" + mem + lp + m.top.identity)
         if req.AsyncGetToString()
             ' server holds up to 50s; give it 55 then re-arm
             msg = wait(55000, port)
             if type(msg) = "roUrlEvent" and msg.GetResponseCode() = 200
+                launchPending = false
                 raw = msg.GetString()
                 if m.loggedReply <> true
                     m.loggedReply = true

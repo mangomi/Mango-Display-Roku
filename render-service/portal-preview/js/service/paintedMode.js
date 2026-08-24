@@ -72,7 +72,11 @@
    * mmScreenshot.settled() answers the same question on demand.
    *
    * widgetType matters: a client drawing clocks, countdowns and GIFs
-   * natively can ignore those and skip the screenshot entirely.
+   * natively can ignore those and skip the screenshot entirely. That is
+   * why SETTINGS changes to those widgets report distinct types
+   * ("clock-setting", "countdown-setting"): a resized clock or a new
+   * countdown date changes the baked pixels and the native specs, and a
+   * plain "clock"/"countdown" type would be filtered as a tick.
    * ------------------------------------------------------------------ */
 
   var seq = 0;

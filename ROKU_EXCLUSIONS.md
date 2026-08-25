@@ -24,8 +24,8 @@ would slot in alongside them. The check is on the display's `deviceId`.
 
 | # | Where | Option | Setting key | Status | Why |
 |---|---|---|---|---|---|
-| 1 | Settings → Visual Overlays | **Fireworks & Confetti** | `firework` | Confirmed — hide for RK | Per-particle burst physics (rockets, ~100 sparks with gravity/drag, confetti tumble). Roku's animation system is declarative — paths are described up front — so this needs a per-frame simulation in BrightScript on low-end hardware. Judders badly at exactly the moment it should impress. Decided 2026-08-03: not worth it for v1. |
-| 2 | Settings → Visual Overlays | **Bursting Hearts** | `bsHeart` | Confirmed — hide for RK | Same reason: a heart grows, pops and shatters into ~15 smaller hearts on individual trajectories. Per-frame physics, same cost/benefit. |
+| 1 | Settings → Visual Overlays | **Fireworks & Confetti** | `firework` | ~~Confirmed — hide for RK~~ **RESOLVED 2026-08-24 — supported, do NOT exclude** | Originally excluded because per-particle physics judder in BrightScript. Solved instead by filming the portal's own tsparticles preset at build time into a sprite sheet (`tools/generate-celebrations.js`); the render service plays it as a popup effect (`bundledBurstEffect` in `nativeWidgets.js`), same path as the GIF overlays. No webapp change needed. |
+| 2 | Settings → Visual Overlays | **Bursting Hearts** | `bsHeart` | ~~Confirmed — hide for RK~~ **RESOLVED 2026-08-24 — supported, do NOT exclude** | Same sprite-sheet approach as #1. |
 | 3 | Widget picker (and widget settings) | **Video widget** | Iframily `contentType: "video"` | Confirmed — hide for RK | Not supported on Roku in v1 (decided 2026-08-03). YouTube and Vimeo widgets are `<iframe>` embeds, and a third-party Roku channel has no browser and no YouTube player SDK — they can never play. Direct MP4/HLS URLs *can* play natively (a prototype worked), so this may later become "allowed, but only with a direct video URL" instead of a full exclusion. Until then hiding the whole widget avoids users adding a video that silently shows nothing. |
 | 4 | Widget settings (calendar, chores, todo, notes — anywhere the scroll option appears) | **Auto-scroll / scrolling content** | `mangoMirrorScroll` speed option (Off / Slow / Fast) | Confirmed — hide for RK, force "Off" | Decided 2026-08-03. The Roku shows a rendered image of the page, so a widget that scrolls its content on the web is captured as a fixed crop — anything below the fold is simply never seen, and (once interactivity ships) can't be focused or completed either. Users should size widgets so their content fits rather than relying on scroll. Confirmed live 2026-08-04: a to-do widget with 30 tasks laid out rows down to y=1632 on a 1080-high canvas; only the 18 inside the widget's visible box are rendered or reachable. |
 | 5 | Settings → Touch, Mouse or TV Remote control | **View event details on calendar** | `touch_calendar_read` | Confirmed — hide for RK | Decided 2026-08-04. Opens a details modal in the portal. The Roku screen is a rendered image plus native overlays, so a modal only exists if we re-render the page with it open, keep that modal state alive across every later render, and add a way to dismiss it. That is a whole second interaction mode for a read-only popup. |
@@ -110,3 +110,10 @@ disappearing elf, scary pop-ups, and the flying witch set (witch, bats,
 crawling spiders and the spiders that drop on threads). Animated GIF and
 sticker widgets, animated weather icons, photo slideshows, page
 background slideshows, the clock and the countdown all work too.
+
+Since 2026-08-24 the **Fireworks & Confetti** and **Bursting Hearts**
+overlays work as well (former exclusions #1/#2 — build-time sprite
+sheets, see the table). The TV also celebrates task check-offs natively:
+a confetti burst on the ticked box, and the portal's full-screen finale
+when a list completes — the painted portal suppresses its own canvas
+confetti so none of it is ever frozen into a screenshot.

@@ -128,6 +128,18 @@ What the service does with each (`paintedWorker.js`):
 The spinner is raised ONLY for `interaction` and `layout change`. Data
 arriving on its own must stay silent.
 
+**Celebrations (2026-08-24):** the portal's canvas confetti
+(check-off burst, list-complete `fireWorkConfetti`) is suppressed in
+painted mode — call sites and wrappers bail on `window.mmPainted` — so
+no frozen confetti is ever baked into a capture. The TV celebrates
+natively instead: `InteractionLayer` emits `celebrate {kind,x,y}` on a
+tick (burst at the box; finale when the whole list — todos per project,
+chores per widget — is done) and `MainScene` plays sprite-sheet bursts
+filmed at build time from the portal's own tsparticles presets
+(`tools/generate-celebrations.js`). The same tool produces the
+Fireworks / Bursting Hearts overlay sheets the render service plays via
+`bundledBurstEffect` — those two overlays are no longer Roku exclusions.
+
 ## Lifecycle (deliberate — Dave's requirement)
 
 A live portal is a browser tab AND holds the display's socket, so it runs

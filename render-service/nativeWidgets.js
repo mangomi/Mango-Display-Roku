@@ -1360,6 +1360,24 @@ const SCARY_GIFS = [
   S3_OVERLAY + "haloween/witch_face.gif",
 ];
 
+// A pre-rendered burst sheet shipped inside the image (effect-assets/,
+// generated at build time). Dwell = exactly one playthrough, so each
+// appearance is a single burst; extraMsRange spaces the appearances.
+function bundledBurstEffect(name, outDir, extraMsRange) {
+  const base = pathHandlers.join(__dirname, "effect-assets", "effect_" + name + "_sheet");
+  const meta = JSON.parse(fsHandlers.readFileSync(base + ".json", "utf8"));
+  const file = "effect_" + name + "_sheet.png";
+  const dest = pathHandlers.join(outDir, file);
+  if (!fsHandlers.existsSync(dest)) fsHandlers.copyFileSync(base + ".png", dest);
+  const cycleMs = meta.frameCount * meta.frameMs;
+  return {
+    type: "popup",
+    sprites: [{ stripFile: file, ...meta }],
+    dwellMsRange: [cycleMs + extraMsRange[0], cycleMs + extraMsRange[1]],
+    popMs: 130,
+  };
+}
+
 // portal: .elf img { height: 200px }, one at a time, 4-6s dwell,
 // pop-in/pop-out, random position anywhere on screen
 async function buildPopupEffect(urls, outDir, prefix) {
@@ -1646,6 +1664,26 @@ async function extractEffects(frame, ctx) {
       out.push(await buildPopupEffect(SCARY_GIFS, outDir, "scary"));
     } catch (e) {
       console.error("scary effect failed:", e.message);
+    }
+  }
+
+  // Fireworks and Bursting Hearts: the two effects dropped from v1
+  // because their per-frame particle physics fights the Express. The
+  // burst is pre-rendered ONCE at build time from the portal's own
+  // confetti library (tools/generate-celebrations.js) and pops at random
+  // positions - one full playthrough per appearance.
+  if (enabled.firework === true || enabled.firework === "true") {
+    try {
+      out.push(bundledBurstEffect("firework", outDir, [0, 200]));
+    } catch (e) {
+      console.error("firework effect failed:", e.message);
+    }
+  }
+  if (enabled.bsHeart === true || enabled.bsHeart === "true") {
+    try {
+      out.push(bundledBurstEffect("bsheart", outDir, [100, 400]));
+    } catch (e) {
+      console.error("bursting hearts effect failed:", e.message);
     }
   }
 

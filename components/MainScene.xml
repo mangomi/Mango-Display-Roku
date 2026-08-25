@@ -66,6 +66,9 @@
         <!-- clears a page load that never reported back, so a missed
              load event cannot stop the display updating for good -->
         <Timer id="loadWatchdog" repeat="false" duration="12" />
+        <!-- confetti bursts land on top of everything, like the portal's
+             canvas at zIndex 999 -->
+        <Group id="celebrationLayer" />
     </children>
     <script type="text/brightscript" uri="pkg:/source/env.brs" />
     <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />

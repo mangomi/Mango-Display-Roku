@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<component name="CelebrationBurst" extends="Group">
+    <interface>
+        <!-- { x, y: canvas center of the burst; size: display px;
+             delayMs: stagger before playing (finale volleys) } -->
+        <field id="config" type="assocarray" />
+        <!-- fires once after the last frame; the parent removes the node -->
+        <field id="done" type="boolean" value="false" />
+    </interface>
+    <children>
+        <Timer id="frameTick" repeat="true" duration="0.07" />
+        <Timer id="delayTimer" repeat="false" duration="0.1" />
+    </children>
+    <script type="text/brightscript" uri="pkg:/components/effects/CelebrationBurst.brs" />
+    <script type="text/brightscript" uri="pkg:/source/celebrationMap.brs" />
+</component>

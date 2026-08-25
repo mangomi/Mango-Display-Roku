@@ -12573,7 +12573,10 @@ window.myApp.controller("MainCtrl", [
         }
       }
 
-      if (todoTask.status == true) {
+      /* painted mode: the DEVICE throws its own confetti natively - the
+       * portal's canvas burst here would only get baked into a capture
+       * as frozen mid-air pieces */
+      if (todoTask.status == true && window.mmPainted !== true) {
         realisticConfetti(
           event.clientX / window.innerWidth,
           event.clientY / window.innerHeight
@@ -12605,7 +12608,7 @@ window.myApp.controller("MainCtrl", [
         }
       }
 
-      if (isAllTaskCompleted) {
+      if (isAllTaskCompleted && window.mmPainted !== true) {
         fireWorkConfetti();
       }
 

@@ -79,7 +79,14 @@ sub onTargets()
         p.width = it.rect.w
         p.height = it.rect.h
         p.uri = m.top.assetBase + spriteFor(sprites, checked)
-        m.items.Push({ node: p, rect: it.rect, checked: checked, sprites: sprites, id: tid })
+        ' widget/project identify the LIST a task belongs to - the portal
+        ' throws its big celebration when a whole list completes, and the
+        ' same grouping rule applies here (todos complete per project)
+        proj = ""
+        if it.payload <> invalid and it.payload.projectId <> invalid then proj = Box(it.payload.projectId).ToStr()
+        wid = ""
+        if it.widgetSettingId <> invalid then wid = Box(it.widgetSettingId).ToStr()
+        m.items.Push({ node: p, rect: it.rect, checked: checked, sprites: sprites, id: tid, widget: wid, project: proj, kind: it.kind })
     end for
 
     ' a target that has left the page - a completed chore dropping out of
@@ -380,6 +387,20 @@ sub updateHighlight()
     m.highlight.visible = true
 end sub
 
+' Is every box in this task's LIST now checked? The visible targets are
+' the list as far as the TV can aim at it; todos group per project inside
+' a widget (the portal's own rule), chores per widget.
+function listComplete(hit as object) as boolean
+    for each it in m.items
+        if it.widget = hit.widget
+            if hit.kind <> "todo" or it.project = hit.project
+                if it.checked <> true then return false
+            end if
+        end if
+    end for
+    return true
+end function
+
 sub activateUnderPointer()
     print "[Mango] OK at "; Int(m.px); ","; Int(m.py)
     hit = itemUnderPointer()
@@ -391,6 +412,13 @@ sub activateUnderPointer()
     hit.node.uri = m.top.assetBase + spriteFor(hit.sprites, hit.checked)
     if hit.id <> "" then m.overrides[hit.id] = { checked: hit.checked, at: nowSecs() }
     print "[Mango] tick "; hit.id; " -> "; hit.checked
+    ' celebrate exactly like the portal: a burst at the box for a
+    ' check-off, the full-display finale when its whole list is done
+    if hit.checked
+        info = { kind: "burst", x: hit.rect.x + hit.rect.w / 2, y: hit.rect.y + hit.rect.h / 2 }
+        if listComplete(hit) then info.kind = "finale"
+        m.top.celebrate = info
+    end if
     sendAction2("tap", hit.rect.x + hit.rect.w / 2, hit.rect.y + hit.rect.h / 2, hit.id)
 end sub
 

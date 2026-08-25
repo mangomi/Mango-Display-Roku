@@ -60,6 +60,8 @@ sub init()
     m.interaction.assetBase = m.assetBaseUrl
     m.interaction.serviceBase = m.versionBaseUrl
     m.interaction.observeField("pageTurn", "onPageTurn")
+    m.celebrationLayer = m.top.findNode("celebrationLayer")
+    m.interaction.observeField("celebrate", "onCelebrate")
 
     m.slots.slotA.poster.observeField("loadStatus", "onPosterLoad")
     m.slots.slotB.poster.observeField("loadStatus", "onPosterLoad")
@@ -727,6 +729,45 @@ function onKeyEvent(key as string, press as boolean) as boolean
     end if
     return false
 end function
+
+' --- celebrations ----------------------------------------------------
+' The portal's confetti, natively: a burst at the checked box; when a
+' whole list completes, the volley the portal calls fireWorkConfetti -
+' bursts from the left and right bands, staggered. The painted portal
+' suppresses its own canvas confetti so none is ever baked into a
+' capture; the TV is the only one celebrating.
+sub onCelebrate()
+    c = m.interaction.celebrate
+    if c = invalid or c.kind = invalid then return
+    if c.kind = "finale"
+        playFinale(Int(c.x), Int(c.y))
+    else
+        spawnBurst(Int(c.x), Int(c.y), 380, 0)
+    end if
+end sub
+
+sub playFinale(cx as integer, cy as integer)
+    for i = 0 to 5
+        side = i mod 2
+        x = Rnd(0) * 380 + 190                  ' left band ~190-570
+        if side = 1 then x = 1920 - (Rnd(0) * 380 + 190)
+        y = Rnd(0) * 430 + 55                   ' upper half
+        spawnBurst(Int(x), Int(y), 560, i * 210)
+    end for
+    ' and one on the box itself so the press is answered instantly
+    spawnBurst(cx, cy, 380, 0)
+end sub
+
+sub spawnBurst(x as integer, y as integer, size as integer, delayMs as integer)
+    b = m.celebrationLayer.createChild("CelebrationBurst")
+    b.observeField("done", "onBurstDone")
+    b.config = { x: x, y: y, size: size, delayMs: delayMs }
+end sub
+
+sub onBurstDone(ev as object)
+    n = ev.GetRoSGNode()
+    if n <> invalid then m.celebrationLayer.RemoveChild(n)
+end sub
 
 ' --- idle keep-alive -------------------------------------------------
 ' While content is up, looping the bundled silent clip makes the OS see

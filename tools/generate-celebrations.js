@@ -1,0 +1,131 @@
+/*
+ * Films the portal's own confetti library into sprite sheets the Roku
+ * plays natively. Real-time particle physics fights the Express (the
+ * reason Fireworks/Bursting Hearts were dropped from v1); a pre-rendered
+ * burst is the string-lights technique: film once at build time, play as
+ * frames forever. Run on a dev machine; outputs are committed.
+ *
+ *   node tools/generate-celebrations.js
+ *
+ * Produces:
+ *   images/celebrations/burst.png                  channel-bundled task-check burst
+ *   source/celebrationMap.brs                      its geometry, compiled into the channel
+ *   render-service/effect-assets/effect_firework_sheet.{png,json}
+ *   render-service/effect-assets/effect_bsheart_sheet.{png,json}
+ */
+const fs = require("fs");
+const path = require("path");
+const REPO = path.resolve(__dirname, "..");
+const SVC = path.join(REPO, "render-service");
+const { chromium } = require(path.join(SVC, "node_modules", "playwright"));
+const sharp = require(path.join(SVC, "node_modules", "sharp"));
+
+const PORTAL = process.env.PORTAL_DIR || path.join(process.env.HOME, "Projects", "Mangomirror-Portal", "WebContent");
+const CANVAS = 512;
+const FRAME_MS = 70;
+const SHEET_CAP = 2048;
+
+const ASSETS = [
+  {
+    name: "burst",
+    frames: 24,
+    // the portal's "realistic" task-check preset, centered
+    fire: `
+      const base = { origin: { x: 0.5, y: 0.55 }, zIndex: 9 };
+      confetti(Object.assign({}, base, { particleCount: 50, spread: 26, startVelocity: 55 }));
+      confetti(Object.assign({}, base, { particleCount: 40, spread: 60 }));
+      confetti(Object.assign({}, base, { particleCount: 70, spread: 100, decay: 0.91, scalar: 0.8 }));
+      confetti(Object.assign({}, base, { particleCount: 20, spread: 120, startVelocity: 25, decay: 0.92, scalar: 1.2 }));
+      confetti(Object.assign({}, base, { particleCount: 20, spread: 120, startVelocity: 45 }));`,
+  },
+  {
+    name: "firework",
+    frames: 26,
+    // one 360-degree shell burst; the overlay loops it at varied positions
+    fire: `
+      confetti({ particleCount: 110, spread: 360, startVelocity: 30, ticks: 70,
+                 gravity: 0.9, scalar: 1.6, origin: { x: 0.5, y: 0.5 }, zIndex: 9 });`,
+  },
+  {
+    name: "bsheart",
+    frames: 26,
+    // bursting hearts: the same shell with heart emoji, floatier
+    fire: `
+      confetti({ particleCount: 14, spread: 160, startVelocity: 16, ticks: 90,
+                 gravity: 0.35, scalar: 7, origin: { x: 0.5, y: 0.6 }, zIndex: 9,
+                 shapes: ["emoji"], shapeOptions: { emoji: { value: ["\\u2764\\uFE0F", "\\uD83D\\uDC96"] } } });`,
+  },
+];
+
+async function filmAsset(browser, asset) {
+  const page = await browser.newPage({ viewport: { width: CANVAS, height: CANVAS } });
+  const lib = fs.readFileSync(path.join(PORTAL, "js/vendor/tsparticles.confetti.bundle.min.js"), "utf8");
+  await page.setContent("<html><body style='margin:0;background:transparent'></body></html>");
+  await page.addScriptTag({ content: lib });
+  await page.evaluate(asset.fire);
+  const frames = [];
+  for (let i = 0; i < asset.frames; i++) {
+    frames.push(await page.screenshot({ omitBackground: true, type: "png" }));
+    await page.waitForTimeout(FRAME_MS);
+  }
+  await page.close();
+  return frames;
+}
+
+async function packSheet(frames) {
+  // scale frames until a grid fits under the texture cap
+  let scale = 1;
+  let fw, fh, cols, rows;
+  for (;;) {
+    fw = Math.floor(CANVAS * scale);
+    fh = fw;
+    cols = Math.max(1, Math.floor(SHEET_CAP / fw));
+    rows = Math.ceil(frames.length / cols);
+    if (rows * fh <= SHEET_CAP) break;
+    scale -= 0.05;
+    if (scale < 0.2) throw new Error("cannot fit sheet under texture cap");
+  }
+  const composites = [];
+  for (let i = 0; i < frames.length; i++) {
+    const buf = scale === 1 ? frames[i] : await sharp(frames[i]).resize(fw, fh).png().toBuffer();
+    composites.push({ input: buf, left: (i % cols) * fw, top: Math.floor(i / cols) * fh });
+  }
+  const sheet = await sharp({
+    create: { width: cols * fw, height: rows * fh, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+  })
+    .composite(composites)
+    .png()
+    .toBuffer();
+  return { sheet, meta: { frameW: fw, frameH: fh, frameCount: frames.length, cols, rows, frameMs: FRAME_MS } };
+}
+
+(async () => {
+  const browser = await chromium.launch();
+  fs.mkdirSync(path.join(REPO, "images", "celebrations"), { recursive: true });
+  fs.mkdirSync(path.join(SVC, "effect-assets"), { recursive: true });
+
+  for (const asset of ASSETS) {
+    process.stdout.write("filming " + asset.name + "... ");
+    const frames = await filmAsset(browser, asset);
+    const { sheet, meta } = await packSheet(frames);
+    if (asset.name === "burst") {
+      fs.writeFileSync(path.join(REPO, "images", "celebrations", "burst.png"), sheet);
+      fs.writeFileSync(
+        path.join(REPO, "source", "celebrationMap.brs"),
+        "' GENERATED by tools/generate-celebrations.js - do not edit by hand.\n" +
+          "function celebrationBurstMeta() as object\n" +
+          "    return { uri: \"pkg:/images/celebrations/burst.png\", frameW: " + meta.frameW +
+          ", frameH: " + meta.frameH + ", frameCount: " + meta.frameCount + ", cols: " + meta.cols +
+          ", rows: " + meta.rows + ", frameMs: " + meta.frameMs + " }\n" +
+          "end function\n",
+      );
+    } else {
+      const base = path.join(SVC, "effect-assets", "effect_" + asset.name + "_sheet");
+      fs.writeFileSync(base + ".png", sheet);
+      fs.writeFileSync(base + ".json", JSON.stringify(meta));
+    }
+    console.log(meta.frameCount + " frames, " + meta.cols + "x" + meta.rows + " grid @ " + meta.frameW + "px, " + Math.round(sheet.length / 1024) + "KB");
+  }
+  await browser.close();
+  console.log("done");
+})();

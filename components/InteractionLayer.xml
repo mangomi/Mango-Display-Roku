@@ -23,6 +23,9 @@
         <!-- centre of the widget a gesture acted on, so the spinner can
              sit on the thing that is actually changing -->
         <field id="busyAt" type="array" />
+        <!-- a check-off worth celebrating: { kind: "burst"|"finale", x, y }
+             (burst at the ticked box; finale when its whole list is done) -->
+        <field id="celebrate" type="assocarray" />
     </interface>
     <children>
         <Group id="boxes" />

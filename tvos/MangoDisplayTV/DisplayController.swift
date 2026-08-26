@@ -52,9 +52,25 @@ final class DisplayController: ObservableObject {
 
     /// manifest overlay types this client can draw (Roku's
     /// overlayRegistry); unknown types are skipped, same as a registry
-    /// miss. slideshow/background still pending - tvos/PARITY.md.
-    private static let overTypes: Set<String> = ["clock", "countdown", "gif"]
-    private static let underTypes: Set<String> = []
+    /// miss. `background` renders BELOW the page image (layered pages -
+    /// the image is a transparent PNG then).
+    private static let overTypes: Set<String> = ["clock", "countdown", "gif", "slideshow"]
+    private static let underTypes: Set<String> = ["background"]
+    /// types whose position survives page rotations (Roku overlayState)
+    private static let statefulTypes: Set<String> = ["slideshow", "background"]
+
+    /// slideshow positions by widget+page, so each visit continues where
+    /// the last one left off instead of restarting at photo 0
+    private var overlayState: [String: Int] = [:]
+
+    static func overlayStateKey(_ raw: [String: Any]) -> String? {
+        guard let id = JSON.int(raw["widgetSettingId"]), let page = JSON.int(raw["page"]) else { return nil }
+        return "ov_\(id)_\(page)"
+    }
+
+    func recordOverlayState(_ raw: [String: Any], index: Int) {
+        if let key = Self.overlayStateKey(raw) { overlayState[key] = index }
+    }
 
     // MARK: - internals
 
@@ -289,11 +305,18 @@ final class DisplayController: ObservableObject {
         var under: [OverlayItem] = []
         for (i, ov) in pg.overlays.enumerated() {
             guard let type = ov["type"] as? String else { continue }
+            var raw = ov
+            // resume state rides in with the config, like MainScene
+            // injecting ov.startIndex before node.config
+            if Self.statefulTypes.contains(type), let key = Self.overlayStateKey(ov),
+               let resume = overlayState[key] {
+                raw["startIndex"] = resume
+            }
             // ids stay stable for an unchanged overlay set, so SwiftUI
             // keeps view identity across slot rebuilds of the same page
             let item = OverlayItem(
                 id: "\(i)_\(type)_\(JSON.str(ov["widgetSettingId"]))_\(JSON.str(ov["page"]))",
-                type: type, raw: ov, assetBase: assetBase
+                type: type, raw: raw, assetBase: assetBase
             )
             if Self.underTypes.contains(type) {
                 under.append(item)

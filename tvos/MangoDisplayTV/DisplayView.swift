@@ -89,6 +89,7 @@ private struct SlotView: View {
 /// were already filtered by the controller.
 private struct OverlayItemView: View {
     let item: DisplayController.OverlayItem
+    @EnvironmentObject var controller: DisplayController
 
     var body: some View {
         switch item.type {
@@ -98,6 +99,10 @@ private struct OverlayItemView: View {
             CountdownOverlayView(cfg: item.raw)
         case "gif":
             GifOverlayView(cfg: item.raw, assetBase: item.assetBase)
+        case "slideshow", "background":
+            SlideshowOverlayView(cfg: item.raw) { [weak controller] idx in
+                controller?.recordOverlayState(item.raw, index: idx)
+            }
         default:
             EmptyView()
         }

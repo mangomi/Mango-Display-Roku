@@ -83,11 +83,32 @@ each child was offset by a share of the canvas (the clock's date line
 rendered 540px low). Every timeline-driven overlay wraps its labels in
 one explicit `ZStack(alignment: .topLeading)`.
 
+Landed 2026-08-26 (chunk 2 — slideshow/background, layered pages):
+
+- **Slideshow + background overlays** (`SlideshowOverlay.brs` →
+  `SlideshowOverlayView`, one view for both types like Roku's
+  registry): interval stepping (min 3s), per-widget transition with
+  first-reveal-always-fades, failed loads skip ahead, `pageColor`
+  under the photos, `cropToFill`, brightness dim (multiply-equivalent
+  black overlay), and cross-rotation position persistence
+  (controller `overlayState` ↔ Roku's `startIndex`/`lastIndex`,
+  advance-one-on-re-entry). `background` renders in the slot's under
+  layer — the layered transparent-PNG page contract. VERIFIED: both
+  pages' photo backgrounds rotate and resume across page turns.
+  Not yet exercised: slideshow as a *placed widget* (same code path,
+  needs a widget fixture), brightness < 1, slide/flip photo swaps.
+- **Memory rule honored**: slideshow photos bypass the shared cache
+  entirely — fetched on demand and DOWNSAMPLED to the widget rect
+  (Roku's `loadWidth` cap); only the on-screen A/B pair stays
+  resident. A 60-photo background list must never be cached whole.
+- Watched the painted pipeline self-correct in real time: a capture
+  taken mid-edit baked the portal's loading spinner + half-rendered
+  weather widget into `display_p0.png`; the next version's capture
+  replaced it. The device needs no defense — any change bumps the
+  version and the hash-keyed URLs refetch exactly the changed pixels.
+
 ## Not yet ported (Phase B remainder)
 
-- Overlays: slideshow, background under-layers (`SlideshowOverlay.brs`;
-  layered transparent-PNG pages), slideshow position persistence across
-  rotations (`overlayState`/`lastIndex`).
 - Effects: particle, popup, dropper, sprite-mover, string lights;
   celebrations (burst + finale; needs `tools/generate-celebrations.js`
   to emit a JSON map alongside the .brs one).

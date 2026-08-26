@@ -221,9 +221,31 @@ display costs the same whatever the TV runs).
 ## 7. Code organization & staying in sync with Roku (Dave, 2026-08-26)
 
 The tvOS app lives **in this repo** as a sibling folder (working name
-`tvos/`), next to the Roku channel (`components/`, `source/`) and the
-render service. No separate repo. Rules that keep the two clients in
-step:
+`tvos/`), next to the Roku channel and the render service. No separate
+repo. The layout, as it actually is:
+
+```
+Mango-Display-Roku/
+├── manifest, components/, source/, images/, media/, package.sh
+│                        ← the ROKU CLIENT lives at the repo root
+│                          (historical: Roku's package wants manifest at
+│                          the top; the repo grew Roku-first)
+├── render-service/      ← the Fargate service - shared brain, both TVs
+├── buildspec.yml        ← service image build (CodeBuild)
+├── fonts/               ← SHARED: bundled by the channel AND baked into
+│                          the service image so captures use the same fonts
+├── tools/               ← SHARED: font + celebration-sheet generators
+├── tvos/                ← the APPLE TV CLIENT (to be created), with its
+│                          PARITY.md marker
+└── *.md                 ← docs
+```
+
+Do NOT reshuffle the Roku files into a `roku/` folder as part of the
+tvOS work — packaging, the deploy runbook, and the porting-workflow
+paths all assume the current layout, and the tidy-up is cosmetic. If it
+ever happens, it happens on its own after the Roku store release.
+
+Rules that keep the two clients in step:
 
 - **`tvos/PARITY.md`** states the Roku commit the tvOS app currently
   matches ("behavior parity as of `<hash>`"). Every porting pass ends

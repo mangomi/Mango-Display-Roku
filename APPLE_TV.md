@@ -6,7 +6,7 @@ Dave's directive (2026-08-26): port the Roku thin-client approach to
 Apple TV **reusing everything server-side** — same render fleet, same
 DNS names, same `/wait` + `/interact` contract, same R2 assets, same
 manifests. The only backend-visible difference is a new device-code
-prefix (working name **`ATV`** — see "Prefix" below). This document is
+prefix (**`ATV`** — confirmed by Dave 2026-08-26). This document is
 the starting context for the session that builds it.
 
 Read alongside: `LIVE_PORTAL.md` (server architecture — start there),
@@ -144,7 +144,7 @@ Nothing we render will stress it.
 | Texture limits | 2048×2048 sheet cap (why generator packs to it) | Comfortably 4096+; keep 2048 sheets shared |
 | Persistence | roRegistry | Keychain (survives reinstall) for identity; UserDefaults for the rest |
 | Fonts | Bundled TTFs + fontMap.brs | Same TTFs, `CTFontManagerRegisterFontsForURL` at launch, JSON map |
-| Device code | `RK` + 9 digits | `ATV` + 9 digits (see Prefix below) |
+| Device code | `RK` + 9 digits | `ATV` + 9 digits (confirmed) |
 | Env switch | package.sh test/prod regenerating env.brs | Xcode build configurations (Debug/TestFlight→test, Release→prod) or an xcconfig flag — same "test by default, prod is deliberate" posture |
 | Auto-launch on boot | Not possible | Not possible (same). Enterprise/signage option unique to Apple: **single-app mode via MDM/Apple Configurator** pins the device to one app — worth mentioning to signage customers |
 | Store fee | Free | **$99/yr Apple Developer Program** (already paid — the iOS app ships from this account) |
@@ -155,12 +155,11 @@ Nothing we render will stress it.
 
 ## 4. Backend / webapp deltas (small, shared with the RK rollout)
 
-- **Prefix**: webapp `AppSettings` (`src/app/service/app.settings.ts`)
-  today has `MD` / `APP` (iOS) / `AND` (Android); `RK` is pending per
-  ROKU_EXCLUSIONS.md; **`ATV` appears unused in webapp and portal —
-  verify the backend has nothing ATV-shaped before committing to it**
-  (there was talk of Fire TV logic under `FTV`; it is not in the portal
-  WebContent — confirm where it lives and that prefixes don't collide).
+- **Prefix**: **`ATV` — decided and confirmed free by Dave
+  (2026-08-26).** Webapp `AppSettings`
+  (`src/app/service/app.settings.ts`) today has `MD` / `APP` (iOS) /
+  `AND` (Android); `RK` is pending per ROKU_EXCLUSIONS.md; an
+  `..._APPLETV = 'ATV'` constant slots in alongside them.
 - **Exclusions**: everything in ROKU_EXCLUSIONS.md is a *painted TV*
   constraint, not a Roku constraint (no scroll, no modals, no text
   entry, TV-remote gesture set, video widget undecided). The webapp
@@ -200,8 +199,7 @@ display costs the same whatever the TV runs).
 
 ## 6. Open questions / risks
 
-1. **Prefix `ATV`**: confirm against the backend (and whatever `FTV`
-   logic exists) that it's free. Backend owner question.
+1. ~~Prefix~~ **RESOLVED**: `ATV` confirmed by Dave 2026-08-26.
 2. **App Review posture**: an always-on ambient display that disables
    idle sleep is legitimate (`isIdleTimerDisabled` exists for exactly
    this), but write the App Review notes to explain the product ("smart

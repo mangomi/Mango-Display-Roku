@@ -843,6 +843,272 @@ const weatherIconHandler = {
   },
 };
 
+// ---- calendar cell weather (the 10-day forecast strips) ----------------
+// Each day cell's decoration (util/calendarWeatherOverlay.js) is a strip
+// of pure-CSS animation: rain/snow/hail particles, drifting clouds, beam
+// sweeps, plus a small animated icon. mm-weather-settle keeps all of it
+// out of the still (gradient + temps stay baked); this handler films the
+// LIVE animation once per condition type + strip size - Dave's call
+// (2026-08-26): "rain is always rain" - and replays it on the TV through
+// the ordinary gif-overlay path. Sheets are cached like the icon sheets,
+// so filming happens only when a new condition or size first appears.
+const CW_PERIODS_S = {
+  // window = the slowest major element's cycle, so the big features loop
+  // cleanly; individual particles have mixed periods and may seam, which
+  // is invisible at strip height
+  sunny: 5.6, cloudy: 13, "partly-cloudy": 13, fog: 8.4, rain: 5,
+  "sun-rain": 5.2, storm: 6.8, snow: 5.4, "sun-snow": 5.4,
+  "wind-snow": 5.4, wind: 5.2, frigid: 5.2, hail: 5.4,
+};
+const CW_DEFAULT_PERIOD_S = 5.5;
+const CW_MAX_SHOTS = 150;
+
+const cellWeatherHandler = {
+  type: "cellWeather",
+
+  async extract(frame) {
+    return await frame.evaluate(() => {
+      const out = [];
+      document.querySelectorAll(".mm-weather-header-strip").forEach((el) => {
+        if (el.offsetParent === null) return;
+        if (getComputedStyle(el).visibility === "hidden") return; // another page
+        const m = (el.className || "").toString().match(/mm-weather-overlay-([a-z-]+)/);
+        if (!m) return;
+        const r = el.getBoundingClientRect();
+        if (r.width < 20 || r.height < 6) return;
+        const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+        if (cx < 0 || cx > window.innerWidth || cy < 0 || cy > window.innerHeight) return;
+        out.push({
+          type: "gif",
+          cellWeather: m[1],
+          rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+          liveCapture: true,
+        });
+      });
+      return out;
+    });
+  },
+
+  // The settle CSS already keeps particles and motion out of the still;
+  // temperatures and date numbers are per-day DATA and stay baked. The
+  // little condition icon is filmed INTO the strip sheet, so its baked
+  // copy goes the way the widget icons' did: the overlay is the only
+  // source of icon pixels - a frozen ghost under an animated sheet
+  // reads as a smudge.
+  async hide(frame, overlays) {
+    if (!overlays.length) return;
+    await frame.evaluate(() => {
+      window.__mmCwHidden = [];
+      document.querySelectorAll(".mm-weather-header-icon").forEach((el) => {
+        if (getComputedStyle(el).visibility === "hidden") return;
+        el.style.opacity = "0";
+        window.__mmCwHidden.push(el);
+      });
+    });
+  },
+
+  async captureAfter(page, frame, items, ctx) {
+    const live = items.filter((i) => i.liveCapture);
+    if (!live.length) return items;
+    const sharp = require("sharp");
+
+    // one shared sheet per condition + strip pixel size
+    const sizeKey = (o) =>
+      o.cellWeather + "|" + Math.round(o.rect.w * ctx.outScale) + "x" + Math.round(o.rect.h * ctx.outScale);
+    const cwKey = (o) => crypto.createHash("md5").update(sizeKey(o)).digest("hex").slice(0, 16);
+    const cachedFor = (o) => {
+      const key = cwKey(o);
+      let metas;
+      try {
+        metas = fsHandlers
+          .readdirSync(ctx.outDir)
+          .filter((f) => f.startsWith("overlay_cw_" + key + "_") && f.endsWith(".json"))
+          .sort(
+            (a, b) =>
+              fsHandlers.statSync(pathHandlers.join(ctx.outDir, b)).mtimeMs -
+              fsHandlers.statSync(pathHandlers.join(ctx.outDir, a)).mtimeMs,
+          );
+      } catch (e) {
+        return null;
+      }
+      for (const m of metas) {
+        try {
+          const c = JSON.parse(fsHandlers.readFileSync(pathHandlers.join(ctx.outDir, m), "utf8"));
+          if (c.stripFile && fsHandlers.existsSync(pathHandlers.join(ctx.outDir, c.stripFile))) return c;
+        } catch (e) {}
+      }
+      return null;
+    };
+    const fill = (o, c) => {
+      o.stripFile = c.stripFile;
+      o.frameW = o.rect.w;
+      o.frameH = o.rect.h;
+      o.frameCount = c.frameCount;
+      o.cols = c.cols;
+      o.rows = c.rows;
+      o.frameMs = c.frameMs;
+      delete o.liveCapture;
+      delete o.cellWeather;
+    };
+
+    const hits = live.map(cachedFor);
+    if (hits.every(Boolean)) {
+      live.forEach((o, i) => fill(o, hits[i]));
+      console.log("cw: " + live.length + " cell strip(s) from cached sheets, filming skipped");
+      return items;
+    }
+
+    // film one exemplar per distinct (condition, size) that has no
+    // cached sheet - a single new condition must not refilm the rest
+    const need = new Map();
+    live.forEach((o, i) => {
+      if (!hits[i] && !need.has(sizeKey(o))) need.set(sizeKey(o), o);
+    });
+
+    await ctx.reenableAnimations();
+    await frame.evaluate(() => {
+      // the icon film may have left its background-stripping styles up
+      // (the shared sweep runs only after ALL handlers); they would
+      // erase these CSS-background-drawn particles
+      document.querySelectorAll("style").forEach((n) => {
+        if ((n.textContent || "").includes("mm-film")) n.remove();
+      });
+      // wake the weather and restore the icons for their close-up
+      const settle = document.getElementById("mm-weather-settle");
+      if (settle) settle.disabled = true;
+      (window.__mmCwHidden || []).forEach((el) => (el.style.opacity = ""));
+      window.__mmCwHidden = [];
+    });
+    // Isolation differs from the icon film: these particles are drawn
+    // with CSS backgrounds, so background-stripping would erase the
+    // payload. Instead everything is visibility-hidden and the weather
+    // subtrees switched back on. The strip's own gradient stays OFF -
+    // it is already baked, and double-compositing a translucent
+    // gradient darkens it (the icon film's faint-square lesson). Temps
+    // stay hidden: they are per-day data inside a per-TYPE shared sheet.
+    await frame.addStyleTag({
+      content:
+        "/*mm-film*/" +
+        "body *{visibility:hidden !important}" +
+        ".mm-weather-overlay,.mm-weather-overlay *,.mm-weather-header-meta,.mm-weather-header-meta *{visibility:visible !important}" +
+        ".mm-weather-header-strip{background:none !important;box-shadow:none !important}" +
+        ".mm-weather-date-temp,.mm-weather-date-temp *{visibility:hidden !important}",
+    });
+    await page.addStyleTag({ content: "/*mm-film*/html,body{background:transparent !important}" });
+    await page.waitForTimeout(200);
+
+    const windowS = Math.min(
+      13,
+      Math.max(...[...need.values()].map((o) => CW_PERIODS_S[o.cellWeather] || CW_DEFAULT_PERIOD_S)),
+    );
+    const shots = [];
+    const stamps = [];
+    const t0 = Date.now();
+    while (Date.now() - t0 < windowS * 1000 && shots.length < CW_MAX_SHOTS) {
+      stamps.push(Date.now() - t0);
+      shots.push(await page.screenshot({ type: "png", omitBackground: true }));
+      await page.waitForTimeout(100);
+    }
+    const realGapMs = shots.length > 1 ? (stamps[stamps.length - 1] - stamps[0]) / (shots.length - 1) : 100;
+
+    // settle goes back on before anything else can be photographed
+    await frame
+      .evaluate(() => {
+        const settle = document.getElementById("mm-weather-settle");
+        if (settle) settle.disabled = false;
+      })
+      .catch(() => {});
+
+    const shotMeta = await sharp(shots[0]).metadata();
+    const built = new Map();
+    for (const [k, o] of need) {
+      try {
+        const dr = {
+          left: Math.round(o.rect.x * ctx.outScale),
+          top: Math.round(o.rect.y * ctx.outScale),
+          width: Math.max(1, Math.round(o.rect.w * ctx.outScale)),
+          height: Math.max(1, Math.round(o.rect.h * ctx.outScale)),
+        };
+        dr.left = Math.min(Math.max(0, dr.left), shotMeta.width - 1);
+        dr.top = Math.min(Math.max(0, dr.top), shotMeta.height - 1);
+        dr.width = Math.min(dr.width, shotMeta.width - dr.left);
+        dr.height = Math.min(dr.height, shotMeta.height - dr.top);
+
+        const periodMs = (CW_PERIODS_S[o.cellWeather] || CW_DEFAULT_PERIOD_S) * 1000;
+        let count = stamps.filter((s) => s < periodMs).length;
+        count = Math.max(2, Math.min(count, shots.length));
+        const capacity =
+          Math.max(1, Math.floor(2048 / dr.width)) * Math.max(1, Math.floor(2048 / dr.height));
+        const stride = Math.max(1, Math.ceil(count / capacity));
+        const picked = [];
+        for (let i = 0; i < count; i += stride) picked.push(i);
+
+        const frames = [];
+        for (const idx of picked) frames.push(await sharp(shots[idx]).extract(dr).png().toBuffer());
+        const cols = Math.max(1, Math.min(Math.floor(2048 / dr.width), frames.length));
+        const rows = Math.ceil(frames.length / cols);
+        const sheetBuf = await sharp({
+          create: {
+            width: cols * dr.width,
+            height: rows * dr.height,
+            channels: 4,
+            background: { r: 0, g: 0, b: 0, alpha: 0 },
+          },
+        })
+          .composite(
+            frames.map((f, i) => ({
+              input: f,
+              left: (i % cols) * dr.width,
+              top: Math.floor(i / cols) * dr.height,
+            })),
+          )
+          .png()
+          .toBuffer();
+        const contentTag = crypto.createHash("md5").update(sheetBuf).digest("hex").slice(0, 8);
+        const fileName = "overlay_cw_" + cwKey(o) + "_" + contentTag + ".png";
+        fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, fileName), sheetBuf);
+        for (const f of fsHandlers.readdirSync(ctx.outDir)) {
+          if (!f.startsWith("overlay_cw_" + cwKey(o) + "_")) continue;
+          if (f.startsWith(fileName.replace(/\.png$/, ""))) continue;
+          try {
+            const p = pathHandlers.join(ctx.outDir, f);
+            if (Date.now() - fsHandlers.statSync(p).mtimeMs > 600000) fsHandlers.unlinkSync(p);
+          } catch (e) {}
+        }
+        const meta = {
+          stripFile: fileName,
+          frameCount: frames.length,
+          cols,
+          rows,
+          frameMs: Math.max(60, Math.round(realGapMs * stride)),
+        };
+        fsHandlers.writeFileSync(
+          pathHandlers.join(ctx.outDir, fileName.replace(/\.png$/, ".json")),
+          JSON.stringify(meta),
+        );
+        console.log(
+          "cw sheet:",
+          o.cellWeather,
+          frames.length + "f @" + meta.frameMs + "ms, cycle " + Math.round(periodMs / 100) / 10 + "s",
+        );
+        built.set(k, meta);
+      } catch (e) {
+        console.error("cell weather film failed (" + k + "):", e.message);
+      }
+    }
+
+    for (const o of live) {
+      const c = built.get(sizeKey(o)) || cachedFor(o);
+      if (!c) {
+        o.skip = true;
+        continue;
+      }
+      fill(o, c);
+    }
+    return items.filter((o) => !o.skip);
+  },
+};
+
 // ---- photo slideshow (image widget) ------------------------------------
 // The portal resolves every source (Unsplash/Google Photos/iCloud/S3)
 // into $scope.imageWidgetList[n].images - a plain URL array. The overlay
@@ -1747,18 +2013,25 @@ function effectHideSelectors() {
   return { ids, classes };
 }
 
-// The full CSS that must hold whenever this portal is photographed:
-// effect elements stay invisible (effectHideSelectors), and the
-// calendar cell-weather decoration SETTLES - its ~27 infinite CSS
-// animations (rain/snow/hail particles, cloud drift, beam sweeps, icon
-// floats; util/calendarWeatherOverlay.js + style.css) otherwise bake
-// into every capture at a random mid-phase (Dave saw frozen raindrops,
-// 2026-08-26). Transient particles hide entirely; persistent pieces
-// (strip gradient, icon, temperatures) keep their resting look. Scoped
-// to .mm-weather-* only - scar 1: calendar scrolling depends on
-// animationend, so a broad animation:none is forbidden.
-function captureHygieneCss() {
+// CSS that must hold whenever this portal is photographed, in TWO
+// tags because they have different lifecycles: effect hiding is
+// permanent, while the weather settle is lifted for the moments the
+// cell-weather film rolls (cellWeatherHandler).
+//
+// mm-capture-hygiene: effect elements stay invisible (effectHideSelectors).
+// mm-weather-settle: the calendar cell-weather decoration SETTLES - its
+// ~27 infinite CSS animations (rain/snow/hail particles, cloud drift,
+// beam sweeps, icon floats; util/calendarWeatherOverlay.js + style.css)
+// otherwise bake into every capture at a random mid-phase (Dave saw
+// frozen raindrops, 2026-08-26). Transient particles hide entirely;
+// persistent pieces (strip gradient, temperatures) keep their resting
+// look. Scoped to .mm-weather-* only - scar 1: calendar scrolling
+// depends on animationend, so a broad animation:none is forbidden.
+function effectHideCss() {
   const sel = effectHideSelectors();
+  return sel.ids.map((i) => "#" + i).concat(sel.classes.map((c) => "." + c)).join(",") + "{opacity:0 !important}";
+}
+function weatherSettleCss() {
   const weatherParticles = [".mm-rain-drop", ".mm-snow-flake", ".mm-hail-pellet", ".mm-wind-line", ".mm-fog-line", ".mm-storm-bolt"];
   const weatherScope = [
     ".mm-weather-overlay", ".mm-weather-overlay *", ".mm-weather-overlay::before", ".mm-weather-overlay::after",
@@ -1766,24 +2039,28 @@ function captureHygieneCss() {
     ".mm-weather-header-meta", ".mm-weather-header-meta *", ".mm-weather-header-meta *::before", ".mm-weather-header-meta *::after",
   ];
   return (
-    sel.ids.map((i) => "#" + i).concat(sel.classes.map((c) => "." + c)).join(",") + "{opacity:0 !important}" +
     weatherParticles.join(",") + "{opacity:0 !important}" +
     weatherScope.join(",") + "{animation:none !important}"
   );
 }
 
 async function hideEffects(frame) {
-  // the persistent rule normally arrives via livePortal's init script;
-  // installing it here too covers the legacy (non-painted) pipeline,
+  // the persistent rules normally arrive via livePortal's init script;
+  // installing them here too covers the legacy (non-painted) pipeline,
   // whose pages never pass through livePortal
-  await frame.evaluate((css) => {
-    if (!document.getElementById("mm-capture-hygiene")) {
-      const s = document.createElement("style");
-      s.id = "mm-capture-hygiene";
-      s.textContent = css;
-      document.head.appendChild(s);
+  await frame.evaluate((tags) => {
+    for (const t of tags) {
+      if (!document.getElementById(t.id)) {
+        const s = document.createElement("style");
+        s.id = t.id;
+        s.textContent = t.css;
+        document.head.appendChild(s);
+      }
     }
-  }, captureHygieneCss());
+  }, [
+    { id: "mm-capture-hygiene", css: effectHideCss() },
+    { id: "mm-weather-settle", css: weatherSettleCss() },
+  ]);
   // effects handled outside the particle table still have to be kept out
   // of the still (the Roku animates them natively)
   const { ids, classes } = effectHideSelectors();
@@ -2060,7 +2337,8 @@ module.exports = {
   extractEffects,
   hideEffects,
   effectHideSelectors,
-  captureHygieneCss,
+  effectHideCss,
+  weatherSettleCss,
   extractTargets,
   extractRegions,
   hideTargets,
@@ -2068,6 +2346,9 @@ module.exports = {
     clockHandler,
     gifHandler,
     weatherIconHandler,
+    // after weatherIconHandler: both film, and this one clears the icon
+    // film's leftover styles before rolling its own
+    cellWeatherHandler,
     slideshowHandler,
     countdownHandler,
     backgroundHandler,

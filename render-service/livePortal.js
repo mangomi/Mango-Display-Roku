@@ -173,19 +173,26 @@ class LivePortal {
    * painted sessions run this file, so real portals keep their
    * effects. */
   async installEffectHide() {
-    /* the rule also settles the calendar cell-weather animations - see
-     * nativeWidgets.captureHygieneCss for the full inventory */
-    const css = require("./nativeWidgets").captureHygieneCss();
-    await this.page.addInitScript((rule) => {
+    /* two tags with different lifecycles: effect hiding is permanent,
+     * the weather settle is lifted while the cell-weather film rolls -
+     * see nativeWidgets for both inventories */
+    const nw = require("./nativeWidgets");
+    const tags = [
+      { id: "mm-capture-hygiene", css: nw.effectHideCss() },
+      { id: "mm-weather-settle", css: nw.weatherSettleCss() },
+    ];
+    await this.page.addInitScript((list) => {
       const add = () => {
-        const s = document.createElement("style");
-        s.id = "mm-capture-hygiene";
-        s.textContent = rule;
-        document.head.appendChild(s);
+        for (const t of list) {
+          const s = document.createElement("style");
+          s.id = t.id;
+          s.textContent = t.css;
+          document.head.appendChild(s);
+        }
       };
       if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", add);
       else add();
-    }, css);
+    }, tags);
   }
 
   async installSignalBridge() {

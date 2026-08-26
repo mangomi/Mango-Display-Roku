@@ -218,7 +218,33 @@ display costs the same whatever the TV runs).
    differs on the simulator — pointer feel must be tuned on hardware.
    (Dave has Apple TV hardware? — confirm.)
 
-## 7. Suggested phases
+## 7. Code organization & staying in sync with Roku (Dave, 2026-08-26)
+
+The tvOS app lives **in this repo** as a sibling folder (working name
+`tvos/`), next to the Roku channel (`components/`, `source/`) and the
+render service. No separate repo. Rules that keep the two clients in
+step:
+
+- **`tvos/PARITY.md`** states the Roku commit the tvOS app currently
+  matches ("behavior parity as of `<hash>`"). Every porting pass ends
+  by updating it.
+- **The porting workflow** for any future session: read
+  `tvos/PARITY.md`, then
+  `git log <hash>..HEAD -- components/ source/ images/ fonts/ manifest`
+  to list Roku-side changes since parity, port the *behavioral* ones
+  (skip Roku-only mechanics like texture-cap packing or the keep-alive
+  video), update PARITY.md.
+- **Commit messages are the porting spec.** Roku commits here describe
+  behavior and rationale, not just code — keep that up; the tvOS
+  session reads the story, not the diff.
+- **No code is shared** (BrightScript vs Swift, zero overlap). What IS
+  shared and must stay platform-neutral: the manifest contract, the
+  sprite sheets/fonts and their generator tools (which should emit JSON
+  maps alongside the .brs ones), and the render service. Most features
+  ship in the service and touch neither app — the apps only change when
+  a new manifest concept appears, so the porting burden stays small.
+
+## 8. Suggested phases
 
 - **Phase A (spike, ~days)**: pairing + /wait + page display on the
   tvOS simulator against the test fleet (id in PAINTED_DISPLAYS).

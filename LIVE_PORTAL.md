@@ -131,7 +131,13 @@ arriving on its own must stay silent.
 **Celebrations (2026-08-24):** the portal's canvas confetti
 (check-off burst, list-complete `fireWorkConfetti`) is suppressed in
 painted mode — call sites and wrappers bail on `window.mmPainted` — so
-no frozen confetti is ever baked into a capture. The TV celebrates
+no frozen confetti is ever baked into a capture. Same for the visual
+overlays: `overlayController`'s firework/bursting-hearts draw loops bail
+on `mmPainted`, and `hideEffects` hides `#fireworksCanvas`/`#bsHearts`
+at capture as the service-side backstop (2026-08-26: a live canvas
+baked a frozen green shell into every capture — overlayController is
+NOT in the vendored preview set, so until the portal deploys, the
+backstop is what keeps fleet captures clean). The TV celebrates
 natively instead: `InteractionLayer` emits `celebrate {kind,x,y}` on a
 tick (burst at the box; finale when the whole list — todos per project,
 chores per widget — is done) and `MainScene` plays sprite-sheet bursts

@@ -1732,7 +1732,11 @@ async function hideEffects(frame) {
   // of the still (the Roku animates them natively)
   const ids = Object.values(EFFECTS)
     .flatMap((e) => e.domIds || [])
-    .concat(["santa", "elf", "scaryelf", "witch", "bat", "spider", "spider3"]);
+    // fireworksCanvas/bsHearts: the portal's own firework and bursting-
+    // hearts overlays. The TV plays bundled sheets instead, and a live
+    // canvas here bakes a frozen mid-explosion into the still (seen
+    // 2026-08-26: a green shell stuck at the top of every capture).
+    .concat(["santa", "elf", "scaryelf", "witch", "bat", "spider", "spider3", "fireworksCanvas", "bsHearts"]);
   const classes = Object.values(EFFECTS)
     .flatMap((e) => e.domClasses || [])
     // "spider" class = the dropping spiders, "web-line" = their threads

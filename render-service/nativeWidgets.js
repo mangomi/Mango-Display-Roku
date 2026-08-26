@@ -1727,9 +1727,12 @@ async function extractEffects(frame, ctx) {
 // mid-flight particles would sit baked under the live native ones.
 // (leaves and hearts are appended straight to <body> by class, so both
 // ids and classes have to be covered)
-async function hideEffects(frame) {
-  // effects handled outside the particle table still have to be kept out
-  // of the still (the Roku animates them natively)
+// Every visual-overlay element the devices draw natively, and which
+// must therefore never appear in a painted capture. ONE list, TWO
+// consumers: livePortal injects it as a born-hidden CSS rule (so
+// elements that respawn mid-capture are hidden from their first paint),
+// and hideEffects sweeps it per capture as the belt-and-braces pass.
+function effectHideSelectors() {
   const ids = Object.values(EFFECTS)
     .flatMap((e) => e.domIds || [])
     // fireworksCanvas/bsHearts: the portal's own firework and bursting-
@@ -1741,6 +1744,13 @@ async function hideEffects(frame) {
     .flatMap((e) => e.domClasses || [])
     // "spider" class = the dropping spiders, "web-line" = their threads
     .concat(["stringlight", "elf", "spider", "web-line"]);
+  return { ids, classes };
+}
+
+async function hideEffects(frame) {
+  // effects handled outside the particle table still have to be kept out
+  // of the still (the Roku animates them natively)
+  const { ids, classes } = effectHideSelectors();
   await frame.evaluate(
     (sel) => {
       sel.ids.forEach((id) => {
@@ -2013,6 +2023,7 @@ async function hideTargets(frame, items) {
 module.exports = {
   extractEffects,
   hideEffects,
+  effectHideSelectors,
   extractTargets,
   extractRegions,
   hideTargets,

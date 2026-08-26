@@ -120,6 +120,7 @@ class LivePortal {
 
     await this.installRoutes();
     await this.installSignalBridge();
+    await this.installEffectHide();
 
     this.page.on("pageerror", (e) => this.log("[portal error]", e.message));
     this.page.on("close", () => {
@@ -158,6 +159,34 @@ class LivePortal {
     }
     /* the deployed index.html does not load paintedMode.js yet */
     await this.page.addInitScript({ path: path.join(PREVIEW_DIR, PREVIEW_FILES[0].file) });
+  }
+
+  /* Effect elements are born hidden. hideEffects (capture-time inline
+   * styles) can only cover elements that exist the moment it runs;
+   * leaves, hearts and dropping spiders RESPAWN every second, so
+   * anything born between that pass and a page's screenshot was being
+   * captured - and since BLOCKED_MEDIA force-fails their art, it was
+   * captured as a Chromium broken-image tile (found by the tvOS
+   * session, 2026-08-26, EFFECT_TILES_BUG.md). A CSS rule has no such
+   * timing window, and addInitScript survives the portal's
+   * self-reloads, which would drop a one-time <style> injection. Only
+   * painted sessions run this file, so real portals keep their
+   * effects. */
+  async installEffectHide() {
+    const sel = require("./nativeWidgets").effectHideSelectors();
+    const css =
+      sel.ids.map((i) => "#" + i).concat(sel.classes.map((c) => "." + c)).join(",") +
+      "{opacity:0 !important}";
+    await this.page.addInitScript((rule) => {
+      const add = () => {
+        const s = document.createElement("style");
+        s.id = "mm-effect-hide";
+        s.textContent = rule;
+        document.head.appendChild(s);
+      };
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", add);
+      else add();
+    }, css);
   }
 
   async installSignalBridge() {

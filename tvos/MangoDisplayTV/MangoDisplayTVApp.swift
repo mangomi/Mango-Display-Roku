@@ -12,6 +12,12 @@ struct MangoDisplayTVApp: App {
     @StateObject private var controller = DisplayController()
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        // before any overlay renders: LabelSpec resolves families
+        // synchronously at view-build time
+        FontRegistry.shared.registerAll()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

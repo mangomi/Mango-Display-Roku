@@ -28,11 +28,37 @@ final class DisplayController: ObservableObject {
         var pageIndex: Int
         var image: UIImage
         var transition: String?
+        /// live layers drawn OVER the page image, in manifest order
+        var over: [OverlayItem] = []
+        /// layers drawn UNDER it (rotating page backgrounds; the page
+        /// image is a transparent PNG then - draw order is the contract)
+        var under: [OverlayItem] = []
+        /// fingerprint of the overlay set this slot was built from
+        var overlaysKey: String = ""
+        /// mid-flip squash state (the flip transition animates the
+        /// outgoing slot to zero width before the incoming one expands)
+        var flipSquash = false
     }
+
+    /// One overlay instance riding inside a page slot. assetBase is
+    /// captured at build time (Roku sets node.assetBase before config for
+    /// the same reason: sprite URLs resolve against it).
+    struct OverlayItem: Identifiable {
+        let id: String
+        let type: String
+        let raw: [String: Any]
+        let assetBase: String
+    }
+
+    /// manifest overlay types this client can draw (Roku's
+    /// overlayRegistry); unknown types are skipped, same as a registry
+    /// miss. slideshow/background still pending - tvos/PARITY.md.
+    private static let overTypes: Set<String> = ["clock", "countdown", "gif"]
+    private static let underTypes: Set<String> = []
 
     // MARK: - internals
 
-    private let cache = ImageCache()
+    private let cache = ImageCache.shared
     private var identity = ""      // "&device=..&major=..&minor=..&w=..&h=.."
     private var screenW = 1920
     private var screenH = 1080
@@ -202,20 +228,30 @@ final class DisplayController: ObservableObject {
         if pageIndex >= pages.count { pageIndex = 0 }
         // busy may have arrived while no page was up yet (app launch)
         updateSpinner()
-        // drop cached images no current page names
-        let keep = Set(pages.compactMap { pageURL($0)?.absoluteString })
+        // drop cached images nothing current names - pages AND their
+        // overlay sprite sheets (evicting live sheets would refetch every
+        // strip on each manifest apply)
+        var keep = Set(pages.compactMap { pageURL($0)?.absoluteString })
+        for pg in pages {
+            for ov in pg.overlays {
+                if let strip = ov["stripFile"] as? String, !strip.isEmpty {
+                    keep.insert(assetBase + strip)
+                }
+            }
+        }
         Task { await cache.prune(keep: keep) }
-        // quiet refresh of the current page, no transition. (imageOnly
-        // additionally means "swap the image under live overlay layers";
-        // until overlays exist the effect is the same in-place swap.)
-        loadPage(pageIndex, animated: false)
+        // quiet refresh of the current page, no transition. imageOnly is
+        // a swipe's answer landing: swap the image UNDER the live overlay
+        // layers rather than rebuilding them - a rebuild restarts every
+        // GIF and reads as the screen freezing (MainScene's forceInPlace).
+        loadPage(pageIndex, animated: false, forceInPlace: man.imageOnly)
     }
 
     // MARK: - page loading and display (MainScene loadPage/finalizeSwap)
 
     /// Load-then-swap, never show a loading blank. An unchanged URL is
     /// served from ImageCache without a fetch or a decode.
-    private func loadPage(_ index: Int, animated: Bool) {
+    private func loadPage(_ index: Int, animated: Bool, forceInPlace: Bool = false) {
         guard !pages.isEmpty else { return }
         let idx = index >= pages.count ? 0 : index
         let pg = pages[idx]
@@ -228,7 +264,7 @@ final class DisplayController: ObservableObject {
             let image = await cache.image(at: url, timeout: 12)
             loading = false
             if let image {
-                show(pg, index: idx, image: image, animated: animated)
+                show(pg, index: idx, image: image, animated: animated, forceInPlace: forceInPlace)
             } else {
                 NSLog("[Mango] image load failed: %@", url.absoluteString)
                 // a newer manifest may be waiting with a corrected URL
@@ -243,37 +279,102 @@ final class DisplayController: ObservableObject {
         return URL(string: assetBase + pg.image + "?t=" + tag)
     }
 
-    private func show(_ pg: Page, index: Int, image: UIImage, animated: Bool) {
+    /// The transition timing the portal uses and Roku matches
+    /// (buildTransition: 3.0s, inOutCubic).
+    private static let turnDuration = 3.0
+    private static let turnCurve = Animation.timingCurve(0.645, 0.045, 0.355, 1.0, duration: turnDuration)
+
+    private func builtOverlays(_ pg: Page) -> (over: [OverlayItem], under: [OverlayItem]) {
+        var over: [OverlayItem] = []
+        var under: [OverlayItem] = []
+        for (i, ov) in pg.overlays.enumerated() {
+            guard let type = ov["type"] as? String else { continue }
+            // ids stay stable for an unchanged overlay set, so SwiftUI
+            // keeps view identity across slot rebuilds of the same page
+            let item = OverlayItem(
+                id: "\(i)_\(type)_\(JSON.str(ov["widgetSettingId"]))_\(JSON.str(ov["page"]))",
+                type: type, raw: ov, assetBase: assetBase
+            )
+            if Self.underTypes.contains(type) {
+                under.append(item)
+            } else if Self.overTypes.contains(type) {
+                over.append(item)
+            }
+        }
+        return (over, under)
+    }
+
+    private func show(_ pg: Page, index: Int, image: UIImage, animated: Bool, forceInPlace: Bool = false) {
         phase = .display
+        // An in-place swap keeps the LIVE overlay layers running and only
+        // exchanges the pixels beneath them (MainScene loadPage's
+        // forceInPlace/overlaysUnchanged path): allowed when nothing
+        // animates, the page is the one already showing, and either the
+        // manifest was imageOnly or the overlay set is unchanged.
+        if !animated, let front = slots.last, index == front.pageIndex,
+           forceInPlace || pg.overlaysKey == front.overlaysKey {
+            slots[slots.count - 1].image = image
+            pageIndex = index
+            armRotation()
+            maybeApplyPages()
+            updateSpinner()
+            return
+        }
         pageIndex = index
+        var slot = PageSlot(pageIndex: index, image: image, transition: pg.transition)
+        (slot.over, slot.under) = builtOverlays(pg)
+        slot.overlaysKey = pg.overlaysKey
         if animated, !slots.isEmpty {
-            // a page TURN: the incoming page animates in on top, the
-            // outgoing one stays put underneath and is dropped once the
-            // transition completes
-            animating = true
-            let slot = PageSlot(pageIndex: index, image: image, transition: pg.transition)
-            withAnimation(.easeInOut(duration: 0.5), completionCriteria: .logicallyComplete) {
-                slots.append(slot)
-            } completion: { [weak self] in
-                guard let self else { return }
-                if self.slots.count > 1 { self.slots.removeFirst(self.slots.count - 1) }
-                self.animating = false
-                self.armRotation()
-                self.maybeApplyPages()
+            if pg.transition == "flip" {
+                startFlip(slot)
+            } else {
+                // the incoming page animates in on top over 3s; the
+                // outgoing one stays put underneath and is dropped once
+                // the transition completes
+                animating = true
+                withAnimation(Self.turnCurve, completionCriteria: .logicallyComplete) {
+                    slots.append(slot)
+                } completion: { [weak self] in
+                    self?.finishTurn()
+                }
             }
         } else {
-            // a REFRESH: swap pixels in place with no transition - fresh
-            // data arriving in the background must not flash the screen
-            if slots.isEmpty {
-                slots = [PageSlot(pageIndex: index, image: image, transition: nil)]
-            } else {
-                slots[slots.count - 1].pageIndex = index
-                slots[slots.count - 1].image = image
-            }
+            // page (re)build without a transition: replace outright
+            slots = [slot]
             armRotation()
             maybeApplyPages()
         }
         updateSpinner()
+    }
+
+    /// Roku has no 3D transforms and approximates the card flip as a
+    /// horizontal squash-and-expand, half the duration each way, on the
+    /// WHOLE slot (overlays included) - reproduced literally so the two
+    /// clients look the same.
+    private func startFlip(_ incoming: PageSlot) {
+        animating = true
+        withAnimation(.easeIn(duration: Self.turnDuration / 2)) {
+            slots[slots.count - 1].flipSquash = true
+        }
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.turnDuration / 2))
+            guard let self else { return }
+            var slot = incoming
+            slot.flipSquash = true
+            self.slots = [slot]   // outgoing is at zero width; no visible pop
+            withAnimation(.easeOut(duration: Self.turnDuration / 2), completionCriteria: .logicallyComplete) {
+                self.slots[0].flipSquash = false
+            } completion: { [weak self] in
+                self?.finishTurn()
+            }
+        }
+    }
+
+    private func finishTurn() {
+        if slots.count > 1 { slots.removeFirst(slots.count - 1) }
+        animating = false
+        armRotation()
+        maybeApplyPages()
     }
 
     // MARK: - rotation (MainScene armPageTimer/onPageTimer)

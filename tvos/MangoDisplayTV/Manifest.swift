@@ -19,6 +19,12 @@ struct Page {
     let delaySeconds: Double?
     let transition: String?
     let autoRotate: Bool
+    let overlays: [[String: Any]]
+    /// Comparable fingerprint of this page's overlay set (Roku's
+    /// overlayConfigKey/FormatJson): live layers are rebuilt only when it
+    /// changes, because a rebuild restarts every animation. sortedKeys
+    /// keeps it stable across parses.
+    let overlaysKey: String
     let raw: [String: Any]
 
     init?(_ dict: [String: Any]) {
@@ -29,6 +35,13 @@ struct Page {
         delaySeconds = JSON.double(dict["delaySeconds"])
         transition = dict["transition"] as? String
         autoRotate = JSON.truthy(dict["autoRotate"])
+        overlays = (JSON.arr(dict["overlays"]) ?? []).compactMap { JSON.obj($0) }
+        if !overlays.isEmpty,
+           let data = try? JSONSerialization.data(withJSONObject: overlays, options: [.sortedKeys]) {
+            overlaysKey = String(data: data, encoding: .utf8) ?? ""
+        } else {
+            overlaysKey = ""
+        }
         raw = dict
     }
 }

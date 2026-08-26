@@ -9,6 +9,10 @@
 import UIKit
 
 actor ImageCache {
+    /// One cache for the whole app: page images, gif sheets, effect art
+    /// all share it, so the prune set must name everything alive.
+    static let shared = ImageCache()
+
     private var store: [String: UIImage] = [:]
 
     func image(at url: URL, timeout: TimeInterval) async -> UIImage? {

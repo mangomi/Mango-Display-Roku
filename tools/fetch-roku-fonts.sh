@@ -17,12 +17,16 @@ PORTAL_INDEX="${1:-$HOME/Projects/Mangomirror-Portal/WebContent/index.html}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$REPO/fonts/gf"
 MAP="$REPO/source/fontMap.brs"
+# the tvOS app reads the same catalog as JSON (family -> path under
+# fonts/); both maps are emitted from the same loop so the two clients
+# can never disagree about which file a family resolves to
+JSON_MAP="$REPO/tvos/MangoDisplayTV/fontMap.json"
 mkdir -p "$OUT"
 
 # families from the google fonts href: family=Name+With+Plus
 families=$(grep -o 'family=[A-Za-z+]*' "$PORTAL_INDEX" | sed 's/^family=//; s/+/ /g' | sort -u | grep -v "Material Icons")
 
-ok=0; fail=0; entries=""
+ok=0; fail=0; entries=""; json_entries=""
 while IFS= read -r fam; do
     [ -z "$fam" ] && continue
     [ "$fam" = "Source Sans Pro" ] && continue  # already bundled as the fallback
@@ -39,6 +43,8 @@ while IFS= read -r fam; do
         echo "ok    $fam -> fonts/gf/$safe.ttf ($(du -k "$OUT/$safe.ttf" | cut -f1)KB)"
         ok=$((ok+1))
         entries="$entries        \"$fam\": \"pkg:/fonts/gf/$safe.ttf\"
+"
+        json_entries="$json_entries  \"$fam\": \"gf/$safe.ttf\",
 "
     else
         echo "FAIL  $fam (download)"
@@ -61,6 +67,10 @@ $entries    }
 end function
 EOF
 
+printf '{\n%s}\n' "${json_entries%,
+}
+" > "$JSON_MAP"
+
 echo "----"
-echo "$ok fonts bundled, $fail failed; map written to source/fontMap.brs"
+echo "$ok fonts bundled, $fail failed; maps written to source/fontMap.brs + tvos/MangoDisplayTV/fontMap.json"
 du -sh "$OUT"

@@ -174,14 +174,17 @@ function identityFrom(u) {
 
 /* Which architecture serves a display.
  *
- * PAINTED_DISPLAYS is a comma-separated list of device ids (or "all") that
- * run the live portal: the portal owns the socket, reports what changed,
- * and we only capture. Anything not listed keeps the original pipeline,
- * so this can be rolled out one display at a time and rolled back by
- * editing an environment variable rather than deploying code. */
+ * PAINTED_DISPLAYS is a comma-separated list of entries that run the
+ * live portal: the portal owns the socket, reports what changed, and we
+ * only capture. An entry is a full device id (RK569557324), a device
+ * PREFIX that matches every id starting with it (RK, ATV - Dave
+ * 2026-08-26: this is the permanent shape, one entry per platform), or
+ * the literal "all". Anything unmatched keeps the original pipeline,
+ * so rollout and rollback stay an environment-variable edit rather
+ * than a deploy. */
 const PAINTED_LIST = (process.env.PAINTED_DISPLAYS || "").split(",").map((s) => s.trim()).filter(Boolean);
 function isPainted(deviceId) {
-  return PAINTED_LIST.includes("all") || PAINTED_LIST.includes(deviceId);
+  return PAINTED_LIST.some((entry) => entry === "all" || deviceId === entry || deviceId.startsWith(entry));
 }
 
 async function startWorker(cfg) {

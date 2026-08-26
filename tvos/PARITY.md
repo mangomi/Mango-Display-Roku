@@ -122,11 +122,13 @@ Landed 2026-08-26 (chunk 3 — the effects layer):
   only when the sortedKeys fingerprint of the whole config changes.
   Position/frame are pure functions of wall-clock time - rebuilds and
   page turns can never restart or stutter them.
-- VERIFIED live by toggling each overlay in the webapp: balloons,
-  fireworks (two overlapping players), string lights, flowing hearts,
-  bursting hearts, falling leaves, flying witch (witch + trailing
-  bats + thread spiders + walkers), scary pop-ups. Pending fixtures:
-  elf/santa/snow (same code paths as scary/witch/hearts).
+- VERIFIED live by toggling every overlay in the webapp, one by one:
+  balloons, fireworks (two overlapping players), string lights,
+  flowing hearts, bursting hearts, falling leaves, flying witch
+  (witch + trailing bats + thread spiders + walkers), scary pop-ups,
+  disappearing elf, flying santa, falling snowflakes. All eleven
+  drew correctly on the simulator (screenshots in the session log,
+  2026-08-26).
 - **Cache rule learned**: effect sprites regenerate server-side under
   FIXED filenames (only the burst sheets are content-hashed), so a
   changed effects set evicts its asset URLs from the shared cache

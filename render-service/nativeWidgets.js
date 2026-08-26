@@ -1361,19 +1361,24 @@ const SCARY_GIFS = [
 ];
 
 // A pre-rendered burst sheet shipped inside the image (effect-assets/,
-// generated at build time). Dwell = exactly one playthrough, so each
-// appearance is a single burst; extraMsRange spaces the appearances.
-function bundledBurstEffect(name, outDir, extraMsRange) {
+// generated at build time). Dwell = `cycles` full playthroughs at one
+// position; the sheets end on faded/empty frames, so jitterMs pulls the
+// pop-out a touch earlier INTO that tail (never past a fresh burst) and
+// keeps multiple players of the same sheet from syncing up.
+function bundledBurstEffect(name, outDir, cycles, jitterMs) {
   const base = pathHandlers.join(__dirname, "effect-assets", "effect_" + name + "_sheet");
   const meta = JSON.parse(fsHandlers.readFileSync(base + ".json", "utf8"));
-  const file = "effect_" + name + "_sheet.png";
+  // content-hashed name: a regenerated sheet must get a NEW url, or the
+  // TV's texture cache (and R2) keep showing the old art at the old one
+  const png = fsHandlers.readFileSync(base + ".png");
+  const file = "effect_" + name + "_" + crypto.createHash("md5").update(png).digest("hex").slice(0, 8) + ".png";
   const dest = pathHandlers.join(outDir, file);
-  if (!fsHandlers.existsSync(dest)) fsHandlers.copyFileSync(base + ".png", dest);
+  if (!fsHandlers.existsSync(dest)) fsHandlers.writeFileSync(dest, png);
   const cycleMs = meta.frameCount * meta.frameMs;
   return {
     type: "popup",
     sprites: [{ stripFile: file, ...meta }],
-    dwellMsRange: [cycleMs + extraMsRange[0], cycleMs + extraMsRange[1]],
+    dwellMsRange: [cycleMs * cycles - jitterMs, cycleMs * cycles],
     popMs: 130,
   };
 }
@@ -1674,14 +1679,18 @@ async function extractEffects(frame, ctx) {
   // positions - one full playthrough per appearance.
   if (enabled.firework === true || enabled.firework === "true") {
     try {
-      out.push(bundledBurstEffect("firework", outDir, [0, 200]));
+      // two independent players so shells overlap (Dave 2026-08-26:
+      // one at a time is too sparse); different cycle counts mean their
+      // appearance boundaries drift apart instead of firing in lockstep
+      out.push(bundledBurstEffect("firework", outDir, 1, 300));
+      out.push(bundledBurstEffect("firework", outDir, 2, 300));
     } catch (e) {
       console.error("firework effect failed:", e.message);
     }
   }
   if (enabled.bsHeart === true || enabled.bsHeart === "true") {
     try {
-      out.push(bundledBurstEffect("bsheart", outDir, [100, 400]));
+      out.push(bundledBurstEffect("bsheart", outDir, 1, 100));
     } catch (e) {
       console.error("bursting hearts effect failed:", e.message);
     }

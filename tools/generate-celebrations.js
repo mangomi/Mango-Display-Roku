@@ -48,25 +48,102 @@ const ASSETS = [
   },
   {
     name: "bsheart",
-    frames: 26,
-    // bursting hearts: the same shell with heart emoji, floatier
-    fire: `
-      confetti({ particleCount: 14, spread: 160, startVelocity: 16, ticks: 90,
-                 gravity: 0.35, scalar: 7, origin: { x: 0.5, y: 0.6 }, zIndex: 9,
-                 shapes: ["emoji"], shapeOptions: { emoji: { value: ["\\u2764\\uFE0F", "\\uD83D\\uDC96"] } } });`,
+    frames: 30,
+    // Bursting hearts, drawn by hand (Dave 2026-08-26: the filmed emoji
+    // preset "looks like a mess of things falling"). A heart grows with
+    // two heartbeat thumps, pops with a flash ring, and shatters into
+    // small hearts that fly out confetti-style, slow under drag and fade.
+    // Deterministic canvas per frame - no physics library, no waiting.
+    custom: `
+      (() => {
+        const C = document.createElement("canvas");
+        C.width = 512; C.height = 512;
+        C.style.cssText = "position:fixed;left:0;top:0";
+        document.body.appendChild(C);
+        const ctx = C.getContext("2d");
+        let s = 42;                       // seeded so every frame agrees
+        const rnd = () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296;
+        const COLORS = ["#ff2d55", "#ff5c8a", "#ff8fab", "#e6255f", "#ff6b9d"];
+        const parts = [];
+        for (let i = 0; i < 14; i++) {
+          parts.push({
+            a: (i / 14) * Math.PI * 2 + rnd() * 0.5,
+            sp: 26 + rnd() * 22,
+            size: 20 + rnd() * 18,
+            color: COLORS[i % COLORS.length],
+            rot: rnd() * Math.PI * 2,
+            rotV: (rnd() - 0.5) * 0.5,
+          });
+        }
+        function heart(x, y, size, rot, color, alpha) {
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.rotate(rot);
+          ctx.scale(size / 100, size / 100);
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.moveTo(0, 30);
+          ctx.bezierCurveTo(-50, -12, -28, -55, 0, -28);
+          ctx.bezierCurveTo(28, -55, 50, -12, 0, 30);
+          ctx.fill();
+          ctx.restore();
+        }
+        const POP = 12, FRAMES = 30, cx = 256, cy = 250;
+        window.renderFrame = (f) => {
+          ctx.clearRect(0, 0, 512, 512);
+          if (f < POP) {
+            // smoothstep growth 0.15 -> 1 with thumps that strengthen
+            const t = f / (POP - 1);
+            const sc = 0.15 + 0.85 * (t * t * (3 - 2 * t)) + Math.sin(t * Math.PI * 4) * 0.06 * t;
+            heart(cx, cy, 260 * sc, 0, "#ff2d55", 1);
+          } else {
+            const k = f - POP;
+            if (k < 2) {                  // pop flash
+              ctx.save();
+              ctx.globalAlpha = 0.4 - k * 0.18;
+              ctx.strokeStyle = "#ffd7e2";
+              ctx.lineWidth = 10 - k * 4;
+              ctx.beginPath();
+              ctx.arc(cx, cy, 45 + k * 40, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.restore();
+            }
+            for (const p of parts) {
+              let x = cx, y = cy, vx = Math.cos(p.a) * p.sp, vy = Math.sin(p.a) * p.sp - 6;
+              for (let i = 0; i < k; i++) { x += vx; y += vy; vx *= 0.86; vy = vy * 0.86 + 2.1; }
+              const life = k / (FRAMES - POP - 1);
+              const alpha = life < 0.65 ? 1 : Math.max(0, 1 - (life - 0.65) / 0.3);
+              if (alpha > 0.01) heart(x, y, p.size * (1 - life * 0.25), p.rot + p.rotV * k, p.color, alpha);
+            }
+          }
+        };
+      })();`,
   },
 ];
 
 async function filmAsset(browser, asset) {
   const page = await browser.newPage({ viewport: { width: CANVAS, height: CANVAS } });
-  const lib = fs.readFileSync(path.join(PORTAL, "js/vendor/tsparticles.confetti.bundle.min.js"), "utf8");
   await page.setContent("<html><body style='margin:0;background:transparent'></body></html>");
-  await page.addScriptTag({ content: lib });
-  await page.evaluate(asset.fire);
   const frames = [];
-  for (let i = 0; i < asset.frames; i++) {
-    frames.push(await page.screenshot({ omitBackground: true, type: "png" }));
-    await page.waitForTimeout(FRAME_MS);
+  if (asset.custom) {
+    // deterministic renderer: draw frame i, shoot it, no clocks involved
+    await page.addScriptTag({ content: asset.custom });
+    for (let i = 0; i < asset.frames; i++) {
+      await page.evaluate("renderFrame(" + i + ")");
+      // the screenshot can beat the canvas layer's compositor commit
+      // (seen live: 13 blank frames); two rAFs guarantee the draw landed
+      await page.evaluate("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))");
+      frames.push(await page.screenshot({ omitBackground: true, type: "png" }));
+    }
+  } else {
+    const lib = fs.readFileSync(path.join(PORTAL, "js/vendor/tsparticles.confetti.bundle.min.js"), "utf8");
+    await page.addScriptTag({ content: lib });
+    await page.evaluate(asset.fire);
+    for (let i = 0; i < asset.frames; i++) {
+      frames.push(await page.screenshot({ omitBackground: true, type: "png" }));
+      await page.waitForTimeout(FRAME_MS);
+    }
   }
   await page.close();
   return frames;
@@ -100,11 +177,16 @@ async function packSheet(frames) {
 }
 
 (async () => {
+  // regenerate selectively: `node tools/generate-celebrations.js bsheart`
+  // (filming is non-deterministic for the tsparticles assets, so an
+  // untouched asset should not be refilmed into a noisy diff)
+  const only = process.argv.slice(2);
   const browser = await chromium.launch();
   fs.mkdirSync(path.join(REPO, "images", "celebrations"), { recursive: true });
   fs.mkdirSync(path.join(SVC, "effect-assets"), { recursive: true });
 
   for (const asset of ASSETS) {
+    if (only.length && !only.includes(asset.name)) continue;
     process.stdout.write("filming " + asset.name + "... ");
     const frames = await filmAsset(browser, asset);
     const { sheet, meta } = await packSheet(frames);

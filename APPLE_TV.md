@@ -243,6 +243,15 @@ tvOS work — packaging, the deploy runbook, and the porting-workflow
 paths all assume the current layout, and the tidy-up is cosmetic. If it
 ever happens, it happens on its own after the Roku store release.
 
+**Portal ownership — hands off.** All portal changes (the
+`Mangomirror-Portal` repo, branch `painted-mode-roku`, AND the vendored
+copies in `render-service/portal-preview/`) are owned by Dave's
+original Roku session/context — its memory holds the sync ritual and
+the signalling rules. A tvOS session must never edit either location;
+the TVs never see portal code anyway (it runs in the server's browser —
+both TV clients only consume images and manifests). Reading is fine; if
+portal behavior seems wrong or missing, stop and report to Dave.
+
 Rules that keep the two clients in step:
 
 - **`tvos/PARITY.md`** states the Roku commit the tvOS app currently

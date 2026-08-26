@@ -25,6 +25,11 @@ final class DisplayController: ObservableObject {
     /// display-wide effects, drawn above the page slots so they keep
     /// flying through page transitions (MainScene's effectLayer)
     @Published private(set) var effects: [OverlayItem] = []
+    /// where the busy spinner sits: the widget a gesture acted on, so it
+    /// points at the thing that is actually changing; nil = screen center
+    @Published private(set) var busyAt: CGPoint?
+    /// the remote pointer, checkboxes and gesture routing
+    let interaction = InteractionController()
 
     struct PageSlot: Identifiable {
         let id = UUID()
@@ -107,6 +112,16 @@ final class DisplayController: ObservableObject {
         screenH = Int(bounds.height)
         code = DeviceIdentity.getOrCreateCode()
         phase = .pairing
+        interaction.pageTurn = { [weak self] delta in self?.turnPage(delta) }
+        interaction.busyAt = { [weak self] pt in self?.busyAt = pt }
+        interaction.celebrate = { kind, at in
+            // the burst/finale player lands with the celebrations chunk
+            NSLog("[Mango] celebrate %@ at %d,%d", kind, Int(at.x), Int(at.y))
+        }
+        #if DEBUG
+        // headless remote for test harnesses (RemoteInput.swift)
+        DebugRemote.install { [weak self] key, press in self?.handleKey(key, press: press) }
+        #endif
         // The closest tvOS offers to Roku's per-poll GetGeneralMemoryLevel:
         // after a pressure warning, every subsequent poll reports mem=low -
         // the service logs it as the flight recorder that separates an OS
@@ -124,7 +139,32 @@ final class DisplayController: ObservableObject {
         guard let paired = await Backend.runPairing(code: code, screenW: screenW, screenH: screenH) else { return }
         // identity begins with "&": every URL it joins already has a "?"
         identity = "&device=\(code)&major=\(paired.major)&minor=\(paired.minor)&w=\(screenW)&h=\(screenH)"
+        // identity travels with every gesture too
+        interaction.serviceBase = Env.controlBase.absoluteString
+        interaction.identity = identity
         await waitLoop()
+    }
+
+    /// Remote keys drive the interaction pointer - only once paired
+    /// (MainScene.onKeyEvent's pages guard); Menu is never seen here.
+    func handleKey(_ key: String, press: Bool) {
+        guard phase == .display else { return }
+        if press { interaction.keyDown(key) } else { interaction.keyUp(key) }
+    }
+
+    /// Double-click left/right on the remote. The device already holds
+    /// every page, so a turn is local and instant (MainScene.onPageTurn).
+    private func turnPage(_ delta: Int) {
+        guard pages.count >= 2 else { return }
+        // turning mid-transition would fight the animation in flight
+        guard !animating, !loading else { return }
+        let n = pages.count
+        let idx = (pageIndex + delta + n) % n
+        NSLog("[Mango] page turn %@ -> %d", delta > 0 ? "next" : "prev", idx)
+        // the dwell restarts for the page the user landed on, so a manual
+        // turn doesn't get cut short by a timer already mostly elapsed
+        rotateTask?.cancel()
+        loadPage(idx, animated: true)
     }
 
     // MARK: - the /wait long-poll (VersionTask.runVersionLoop)
@@ -164,6 +204,7 @@ final class DisplayController: ObservableObject {
                     if normalized != assetBase {
                         NSLog("[Mango] asset base: %@", normalized)
                         assetBase = normalized
+                        interaction.assetBase = normalized
                     }
                 }
                 if let v = JSON.int(reply["version"]), v != ver {
@@ -231,6 +272,8 @@ final class DisplayController: ObservableObject {
         }
         NSLog("[Mango] display.json: %d page(s)", man.pages.count)
         applyEffects(man.effects)
+        // honour the user's gesture switches - the same ones the portal obeys
+        interaction.gestures = man.gestures
         latestManifest = man
         maybeApplyPages()
     }
@@ -294,6 +337,12 @@ final class DisplayController: ObservableObject {
                     keep.insert(assetBase + strip)
                 }
             }
+            // checkbox sprite pair rides in the targets block
+            if let t = pg.targets, let sprites = JSON.obj(t["sprites"]) {
+                for k in ["empty", "checked"] {
+                    if let f = sprites[k] as? String, !f.isEmpty { keep.insert(assetBase + f) }
+                }
+            }
         }
         keep.formUnion(effectAssetURLs)
         Task { await cache.prune(keep: keep) }
@@ -302,6 +351,10 @@ final class DisplayController: ObservableObject {
         // layers rather than rebuilding them - a rebuild restarts every
         // GIF and reads as the screen freezing (MainScene's forceInPlace).
         loadPage(pageIndex, animated: false, forceInPlace: man.imageOnly)
+        // an imageOnly manifest is a swipe's answer: release the
+        // one-swipe-at-a-time lock now rather than waiting out the
+        // fallback cooldown (MainScene's swipeApplied bump)
+        if man.imageOnly { interaction.swipeApplied() }
     }
 
     // MARK: - page loading and display (MainScene loadPage/finalizeSwap)
@@ -390,7 +443,7 @@ final class DisplayController: ObservableObject {
         slot.overlaysKey = pg.overlaysKey
         if animated, !slots.isEmpty {
             if pg.transition == "flip" {
-                startFlip(slot)
+                startFlip(slot, pg: pg, index: index)
             } else {
                 // the incoming page animates in on top over 3s; the
                 // outgoing one stays put underneath and is dropped once
@@ -399,23 +452,32 @@ final class DisplayController: ObservableObject {
                 withAnimation(Self.turnCurve, completionCriteria: .logicallyComplete) {
                     slots.append(slot)
                 } completion: { [weak self] in
-                    self?.finishTurn()
+                    self?.finishTurn(pg, index: index)
                 }
             }
         } else {
             // page (re)build without a transition: replace outright
             slots = [slot]
+            applyInteractive(pg, index: index)
             armRotation()
             maybeApplyPages()
         }
         updateSpinner()
     }
 
+    /// Actionable items belong to the page on screen - applied when a
+    /// slot swap finalizes, exactly like MainScene.finalizeSwap. The
+    /// in-place refresh path deliberately does NOT reapply them (Roku
+    /// parity: local overrides carry the truth through imageOnly renders).
+    private func applyInteractive(_ pg: Page, index: Int) {
+        interaction.setTargets(pg.targets, regions: pg.regions, pageIndex: index)
+    }
+
     /// Roku has no 3D transforms and approximates the card flip as a
     /// horizontal squash-and-expand, half the duration each way, on the
     /// WHOLE slot (overlays included) - reproduced literally so the two
     /// clients look the same.
-    private func startFlip(_ incoming: PageSlot) {
+    private func startFlip(_ incoming: PageSlot, pg: Page, index: Int) {
         animating = true
         withAnimation(.easeIn(duration: Self.turnDuration / 2)) {
             slots[slots.count - 1].flipSquash = true
@@ -429,14 +491,15 @@ final class DisplayController: ObservableObject {
             withAnimation(.easeOut(duration: Self.turnDuration / 2), completionCriteria: .logicallyComplete) {
                 self.slots[0].flipSquash = false
             } completion: { [weak self] in
-                self?.finishTurn()
+                self?.finishTurn(pg, index: index)
             }
         }
     }
 
-    private func finishTurn() {
+    private func finishTurn(_ pg: Page, index: Int) {
         if slots.count > 1 { slots.removeFirst(slots.count - 1) }
         animating = false
+        applyInteractive(pg, index: index)
         armRotation()
         maybeApplyPages()
     }
@@ -476,6 +539,9 @@ final class DisplayController: ObservableObject {
         let show = busy && !slots.isEmpty
         guard show != showSpinner else { return }
         showSpinner = show
+        // spinner going away releases its anchor (Roku stopSpinner
+        // clearing interaction.busyAt) so the next busy centers again
+        if !show { busyAt = nil }
         spinnerWatchdog?.cancel()
         spinnerWatchdog = nil
         if show {
@@ -486,6 +552,7 @@ final class DisplayController: ObservableObject {
                 guard !Task.isCancelled else { return }
                 NSLog("[Mango] spinner watchdog - forcing hide")
                 self?.showSpinner = false
+                self?.busyAt = nil
             }
         }
     }

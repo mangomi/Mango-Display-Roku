@@ -17,6 +17,10 @@ struct DisplayView: View {
 
     var body: some View {
         ZStack {
+            // raw remote presses (arrows/OK; Menu passes through untouched)
+            RemoteInputView { key, press in
+                controller.handleKey(key, press: press)
+            }
             ForEach(controller.slots) { slot in
                 SlotView(slot: slot)
                     // flip = horizontal squash/expand of the whole slot
@@ -28,10 +32,19 @@ struct DisplayView: View {
             CanvasSpace {
                 ForEach(controller.effects) { EffectItemView(item: $0) }
             }
+            // pointer + checkboxes above effects, below the spinner
+            // (MainScene.xml sibling order)
+            CanvasSpace {
+                InteractionLayerView(interaction: controller.interaction)
+            }
             if controller.showSpinner {
-                ProgressView()
-                    .scaleEffect(2)
-                    .tint(.white)
+                // on the widget a gesture acted on, else dead center
+                CanvasSpace {
+                    ProgressView()
+                        .scaleEffect(2)
+                        .tint(.white)
+                        .position(controller.busyAt ?? CGPoint(x: 960, y: 540))
+                }
             }
         }
         .ignoresSafeArea()

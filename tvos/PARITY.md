@@ -144,12 +144,50 @@ published captures (verified by compositing `display_p0.png` directly
 belongs in the render service (hide coverage / why the images break);
 Dave owns it.
 
+Landed 2026-08-26 (chunk 4 — the interaction layer):
+
+- **InteractionLayer.brs → InteractionController + views**, verbatim
+  semantics: OK reveals the center pointer (revealing press acts on
+  nothing), arrows nudge 10px / glide 250px/s after 0.35s hold, 15s
+  idle hide, warm-on-reveal, native checkboxes from `targets` with
+  the manifest sprite pair, green outline over whatever the pointer
+  is over, 12px forgiveness pad, optimistic ticks with the 180s
+  local-override rule, `/interact` GETs with identity (45s timeout),
+  double-click page turn from the RELEASE with the 450ms window,
+  gesture switches honored from display.json, busy-at spinner
+  anchoring, one-swipe-at-a-time lock with 8s cooldown released
+  early by the imageOnly manifest, celebrate events emitted
+  (burst/finale grouping rule ported; the PLAYER is the next chunk).
+- Targets apply at slot finalize only, never on in-place refreshes
+  (Roku parity - overrides carry the truth through imageOnly renders).
+- VERIFIED end-to-end on the live display: pointer walked onto a real
+  todo checkbox, ticked optimistically, `/interact` tap delivered,
+  the portal completed the task in the todo backend, the next render
+  returned checked=true and the override reconciled to "0 held
+  locally". Double-click page turn verified on a parked display.
+  autoRotate=false parks rotation correctly (Dave's layout edit).
+- Remote input via pressesBegan/Ended (UIKit), bypassing the focus
+  engine; Menu is never consumed (App Review rule). DEBUG builds add
+  a Darwin-notification remote (`com.mangodisplay.key.<k>.<phase>`)
+  for headless driving.
+- Still to live-fire: calendar swipe (double-up/down over a region)
+  and its busy-at spinner placement - the shared plumbing (regions,
+  hit-test, sendAction, lock) is exercised; the /interact swipe
+  round-trip itself isn't yet.
+
+**Test-harness notes (not product behavior):** Darwin notifications
+coalesce and drop under rapid fire - same-name posts ~0.3s apart can
+merge, and a dropped `release` once left the glide running to the
+screen edge (hence the atomic `tap` phase). `notifyutil` spawn
+latency is ~0.2-0.4s, so a scripted double-click needs NO sleep
+between posts or it misses the 450ms window. A real remote has
+neither problem.
+
 ## Not yet ported (Phase B remainder)
 
 - Celebrations (burst + finale; needs `tools/generate-celebrations.js`
-  to emit a JSON map alongside the .brs one).
-- InteractionLayer: pointer, targets, optimistic ticks, `/interact`,
-  gestures, busy-at spinner placement, page-turn keys.
+  to emit a JSON map alongside the .brs one). The interaction layer
+  already emits the events.
 - Exit/lifecycle reporting (`&lastexit=`; lifecycle notifications +
   MetricKit) and real memory-level reporting (currently coarse
   `normal`→`low` after a pressure warning).

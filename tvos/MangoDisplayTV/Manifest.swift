@@ -19,6 +19,10 @@ struct Page {
     let delaySeconds: Double?
     let transition: String?
     let autoRotate: Bool
+    /// things the client can activate (task checkboxes), or nil
+    let targets: [String: Any]?
+    /// areas where a pointer gesture is live (calendar swipe surfaces)
+    let regions: [[String: Any]]
     let overlays: [[String: Any]]
     /// Comparable fingerprint of this page's overlay set (Roku's
     /// overlayConfigKey/FormatJson): live layers are rebuilt only when it
@@ -35,6 +39,8 @@ struct Page {
         delaySeconds = JSON.double(dict["delaySeconds"])
         transition = dict["transition"] as? String
         autoRotate = JSON.truthy(dict["autoRotate"])
+        targets = JSON.obj(dict["targets"])
+        regions = (JSON.arr(dict["regions"]) ?? []).compactMap { JSON.obj($0) }
         overlays = (JSON.arr(dict["overlays"]) ?? []).compactMap { JSON.obj($0) }
         if !overlays.isEmpty,
            let data = try? JSONSerialization.data(withJSONObject: overlays, options: [.sortedKeys]) {
@@ -60,6 +66,9 @@ struct DisplayManifest {
     /// display-wide decorative overlays (snow, balloons, ...) - NOT per
     /// page; they continue across page transitions
     let effects: [[String: Any]]
+    /// which remote gestures the user enabled: { pageSwipe,
+    /// calendarScroll } - the same switches the portal obeys
+    let gestures: [String: Any]
     let pages: [Page]
 
     init?(_ dict: [String: Any]) {
@@ -71,5 +80,6 @@ struct DisplayManifest {
         updateReason = JSON.str(dict["updateReason"])
         imageOnly = JSON.truthy(dict["imageOnly"])
         effects = (JSON.arr(dict["effects"]) ?? []).compactMap { JSON.obj($0) }
+        gestures = JSON.obj(dict["gestures"]) ?? [:]
     }
 }

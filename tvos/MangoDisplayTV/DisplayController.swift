@@ -22,6 +22,9 @@ final class DisplayController: ObservableObject {
     /// "Your change is being applied": raised only while the service says
     /// busy AND pages exist, so it never spins over the pairing screen.
     @Published private(set) var showSpinner = false
+    /// display-wide effects, drawn above the page slots so they keep
+    /// flying through page transitions (MainScene's effectLayer)
+    @Published private(set) var effects: [OverlayItem] = []
 
     struct PageSlot: Identifiable {
         let id = UUID()
@@ -85,6 +88,8 @@ final class DisplayController: ObservableObject {
     private var contentTag = 0     // fallback cache key for hash-less manifests
     private var busy = false
     private var memLevel = "normal"
+    private var effectsKey = ""            // fingerprint of the applied effect set
+    private var effectAssetURLs: [String] = []  // their files, for cache pruning
     private var loading = false    // Roku's m.pendingLoad: one load at a time
     private var animating = false  // Roku's m.activeAnim
     private var runTask: Task<Void, Never>?
@@ -225,8 +230,43 @@ final class DisplayController: ObservableObject {
             return
         }
         NSLog("[Mango] display.json: %d page(s)", man.pages.count)
+        applyEffects(man.effects)
         latestManifest = man
         maybeApplyPages()
+    }
+
+    /// Effects are long-running and display-wide, so they are only
+    /// rebuilt when the set actually CHANGES - otherwise every render
+    /// would restart the balloons mid-flight (MainScene applyEffects).
+    /// The fingerprint covers the whole config, not just the names:
+    /// tuning changes (sprite art, sizes, counts) must rebuild too.
+    private func applyEffects(_ list: [[String: Any]]) {
+        var key = ""
+        if !list.isEmpty,
+           let data = try? JSONSerialization.data(withJSONObject: list, options: [.sortedKeys]) {
+            key = String(data: data, encoding: .utf8) ?? ""
+        }
+        guard key != effectsKey else { return }
+        effectsKey = key
+        NSLog("[Mango] effects: %d (%@)", list.count, list.compactMap { $0["type"] as? String }.joined(separator: ","))
+        let oldAssets = effectAssetURLs
+        effectAssetURLs = EffectUtil.assetStrings(of: list, assetBase: assetBase)
+        let items: [OverlayItem] = list.enumerated().compactMap { (i, e) in
+            guard let type = e["type"] as? String else { return nil }
+            return OverlayItem(id: "fx\(i)_\(type)", type: type, raw: e, assetBase: assetBase)
+        }
+        // a CHANGED effect set must re-fetch its art before the new views
+        // load: the service regenerates effect sprites under fixed
+        // filenames (only the burst sheets are content-hashed), so bytes
+        // cached for an earlier set can be stale art - seen live
+        // 2026-08-26 as leaves drawn from a first-generation sprite with
+        // Chromium's broken-image icon baked in, kept alive by the cache
+        // long after R2 had the regenerated good file.
+        let stale = Set(oldAssets).union(effectAssetURLs)
+        Task { [cache] in
+            await cache.evict(stale)
+            await MainActor.run { self.effects = items }
+        }
     }
 
     /// Never apply a manifest mid-transition or mid-load; the newest one
@@ -255,6 +295,7 @@ final class DisplayController: ObservableObject {
                 }
             }
         }
+        keep.formUnion(effectAssetURLs)
         Task { await cache.prune(keep: keep) }
         // quiet refresh of the current page, no transition. imageOnly is
         // a swipe's answer landing: swap the image UNDER the live overlay

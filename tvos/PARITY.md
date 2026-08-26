@@ -107,10 +107,44 @@ Landed 2026-08-26 (chunk 2 — slideshow/background, layered pages):
   replaced it. The device needs no defense — any change bumps the
   version and the hash-keyed URLs refetch exactly the changed pixels.
 
+Landed 2026-08-26 (chunk 3 — the effects layer):
+
+- **All five effect players** (`components/effects/*` → analytic
+  SwiftUI/Canvas renderers): particle (balloons/snow/leaves/hearts,
+  exact .brs math for drift/fade/growth/spin), popup (pop-in keyframes
+  0→1.5→0.8→1 with half-turn, dwell ranges, no-repeat sprite picks),
+  dropper (thread + sway + alternate down/up, fixed 100ms frame tick
+  like the .brs XML), sprite-mover (per-axis triangle-wave bounce ==
+  Roku's leg mechanics, pre-mirrored flip sheets, rotate-on-turn,
+  mirrored companion offset), and string lights via the existing sheet
+  player (`spritesheet` type → GifOverlayView, same registry reuse as
+  Roku). Effects live ABOVE the page slots in canvas space and rebuild
+  only when the sortedKeys fingerprint of the whole config changes.
+  Position/frame are pure functions of wall-clock time - rebuilds and
+  page turns can never restart or stutter them.
+- VERIFIED live by toggling each overlay in the webapp: balloons,
+  fireworks (two overlapping players), string lights, flowing hearts,
+  bursting hearts, falling leaves, flying witch (witch + trailing
+  bats + thread spiders + walkers), scary pop-ups. Pending fixtures:
+  elf/santa/snow (same code paths as scary/witch/hearts).
+- **Cache rule learned**: effect sprites regenerate server-side under
+  FIXED filenames (only the burst sheets are content-hashed), so a
+  changed effects set evicts its asset URLs from the shared cache
+  before the new views load. The Roku texture cache has the same
+  staleness exposure - flagged to Dave rather than assumed.
+
+**Server-side bug found while testing (NOT client, NOT fixed here):**
+with leaves / witch / hearts overlays enabled, the portal's own effect
+`<img>` elements break inside the render environment and escape
+`hideEffects`, so Chromium broken-image tiles get BAKED into the
+published captures (verified by compositing `display_p0.png` directly
+- dozens of tiles in the pixels). Affects Roku identically. Fix
+belongs in the render service (hide coverage / why the images break);
+Dave owns it.
+
 ## Not yet ported (Phase B remainder)
 
-- Effects: particle, popup, dropper, sprite-mover, string lights;
-  celebrations (burst + finale; needs `tools/generate-celebrations.js`
+- Celebrations (burst + finale; needs `tools/generate-celebrations.js`
   to emit a JSON map alongside the .brs one).
 - InteractionLayer: pointer, targets, optimistic ticks, `/interact`,
   gestures, busy-at spinner placement, page-turn keys.

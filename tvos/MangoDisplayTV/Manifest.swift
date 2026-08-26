@@ -57,6 +57,9 @@ struct DisplayManifest {
     let schema: Int
     let updateReason: String
     let imageOnly: Bool
+    /// display-wide decorative overlays (snow, balloons, ...) - NOT per
+    /// page; they continue across page transitions
+    let effects: [[String: Any]]
     let pages: [Page]
 
     init?(_ dict: [String: Any]) {
@@ -67,5 +70,6 @@ struct DisplayManifest {
         schema = JSON.int(dict["schema"]) ?? 1
         updateReason = JSON.str(dict["updateReason"])
         imageOnly = JSON.truthy(dict["imageOnly"])
+        effects = (JSON.arr(dict["effects"]) ?? []).compactMap { JSON.obj($0) }
     }
 }

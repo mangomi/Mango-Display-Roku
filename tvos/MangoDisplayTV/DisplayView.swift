@@ -23,6 +23,11 @@ struct DisplayView: View {
                     .scaleEffect(x: slot.flipSquash ? 0.0001 : 1, y: 1)
                     .transition(Self.transition(slot.transition))
             }
+            // display-wide effects fly ABOVE the page slots, so they keep
+            // going through page transitions (Roku's effectLayer sibling)
+            CanvasSpace {
+                ForEach(controller.effects) { EffectItemView(item: $0) }
+            }
             if controller.showSpinner {
                 ProgressView()
                     .scaleEffect(2)
@@ -61,26 +66,38 @@ struct RotateFx: ViewModifier {
     }
 }
 
-private struct SlotView: View {
-    let slot: DisplayController.PageSlot
+/// Composes content in CANVAS coordinates (1920x1080) and scales it to
+/// the screen as one unit. Slots and the effect layer both live in this
+/// space - the 1:1 mapping on this simulator is a coincidence nothing
+/// here relies on (MANIFEST.md).
+struct CanvasSpace<Content: View>: View {
+    @ViewBuilder let content: Content
 
     var body: some View {
         GeometryReader { geo in
             let scale = min(geo.size.width / 1920, geo.size.height / 1080)
-            ZStack(alignment: .topLeading) {
-                // draw order is the contract: under-layers, then the page
-                // image (transparent PNG for layered pages), then the
-                // live widgets the service hid from the capture
-                ForEach(slot.under) { OverlayItemView(item: $0) }
-                Image(uiImage: slot.image)
-                    .resizable()
-                    .frame(width: 1920, height: 1080)
-                ForEach(slot.over) { OverlayItemView(item: $0) }
-            }
-            .frame(width: 1920, height: 1080)
-            .scaleEffect(scale, anchor: .topLeading)
-            .offset(x: (geo.size.width - 1920 * scale) / 2,
-                    y: (geo.size.height - 1080 * scale) / 2)
+            ZStack(alignment: .topLeading) { content }
+                .frame(width: 1920, height: 1080)
+                .scaleEffect(scale, anchor: .topLeading)
+                .offset(x: (geo.size.width - 1920 * scale) / 2,
+                        y: (geo.size.height - 1080 * scale) / 2)
+        }
+    }
+}
+
+private struct SlotView: View {
+    let slot: DisplayController.PageSlot
+
+    var body: some View {
+        CanvasSpace {
+            // draw order is the contract: under-layers, then the page
+            // image (transparent PNG for layered pages), then the live
+            // widgets the service hid from the capture
+            ForEach(slot.under) { OverlayItemView(item: $0) }
+            Image(uiImage: slot.image)
+                .resizable()
+                .frame(width: 1920, height: 1080)
+            ForEach(slot.over) { OverlayItemView(item: $0) }
         }
     }
 }

@@ -30,4 +30,13 @@ actor ImageCache {
     func prune(keep: Set<String>) {
         store = store.filter { keep.contains($0.key) }
     }
+
+    /// Forget specific URLs so the next request re-fetches. Needed for
+    /// effect sprites: the service regenerates them under FIXED filenames
+    /// (unlike the content-hashed burst sheets), so a changed effects set
+    /// must not trust bytes fetched for an earlier one - stale art
+    /// otherwise lives as long as the app does.
+    func evict(_ urls: Set<String>) {
+        for u in urls { store.removeValue(forKey: u) }
+    }
 }

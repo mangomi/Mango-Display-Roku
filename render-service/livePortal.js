@@ -173,14 +173,13 @@ class LivePortal {
    * painted sessions run this file, so real portals keep their
    * effects. */
   async installEffectHide() {
-    const sel = require("./nativeWidgets").effectHideSelectors();
-    const css =
-      sel.ids.map((i) => "#" + i).concat(sel.classes.map((c) => "." + c)).join(",") +
-      "{opacity:0 !important}";
+    /* the rule also settles the calendar cell-weather animations - see
+     * nativeWidgets.captureHygieneCss for the full inventory */
+    const css = require("./nativeWidgets").captureHygieneCss();
     await this.page.addInitScript((rule) => {
       const add = () => {
         const s = document.createElement("style");
-        s.id = "mm-effect-hide";
+        s.id = "mm-capture-hygiene";
         s.textContent = rule;
         document.head.appendChild(s);
       };

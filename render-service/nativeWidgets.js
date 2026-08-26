@@ -1747,7 +1747,43 @@ function effectHideSelectors() {
   return { ids, classes };
 }
 
+// The full CSS that must hold whenever this portal is photographed:
+// effect elements stay invisible (effectHideSelectors), and the
+// calendar cell-weather decoration SETTLES - its ~27 infinite CSS
+// animations (rain/snow/hail particles, cloud drift, beam sweeps, icon
+// floats; util/calendarWeatherOverlay.js + style.css) otherwise bake
+// into every capture at a random mid-phase (Dave saw frozen raindrops,
+// 2026-08-26). Transient particles hide entirely; persistent pieces
+// (strip gradient, icon, temperatures) keep their resting look. Scoped
+// to .mm-weather-* only - scar 1: calendar scrolling depends on
+// animationend, so a broad animation:none is forbidden.
+function captureHygieneCss() {
+  const sel = effectHideSelectors();
+  const weatherParticles = [".mm-rain-drop", ".mm-snow-flake", ".mm-hail-pellet", ".mm-wind-line", ".mm-fog-line", ".mm-storm-bolt"];
+  const weatherScope = [
+    ".mm-weather-overlay", ".mm-weather-overlay *", ".mm-weather-overlay::before", ".mm-weather-overlay::after",
+    ".mm-weather-overlay *::before", ".mm-weather-overlay *::after",
+    ".mm-weather-header-meta", ".mm-weather-header-meta *", ".mm-weather-header-meta *::before", ".mm-weather-header-meta *::after",
+  ];
+  return (
+    sel.ids.map((i) => "#" + i).concat(sel.classes.map((c) => "." + c)).join(",") + "{opacity:0 !important}" +
+    weatherParticles.join(",") + "{opacity:0 !important}" +
+    weatherScope.join(",") + "{animation:none !important}"
+  );
+}
+
 async function hideEffects(frame) {
+  // the persistent rule normally arrives via livePortal's init script;
+  // installing it here too covers the legacy (non-painted) pipeline,
+  // whose pages never pass through livePortal
+  await frame.evaluate((css) => {
+    if (!document.getElementById("mm-capture-hygiene")) {
+      const s = document.createElement("style");
+      s.id = "mm-capture-hygiene";
+      s.textContent = css;
+      document.head.appendChild(s);
+    }
+  }, captureHygieneCss());
   // effects handled outside the particle table still have to be kept out
   // of the still (the Roku animates them natively)
   const { ids, classes } = effectHideSelectors();
@@ -2024,6 +2060,7 @@ module.exports = {
   extractEffects,
   hideEffects,
   effectHideSelectors,
+  captureHygieneCss,
   extractTargets,
   extractRegions,
   hideTargets,

@@ -15,13 +15,13 @@ added for tvOS later, so cost tracking stays under one label.
 |---|---|
 | Region | us-east-1, alongside the existing stack |
 | Compute | Fargate to start; EC2 Graviton spot later once the load profile is known (~$115 vs ~$40 per 1,000 displays/month) |
-| Assets | Cloudflare R2 — free egress is the one line item that otherwise scales forever |
+| Assets | S3 `mango-roku-assets` behind CloudFront (flat-rate Pro plan, $15/mo for 50TB — replaced R2 2026-08-27; free egress stopped being unique and R2's custom domain wanted the DNS zone on Cloudflare) |
 | VPC | existing `vpc-0405158ee9ea3d85b` (172.16.0.0/16) |
-| Hostnames | `roku-assets.mangodisplay.com`, `roku-control.mangodisplay.com` |
+| Hostnames | `rokuassets.mangodisplay.com` (assets, LIVE), `roku-control.mangodisplay.com` (prod control, pending) |
 
 **No NAT gateway is needed.** That VPC already routes `0.0.0.0/0` through
 `igw-01061c68769d44c71` on both subnets, so Fargate tasks run with a
-public IP and reach the portal, API and R2 directly. Saves ~$32/month plus
+public IP and reach the portal, API and S3 directly. Saves ~$32/month plus
 per-GB processing.
 
 ## Created so far
@@ -63,35 +63,36 @@ Nothing pre-existing was modified. The VPC, its subnets, route tables and
 internet gateway were read but only added to; nothing else in the account
 was touched.
 
-## Cloudflare R2
+## Assets — S3 + CloudFront (replaced Cloudflare R2, 2026-08-27)
 
 | | |
 |---|---|
-| Account ID | `8ed09dea0b5cd688d9d200627603e0be` |
-| Bucket | `mango-display-assets` |
-| Public base | `https://pub-8ecd1ea9ae404328b96820980559dd49.r2.dev` |
-| Credentials | `mangomirror-staging-secrets` -> `CLOUDFLARE_ROKU_ACCESS_KEY`, `CLOUDFLARE_ROKU_SECRET_ACCESS_KEY` |
-| Local testing | AWS CLI profile `mango-r2` on Dave's Mac |
+| Bucket | `mango-roku-assets` (us-east-1, fully private, tag `Project=Roku`) |
+| Distribution | `ERYTMHZUWUXMT` — `https://rokuassets.mangodisplay.com` (alias) / `d1qjms2klzrc83.cloudfront.net` |
+| Plan | CloudFront flat-rate **Pro** ($15/mo, 50TB + bundled WAF/DDoS) — enrolled by Dave |
+| Origin access | OAC `E2VP9FNAB45830`; bucket policy allows only this distribution. No public S3 access |
+| Cache policy | `Managed-CachingOptimized` — flat-rate plans allow only MANAGED policies, and every managed policy that keys on query strings also forwards the `Host` header, which breaks S3 origins (bucket resolution follows Host; existing keys 404). Correctness lives in upload Cache-Control instead: `display.json` no-store, page images no-cache (revalidate per fetch), content-named sprite art 1y immutable |
+| Publish auth | task role `roku-render-task` (`s3:PutObject/DeleteObject` on the bucket) — no stored keys |
+| Prefix secret | `roku-asset-prefix-secret` (Secrets Manager, injected as `ASSET_PREFIX_SECRET`) — dedicated and stable; task-role temporary creds rotate, so the old fall-back-to-secret-key derivation would have rotated every display's prefix per deploy |
+| DNS | `rokuassets` CNAME + ACM validation CNAME live on WordPress.com DNS (Dave's dashboard). Leave the validation record: it auto-renews cert `93c60abd-…` |
+| Env | `ASSET_BUCKET`, `ASSET_PUBLIC_BASE`, `ASSET_ROOT` (`test`/`prod`) on the task definition |
 
 Each display publishes under an environment root plus its derived
 prefix (`/test/<prefix>/display.json`, `/prod/<prefix>/…` — `ASSET_ROOT`
-on the service). The bucket is public because TVs fetch without
-credentials, so the prefix is the only thing keeping one household's
-calendar, chores and photos out of reach of anyone who knows the
-hostname. It is handed to the device over the control channel, never
-published anywhere. Bucket-root objects from before the 2026-08-11
-folder split are orphans and can be deleted.
+on the service). The bucket is private to CloudFront, but paths are the
+real privacy boundary for TVs (they fetch without credentials): the
+prefix keeps one household's calendar, chores and photos out of reach
+of anyone who knows the hostname. It is handed to the device over the
+control channel, never published anywhere.
 
-The r2.dev URL is rate-limited and has no Cloudflare caching - fine for
-Stage 1, replace with a custom domain before real displays. The device
-reads its asset base from the control channel, so that swap is
-configuration, not a channel rebuild.
+Prod uses the SAME bucket and distribution with `ASSET_ROOT=prod` — one
+CloudFront for both environments (Dave's call).
 
-**Worth fixing before production:** the R2 keys live in the shared
-`mangomirror-staging-secrets` bundle. ECS injects only the two Cloudflare
-values, but the IAM grant is on the whole secret, so a compromised render
-container could read every staging credential in it. A dedicated secret
-for this service removes that.
+Cloudflare is fully retired: Dave deleted the R2 bucket and API token
+(2026-08-27), so task definitions ≤5 cannot be rolled back to. The
+`CLOUDFLARE_ROKU_*` entries in `mangomirror-staging-secrets` are inert
+leftovers. The old shared-secret exposure note is resolved: this service
+no longer reads that bundle at all.
 
 ## Building the container
 

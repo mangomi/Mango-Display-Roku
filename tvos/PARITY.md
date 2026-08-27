@@ -170,10 +170,18 @@ Landed 2026-08-26 (chunk 4 — the interaction layer):
   engine; Menu is never consumed (App Review rule). DEBUG builds add
   a Darwin-notification remote (`com.mangodisplay.key.<k>.<phase>`)
   for headless driving.
-- Still to live-fire: calendar swipe (double-up/down over a region)
-  and its busy-at spinner placement - the shared plumbing (regions,
-  hit-test, sendAction, lock) is exercised; the /interact swipe
-  round-trip itself isn't yet.
+- Calendar swipe LIVE-FIRE VERIFIED (2026-08-26 evening), both
+  directions: double-up scrolled the calendar to September, double-down
+  a month back; ~4.4s gesture-to-pixels both times; busy spinner
+  anchored on the calendar widget, not screen center. Both lock
+  release paths ran for real: the imageOnly early release ("swipe
+  manifest applied - gestures unlocked") on the clean run, and the 8s
+  cooldown fallback on a run where a live layout edit raced the swipe
+  and the service folded the redraw into a full edit render - the
+  exact race the cooldown exists for. A render-service restart between
+  tests reset version numbers downward and reopened the portal at the
+  current month; the change-not-increase version rule absorbed it
+  silently.
 
 **Test-harness notes (not product behavior):** Darwin notifications
 coalesce and drop under rapid fire - same-name posts ~0.3s apart can

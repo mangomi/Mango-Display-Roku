@@ -864,6 +864,13 @@ const CW_DEFAULT_PERIOD_S = 5.5;
 const CW_STEP_MS = 70; // virtual-time sampling interval = playback frameMs
 const CW_MAX_SHOTS = 200; // 13s cloudy cycle at 70ms = 186 steps
 const CW_TARGET_FRAMES = 96; // slow cycles stride down to about this many
+// Skip the ensemble's startup transient: during a particle's
+// animation-delay it renders PARKED at its base spot, so t=0 shows
+// every raindrop lined up at the top of the cell - and the loop wrap
+// replayed that lineup every cycle (Dave saw it). The largest delay in
+// the portal's patterns is 2.2s (wind); past it, every particle is in
+// its periodic regime and any window is as good as any other.
+const CW_WARMUP_MS = 3000;
 
 const cellWeatherHandler = {
   type: "cellWeather",
@@ -1025,7 +1032,7 @@ const cellWeatherHandler = {
     const shots = [];
     const stamps = [];
     for (let i = 0; i < steps; i++) {
-      const t = i * CW_STEP_MS;
+      const t = CW_WARMUP_MS + i * CW_STEP_MS;
       await frame.evaluate((vt) => {
         (window.__mmCwAnims || []).forEach((rec) => {
           try {
@@ -1034,7 +1041,7 @@ const cellWeatherHandler = {
         });
         return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       }, t);
-      stamps.push(t);
+      stamps.push(i * CW_STEP_MS); // frame-pick logic works in window-relative time
       shots.push(await page.screenshot({ type: "png", omitBackground: true }));
     }
 

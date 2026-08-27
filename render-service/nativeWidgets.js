@@ -500,7 +500,7 @@ const gifHandler = {
 // The static icon STAYS in the image as fallback; the overlay covers it.
 const WX_PERIOD_CAP_S = 12; // longest animation cycle we'll film
 const WX_DEFAULT_WINDOW_S = 2.6; // icons whose period we can't parse
-const WX_MAX_SHOTS = 100;
+const WX_MAX_SHOTS = 180; // 12s period cap at 70ms virtual steps = 171
 
 // pull animation timing out of the SVG source: SMIL dur="9s" attributes
 // and CSS animation/animation-duration declarations. Longest one wins -
@@ -508,7 +508,7 @@ const WX_MAX_SHOTS = 100;
 // finishes its rotation instead of snapping back).
 function parseAnimationPeriodSeconds(svgText) {
   const times = [];
-  for (const m of svgText.matchAll(/dur="([\d.]+)\s*(ms|s)"/g)) {
+  for (const m of svgText.matchAll(/dur=["']([\d.]+)\s*(ms|s)["']/g)) {
     times.push(parseFloat(m[1]) * (m[2] === "ms" ? 0.001 : 1));
   }
   for (const m of svgText.matchAll(/animation(?:-duration)?\s*:\s*([^;}"']+)/g)) {
@@ -557,13 +557,17 @@ const weatherIconHandler = {
     for (const o of overlays) {
       if (!(o.src in bySrc)) {
         if (/\.(gif|webp)(\?|$)/i.test(o.src)) {
-          bySrc[o.src] = { animated: true, period: null };
+          // raster animation: no seek API, so this icon (if any exist)
+          // forces the film back onto the wall clock
+          bySrc[o.src] = { animated: true, period: null, text: null };
         } else {
           try {
             const t = await (await fetch(o.src)).text();
             const animated = /<animate|animateTransform|animateMotion|@keyframes|animation\s*:/i.test(t);
             const period = animated ? parseAnimationPeriodSeconds(t) : null;
-            bySrc[o.src] = { animated, period };
+            // the text doubles as the inline-swap source for
+            // virtual-time filming (see svgSwapIn)
+            bySrc[o.src] = { animated, period, text: animated ? t : null };
             if (animated) {
               console.log(
                 "wx icon:",
@@ -573,7 +577,7 @@ const weatherIconHandler = {
               );
             }
           } catch (e) {
-            bySrc[o.src] = { animated: false, period: null };
+            bySrc[o.src] = { animated: false, period: null, text: null };
           }
         }
       }
@@ -582,6 +586,7 @@ const weatherIconHandler = {
       } else {
         const p = bySrc[o.src].period;
         o.period = p ? Math.min(Math.max(p, 1), WX_PERIOD_CAP_S) : null;
+        o.svgText = bySrc[o.src].text;
       }
     }
     return overlays.filter((o) => !o.skip);
@@ -677,6 +682,7 @@ const weatherIconHandler = {
         delete o.liveCapture;
         delete o.period;
         delete o.src;
+        delete o.svgText;
       });
       console.log("wx: " + live.length + " icon sheet(s) reused from cache, filming skipped");
       return items;
@@ -704,25 +710,51 @@ const weatherIconHandler = {
     await page.addStyleTag({ content: "/*mm-film*/html,body{background:transparent !important;}" });
     await page.waitForTimeout(200);
 
-    // film long enough to cover the longest icon cycle, sampling finely
-    // enough that the shortest cycle still gets ~12 frames
+    // film long enough to cover the longest icon cycle
     const periods = live.map((o) => o.period || WX_DEFAULT_WINDOW_S);
     const windowS = Math.min(WX_PERIOD_CAP_S, Math.max(...periods));
-    const targetDt = Math.min(0.2, Math.max(0.08, Math.min(...periods) / 12));
+
+    // Virtual time whenever every icon's clock is scriptable (SVG text in
+    // hand): paused + seeked in exact 70ms steps, so frame spacing never
+    // depends on screenshot cost - real-time sampling gave the widget sun
+    // 230-500ms frames (Dave: jerky, 2026-08-26). A raster (gif/webp)
+    // icon has no seek API; one of those present falls the whole film
+    // back to the wall clock rather than mixing two timelines.
+    const svgBySrc = {};
+    let allSeekable = true;
+    for (const o of live) {
+      if (o.svgText) svgBySrc[o.src] = o.svgText;
+      else allSeekable = false;
+    }
 
     const shots = [];
     const stamps = [];
-    const t0 = Date.now();
+    let realGapMs;
     // always alpha: the page is stripped to icons-only for filming, in
     // both layered and normal pages
     const shotOpts = { type: "png", omitBackground: true };
-    while (Date.now() - t0 < windowS * 1000 && shots.length < WX_MAX_SHOTS) {
-      stamps.push(Date.now() - t0);
-      shots.push(await page.screenshot(shotOpts));
-      await page.waitForTimeout(targetDt * 1000);
+    if (allSeekable) {
+      await svgSwapIn(frame, svgBySrc);
+      await pauseAllAnimations(frame);
+      const steps = Math.min(WX_MAX_SHOTS, Math.round((windowS * 1000) / CW_STEP_MS));
+      for (let i = 0; i < steps; i++) {
+        await seekVirtual(frame, CW_WARMUP_MS + i * CW_STEP_MS);
+        stamps.push(i * CW_STEP_MS);
+        shots.push(await page.screenshot(shotOpts));
+      }
+      await svgSwapOut(frame);
+      await resumeAllAnimations(frame);
+      realGapMs = CW_STEP_MS;
+    } else {
+      const targetDt = Math.min(0.2, Math.max(0.08, Math.min(...periods) / 12));
+      const t0 = Date.now();
+      while (Date.now() - t0 < windowS * 1000 && shots.length < WX_MAX_SHOTS) {
+        stamps.push(Date.now() - t0);
+        shots.push(await page.screenshot(shotOpts));
+        await page.waitForTimeout(targetDt * 1000);
+      }
+      realGapMs = shots.length > 1 ? (stamps[stamps.length - 1] - stamps[0]) / (shots.length - 1) : 200;
     }
-    const realGapMs =
-      shots.length > 1 ? (stamps[stamps.length - 1] - stamps[0]) / (shots.length - 1) : 200;
 
     // stale capture sheets from previous renders (keep ~10 min for the
     // manifest still live on devices)
@@ -834,6 +866,7 @@ const weatherIconHandler = {
         delete o.liveCapture;
         delete o.period;
         delete o.src;
+        delete o.svgText;
       } catch (e) {
         console.error("weather icon capture failed:", e.message);
         o.skip = true;
@@ -842,6 +875,104 @@ const weatherIconHandler = {
     return items.filter((o) => !o.skip);
   },
 };
+
+// ---- virtual-time filming helpers --------------------------------------
+// Shared by the weather-icon and cell-weather films. The principle: pause
+// every clock on the page and SEEK it in exact steps, so frame spacing
+// never depends on screenshot cost. Two clock families exist:
+// - CSS animations: Web Animations API (getAnimations -> currentTime)
+// - SMIL inside SVG files: an <img>-embedded SVG is OPAQUE, its SMIL
+//   keeps running in real time while everything else is frozen (the sun
+//   spun ~3x fast, Dave 2026-08-26). Each such img is swapped for an
+//   INLINE copy of its SVG - inline SVG exposes pauseAnimations() and
+//   setCurrentTime() - and swapped back after the film.
+
+// swap every <img> whose src appears in svgBySrc for an inline copy
+async function svgSwapIn(frame, svgBySrc) {
+  await frame.evaluate((map) => {
+    window.__mmSvgSwaps = [];
+    document.querySelectorAll("img").forEach((img) => {
+      const text = map[img.src];
+      if (!text || !img.parentNode) return;
+      const holder = document.createElement("div");
+      holder.innerHTML = text;
+      const svg = holder.querySelector("svg");
+      if (!svg) return;
+      svg.setAttribute("class", img.getAttribute("class") || "");
+      if (img.id) svg.id = img.id;
+      // the img's inline style carries its positioning/sizing (the
+      // portal sets icon heights inline) - the stand-in must inherit it
+      // or it falls out of the crop rect entirely
+      svg.setAttribute("style", img.getAttribute("style") || "");
+      const r = img.getBoundingClientRect();
+      svg.style.width = r.width + "px";
+      svg.style.height = r.height + "px";
+      img.parentNode.replaceChild(svg, img);
+      try {
+        svg.pauseAnimations();
+      } catch (e) {}
+      window.__mmSvgSwaps.push({ svg, img });
+    });
+  }, svgBySrc);
+}
+
+async function svgSwapOut(frame) {
+  await frame
+    .evaluate(() => {
+      (window.__mmSvgSwaps || []).forEach((rec) => {
+        try {
+          if (rec.svg.parentNode) rec.svg.parentNode.replaceChild(rec.img, rec.svg);
+        } catch (e) {}
+      });
+      window.__mmSvgSwaps = null;
+    })
+    .catch(() => {});
+}
+
+// collect AFTER svgSwapIn so the inline svgs' CSS animations join in
+async function pauseAllAnimations(frame) {
+  await frame.evaluate(() => {
+    const list = document.getAnimations ? document.getAnimations({ subtree: true }) : [];
+    window.__mmPausedAnims = list.map((a) => ({ a, t: a.currentTime }));
+    list.forEach((a) => {
+      try {
+        a.pause();
+      } catch (e) {}
+    });
+  });
+}
+
+async function resumeAllAnimations(frame) {
+  await frame
+    .evaluate(() => {
+      (window.__mmPausedAnims || []).forEach((rec) => {
+        try {
+          rec.a.currentTime = rec.t;
+          rec.a.play();
+        } catch (e) {}
+      });
+      window.__mmPausedAnims = null;
+    })
+    .catch(() => {});
+}
+
+// pose the whole page at vtMs of virtual time; the double-rAF is the
+// compositor-commit lesson from the celebrations filming
+async function seekVirtual(frame, vtMs) {
+  await frame.evaluate((vt) => {
+    (window.__mmPausedAnims || []).forEach((rec) => {
+      try {
+        rec.a.currentTime = vt;
+      } catch (e) {}
+    });
+    (window.__mmSvgSwaps || []).forEach((rec) => {
+      try {
+        rec.svg.setCurrentTime(vt / 1000);
+      } catch (e) {}
+    });
+    return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  }, vtMs);
+}
 
 // ---- calendar cell weather (the 10-day forecast strips) ----------------
 // Each day cell's decoration (util/calendarWeatherOverlay.js) is a strip
@@ -1019,14 +1150,9 @@ const cellWeatherHandler = {
     // before each shot is the compositor-commit lesson from the
     // celebrations filming.
     //
-    // The condition icons need their own arrangement: their motion is
-    // SMIL inside the SVG file, and an <img>-embedded SVG is opaque - it
-    // kept animating in REAL time between virtual steps, so the sun spun
-    // ~3x too fast and unevenly (Dave, 2026-08-26). Each icon is swapped
-    // for an INLINE copy of its SVG for the film - inline SVG exposes
-    // pauseAnimations()/setCurrentTime(), so its clock joins the same
-    // virtual timeline. The icon bucket has no CORS, so the SVG text is
-    // fetched Node-side (same trick as the widget-icon handler).
+    // The condition icons' motion is SMIL inside the SVG file - see the
+    // virtual-time helpers for why they get swapped for inline copies.
+    // The icon bucket has no CORS, so the SVG text is fetched Node-side.
     const iconSrcs = await frame.evaluate(() => {
       const seen = new Set();
       document.querySelectorAll("img.mm-weather-header-icon").forEach((el) => {
@@ -1043,33 +1169,8 @@ const cellWeatherHandler = {
         console.error("cw icon svg fetch failed (film keeps the img):", e.message);
       }
     }
-    await frame.evaluate((map) => {
-      window.__mmCwSvgSwaps = [];
-      document.querySelectorAll("img.mm-weather-header-icon").forEach((img) => {
-        const text = map[img.src];
-        if (!text) return;
-        const holder = document.createElement("div");
-        holder.innerHTML = text;
-        const svg = holder.querySelector("svg");
-        if (!svg || !img.parentNode) return;
-        svg.setAttribute("class", img.getAttribute("class") || "");
-        img.parentNode.replaceChild(svg, img);
-        try {
-          svg.pauseAnimations();
-        } catch (e) {}
-        window.__mmCwSvgSwaps.push({ svg, img });
-      });
-    }, svgBySrc);
-    // collected AFTER the swap so the inline svgs' CSS animations join in
-    await frame.evaluate(() => {
-      const list = document.getAnimations ? document.getAnimations({ subtree: true }) : [];
-      window.__mmCwAnims = list.map((a) => ({ a, t: a.currentTime }));
-      list.forEach((a) => {
-        try {
-          a.pause();
-        } catch (e) {}
-      });
-    });
+    await svgSwapIn(frame, svgBySrc);
+    await pauseAllAnimations(frame);
 
     const windowS = Math.min(
       13,
@@ -1079,41 +1180,17 @@ const cellWeatherHandler = {
     const shots = [];
     const stamps = [];
     for (let i = 0; i < steps; i++) {
-      const t = CW_WARMUP_MS + i * CW_STEP_MS;
-      await frame.evaluate((vt) => {
-        (window.__mmCwAnims || []).forEach((rec) => {
-          try {
-            rec.a.currentTime = vt;
-          } catch (e) {}
-        });
-        (window.__mmCwSvgSwaps || []).forEach((rec) => {
-          try {
-            rec.svg.setCurrentTime(vt / 1000);
-          } catch (e) {}
-        });
-        return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-      }, t);
+      await seekVirtual(frame, CW_WARMUP_MS + i * CW_STEP_MS);
       stamps.push(i * CW_STEP_MS); // frame-pick logic works in window-relative time
       shots.push(await page.screenshot({ type: "png", omitBackground: true }));
     }
 
     // hand the clocks back and the imgs their places, then the settle
     // goes back on before anything else can be photographed
+    await svgSwapOut(frame);
+    await resumeAllAnimations(frame);
     await frame
       .evaluate(() => {
-        (window.__mmCwSvgSwaps || []).forEach((rec) => {
-          try {
-            if (rec.svg.parentNode) rec.svg.parentNode.replaceChild(rec.img, rec.svg);
-          } catch (e) {}
-        });
-        window.__mmCwSvgSwaps = null;
-        (window.__mmCwAnims || []).forEach((rec) => {
-          try {
-            rec.a.currentTime = rec.t;
-            rec.a.play();
-          } catch (e) {}
-        });
-        window.__mmCwAnims = null;
         const settle = document.getElementById("mm-weather-settle");
         if (settle) settle.disabled = false;
       })

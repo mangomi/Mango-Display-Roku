@@ -31,9 +31,15 @@ const path = require("path");
 const crypto = require("crypto");
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
 
-const BUCKET = process.env.R2_BUCKET || "mango-display-assets";
+// 2026-08-27: publishing moved to native S3 + CloudFront (bucket
+// mango-roku-assets, flat-rate CloudFront plans made egress a non-issue
+// and R2's custom-domain path wanted the DNS zone on Cloudflare). The
+// R2 branch below stays for rollback and local setups; ASSET_BUCKET
+// selects native S3 with credentials from the task role.
+const AWS_BUCKET = process.env.ASSET_BUCKET || "";
+const BUCKET = AWS_BUCKET || process.env.R2_BUCKET || "mango-display-assets";
 const ACCOUNT = process.env.R2_ACCOUNT_ID || "";
-const PUBLIC_BASE = (process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
+const PUBLIC_BASE = (process.env.ASSET_PUBLIC_BASE || process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
 // Environment folder inside the shared bucket ("test", "prod"): both
 // pipelines share one bucket and one r2.dev hostname, split by top-level
 // key. Devices never see this decision - they are handed the full
@@ -56,6 +62,12 @@ const TYPES = {
 let client = null;
 function s3() {
   if (client) return client;
+  if (AWS_BUCKET) {
+    // native S3: default endpoint, credentials from the Fargate task
+    // role via the SDK's default chain (no stored keys)
+    client = new S3Client({ region: process.env.AWS_REGION || "us-east-1" });
+    return client;
+  }
   if (!ACCOUNT) throw new Error("R2_ACCOUNT_ID is not set");
   client = new S3Client({
     region: "auto",
@@ -94,7 +106,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // publishing is opt-in: with nothing configured the service serves from
 // disk, which is how development works
 function enabled() {
-  return !!(ACCOUNT && PUBLIC_BASE);
+  return !!(PUBLIC_BASE && (AWS_BUCKET || ACCOUNT));
 }
 
 // One per display: owns the display's prefix and remembers what it has

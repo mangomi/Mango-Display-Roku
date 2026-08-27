@@ -905,7 +905,18 @@ async function svgSwapIn(frame, svgBySrc) {
       text = text
         .replace(/id=("([^"]+)"|'([^']+)')/g, (m, q, d, s) => 'id="' + (d || s) + uid + '"')
         .replace(/url\(#([^)]+)\)/g, (m, id) => "url(#" + id + uid + ")")
-        .replace(/(xlink:href|href)=("#([^"]+)"|'#([^']+)')/g, (m, attr, q, d, s) => attr + '="#' + (d || s) + uid + '"');
+        .replace(/(xlink:href|href)=("#([^"]+)"|'#([^']+)')/g, (m, attr, q, d, s) => attr + '="#' + (d || s) + uid + '"')
+        // SMIL syncbase refs: rain.svg chains its drops with
+        // begin="0s; c.end+.33s" - rename those ids too, or each drop
+        // fires once and waits forever on an event that never comes
+        // (the widget rain lost its drops this way, 2026-08-26)
+        .replace(/(begin|end)=("([^"]*)"|'([^']*)')/g, (m, attr, q, d, s) => {
+          const v = (d !== undefined ? d : s).replace(
+            /([A-Za-z_][\w-]*)\.(begin|end|repeat)/g,
+            (mm, id, evt) => id + uid + "." + evt,
+          );
+          return attr + '="' + v + '"';
+        });
       const holder = document.createElement("div");
       holder.innerHTML = text;
       const svg = holder.querySelector("svg");

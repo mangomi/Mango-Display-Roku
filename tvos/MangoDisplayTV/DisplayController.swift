@@ -28,6 +28,8 @@ final class DisplayController: ObservableObject {
     /// where the busy spinner sits: the widget a gesture acted on, so it
     /// points at the thing that is actually changing; nil = screen center
     @Published private(set) var busyAt: CGPoint?
+    /// active confetti bursts (canvas coords), drawn above everything
+    @Published private(set) var celebrationBursts: [CelebrationBurstSpec] = []
     /// the remote pointer, checkboxes and gesture routing
     let interaction = InteractionController()
 
@@ -114,9 +116,13 @@ final class DisplayController: ObservableObject {
         phase = .pairing
         interaction.pageTurn = { [weak self] delta in self?.turnPage(delta) }
         interaction.busyAt = { [weak self] pt in self?.busyAt = pt }
-        interaction.celebrate = { kind, at in
-            // the burst/finale player lands with the celebrations chunk
+        interaction.celebrate = { [weak self] kind, at in
             NSLog("[Mango] celebrate %@ at %d,%d", kind, Int(at.x), Int(at.y))
+            if kind == "finale" {
+                self?.playFinale(at)
+            } else {
+                self?.spawnBurst(x: at.x, y: at.y, size: 380, delayMs: 0)
+            }
         }
         #if DEBUG
         // headless remote for test harnesses (RemoteInput.swift)
@@ -523,6 +529,35 @@ final class DisplayController: ObservableObject {
             // flight; the show() that ends it re-arms rotation anyway
             guard !self.loading, !self.animating else { return }
             self.loadPage(next, animated: true)
+        }
+    }
+
+    // MARK: - celebrations (MainScene onCelebrate/playFinale/spawnBurst)
+
+    /// The portal's confetti, natively: a burst at the checked box; when
+    /// a whole list completes, the volley the portal calls
+    /// fireWorkConfetti - bursts from the left and right bands, staggered.
+    private func playFinale(_ at: CGPoint) {
+        for i in 0..<6 {
+            let side = i % 2
+            var x = Double.random(in: 0...1) * 380 + 190          // left band ~190-570
+            if side == 1 { x = 1920 - x }
+            let y = Double.random(in: 0...1) * 430 + 55           // upper half
+            spawnBurst(x: x, y: y, size: 560, delayMs: Double(i) * 210)
+        }
+        // and one on the box itself so the press is answered instantly
+        spawnBurst(x: at.x, y: at.y, size: 380, delayMs: 0)
+    }
+
+    private func spawnBurst(x: Double, y: Double, size: Double, delayMs: Double) {
+        guard let meta = CelebrationMeta.burst else { return }
+        let spec = CelebrationBurstSpec(x: x, y: y, size: size, delay: delayMs / 1000)
+        celebrationBursts.append(spec)
+        // one playthrough and gone (the parent removes the node)
+        let lifetime = spec.delay + Double(meta.frameCount) * meta.frameMs / 1000 + 0.1
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(lifetime))
+            self?.celebrationBursts.removeAll { $0.id == spec.id }
         }
     }
 

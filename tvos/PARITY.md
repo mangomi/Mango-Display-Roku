@@ -208,11 +208,26 @@ overlays by render-service d8d3750/c7a5214/bd7f2f7):
   one fetch+decode per URL, latecomers await the same task, failures
   retry fresh, evict() cancels in-flight fetches for the evicted URL.
 
-## Not yet ported (Phase B remainder)
+Landed 2026-08-26 (chunk 5 — celebrations):
 
-- Celebrations (burst + finale; needs `tools/generate-celebrations.js`
-  to emit a JSON map alongside the .brs one). The interaction layer
-  already emits the events.
+- **CelebrationBurst.brs + MainScene's onCelebrate/playFinale →
+  Swift**: one-shot confetti burst at the ticked box (size 380), the
+  6-burst staggered finale in the left/right bands (size 560, 210ms
+  steps) plus the instant box burst when a whole list completes.
+  Bursts play above everything (the portal's zIndex-999 canvas), once,
+  then remove themselves. Celebrate fires only when a toggle lands
+  CHECKED - never on untick.
+- The app bundles the SAME `images/celebrations/burst.png` the Roku
+  ships (folder reference, no copy), and
+  `tools/generate-celebrations.js` now emits
+  `tvos/MangoDisplayTV/celebrationMap.json` alongside the .brs map -
+  one filming run feeds both clients, the change APPLE_TV.md predicted.
+- VERIFIED live: burst caught mid-play at a real ticked checkbox
+  (t+0.4s dense, t+0.85s dissipating), and Dave hand-tested with the
+  keyboard remote. The finale path is a literal port; it shows the
+  first time a whole list is completed on-device.
+
+## Not yet ported (Phase B remainder)
 - Exit/lifecycle reporting (`&lastexit=`; lifecycle notifications +
   MetricKit) and real memory-level reporting (currently coarse
   `normal`→`low` after a pressure warning).

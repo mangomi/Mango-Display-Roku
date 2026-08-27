@@ -46,6 +46,11 @@ struct DisplayView: View {
                         .position(controller.busyAt ?? CGPoint(x: 960, y: 540))
                 }
             }
+            // confetti on top of everything, like the portal's canvas at
+            // zIndex 999 (MainScene.xml celebrationLayer, last child)
+            CanvasSpace {
+                CelebrationLayerView(bursts: controller.celebrationBursts)
+            }
         }
         .ignoresSafeArea()
     }

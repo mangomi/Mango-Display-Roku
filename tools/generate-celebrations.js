@@ -201,6 +201,12 @@ async function packSheet(frames) {
           ", rows: " + meta.rows + ", frameMs: " + meta.frameMs + " }\n" +
           "end function\n",
       );
+      // the tvOS app bundles the SAME sheet (folder reference) and reads
+      // the map as JSON - one filming run feeds both clients
+      fs.writeFileSync(
+        path.join(REPO, "tvos", "MangoDisplayTV", "celebrationMap.json"),
+        JSON.stringify({ file: "celebrations/burst.png", ...meta }) + "\n",
+      );
     } else {
       const base = path.join(SVC, "effect-assets", "effect_" + asset.name + "_sheet");
       fs.writeFileSync(base + ".png", sheet);

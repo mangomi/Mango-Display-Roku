@@ -863,7 +863,11 @@ const CW_PERIODS_S = {
 const CW_DEFAULT_PERIOD_S = 5.5;
 const CW_STEP_MS = 70; // virtual-time sampling interval = playback frameMs
 const CW_MAX_SHOTS = 200; // 13s cloudy cycle at 70ms = 186 steps
-const CW_TARGET_FRAMES = 96; // slow cycles stride down to about this many
+// No deliberate striding: slow drift is exactly where a lower frame rate
+// shows as stepping (Dave: clouds jerking at the strided 140ms), and at
+// strip size even a 186-frame sheet sits far under the texture cap. The
+// sheet-capacity stride below remains purely as the safety valve.
+const CW_TARGET_FRAMES = CW_MAX_SHOTS;
 // Skip the ensemble's startup transient: during a particle's
 // animation-delay it renders PARKED at its base spot, so t=0 shows
 // every raindrop lined up at the top of the cell - and the loop wrap
@@ -1014,6 +1018,49 @@ const cellWeatherHandler = {
     // reproduces delays and ensemble phasing exactly, and the double-rAF
     // before each shot is the compositor-commit lesson from the
     // celebrations filming.
+    //
+    // The condition icons need their own arrangement: their motion is
+    // SMIL inside the SVG file, and an <img>-embedded SVG is opaque - it
+    // kept animating in REAL time between virtual steps, so the sun spun
+    // ~3x too fast and unevenly (Dave, 2026-08-26). Each icon is swapped
+    // for an INLINE copy of its SVG for the film - inline SVG exposes
+    // pauseAnimations()/setCurrentTime(), so its clock joins the same
+    // virtual timeline. The icon bucket has no CORS, so the SVG text is
+    // fetched Node-side (same trick as the widget-icon handler).
+    const iconSrcs = await frame.evaluate(() => {
+      const seen = new Set();
+      document.querySelectorAll("img.mm-weather-header-icon").forEach((el) => {
+        if (getComputedStyle(el).visibility !== "hidden" && el.src) seen.add(el.src);
+      });
+      return [...seen];
+    });
+    const svgBySrc = {};
+    for (const src of iconSrcs) {
+      try {
+        const t = await (await fetch(src)).text();
+        if (/<svg[\s>]/i.test(t)) svgBySrc[src] = t;
+      } catch (e) {
+        console.error("cw icon svg fetch failed (film keeps the img):", e.message);
+      }
+    }
+    await frame.evaluate((map) => {
+      window.__mmCwSvgSwaps = [];
+      document.querySelectorAll("img.mm-weather-header-icon").forEach((img) => {
+        const text = map[img.src];
+        if (!text) return;
+        const holder = document.createElement("div");
+        holder.innerHTML = text;
+        const svg = holder.querySelector("svg");
+        if (!svg || !img.parentNode) return;
+        svg.setAttribute("class", img.getAttribute("class") || "");
+        img.parentNode.replaceChild(svg, img);
+        try {
+          svg.pauseAnimations();
+        } catch (e) {}
+        window.__mmCwSvgSwaps.push({ svg, img });
+      });
+    }, svgBySrc);
+    // collected AFTER the swap so the inline svgs' CSS animations join in
     await frame.evaluate(() => {
       const list = document.getAnimations ? document.getAnimations({ subtree: true }) : [];
       window.__mmCwAnims = list.map((a) => ({ a, t: a.currentTime }));
@@ -1039,16 +1086,27 @@ const cellWeatherHandler = {
             rec.a.currentTime = vt;
           } catch (e) {}
         });
+        (window.__mmCwSvgSwaps || []).forEach((rec) => {
+          try {
+            rec.svg.setCurrentTime(vt / 1000);
+          } catch (e) {}
+        });
         return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       }, t);
       stamps.push(i * CW_STEP_MS); // frame-pick logic works in window-relative time
       shots.push(await page.screenshot({ type: "png", omitBackground: true }));
     }
 
-    // hand the clocks back, then the settle goes back on before anything
-    // else can be photographed
+    // hand the clocks back and the imgs their places, then the settle
+    // goes back on before anything else can be photographed
     await frame
       .evaluate(() => {
+        (window.__mmCwSvgSwaps || []).forEach((rec) => {
+          try {
+            if (rec.svg.parentNode) rec.svg.parentNode.replaceChild(rec.img, rec.svg);
+          } catch (e) {}
+        });
+        window.__mmCwSvgSwaps = null;
         (window.__mmCwAnims || []).forEach((rec) => {
           try {
             rec.a.currentTime = rec.t;

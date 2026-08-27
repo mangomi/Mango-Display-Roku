@@ -14,15 +14,31 @@ actor ImageCache {
     static let shared = ImageCache()
 
     private var store: [String: UIImage] = [:]
+    /// Concurrent requests for one URL share a single fetch+decode.
+    /// Without this, actor reentrancy (the await below suspends) let N
+    /// views requesting the same sheet all miss the cache and all fetch -
+    /// caught by the calendar cell-weather overlays, where six cells share
+    /// one rain sheet and every slot rebuild kicked off six downloads.
+    /// Roku's texture manager dedupes this natively; the port must too.
+    private var inflight: [String: Task<UIImage?, Never>] = [:]
 
     func image(at url: URL, timeout: TimeInterval) async -> UIImage? {
-        if let hit = store[url.absoluteString] { return hit }
-        var req = URLRequest(url: url, timeoutInterval: timeout)
-        req.cachePolicy = .reloadIgnoringLocalCacheData
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200,
-              let img = UIImage(data: data) else { return nil }
-        store[url.absoluteString] = img
+        let key = url.absoluteString
+        if let hit = store[key] { return hit }
+        if let running = inflight[key] { return await running.value }
+        let task = Task<UIImage?, Never> {
+            var req = URLRequest(url: url, timeoutInterval: timeout)
+            req.cachePolicy = .reloadIgnoringLocalCacheData
+            guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                  (resp as? HTTPURLResponse)?.statusCode == 200,
+                  let img = UIImage(data: data) else { return nil }
+            return img
+        }
+        inflight[key] = task
+        let img = await task.value
+        inflight[key] = nil
+        // failures are not cached: the next request retries fresh
+        if let img { store[key] = img }
         return img
     }
 
@@ -35,8 +51,13 @@ actor ImageCache {
     /// effect sprites: the service regenerates them under FIXED filenames
     /// (unlike the content-hashed burst sheets), so a changed effects set
     /// must not trust bytes fetched for an earlier one - stale art
-    /// otherwise lives as long as the app does.
+    /// otherwise lives as long as the app does. In-flight fetches for an
+    /// evicted URL are cancelled so pre-eviction bytes can't land either.
     func evict(_ urls: Set<String>) {
-        for u in urls { store.removeValue(forKey: u) }
+        for u in urls {
+            store.removeValue(forKey: u)
+            inflight[u]?.cancel()
+            inflight.removeValue(forKey: u)
+        }
     }
 }

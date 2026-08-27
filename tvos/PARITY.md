@@ -191,6 +191,23 @@ latency is ~0.2-0.4s, so a scripted double-click needs NO sleep
 between posts or it misses the 450ms window. A real remote has
 neither problem.
 
+Verified 2026-08-26 (calendar cell weather, served as plain `gif`
+overlays by render-service d8d3750/c7a5214/bd7f2f7):
+
+- 10 `overlay_cw_*` entries on the calendar page, 3 content-hashed
+  sheets shared across cells, mixed 70ms/140ms frame rates. The
+  existing sheet player needed nothing new: frameMs is honored
+  per-entry (each view runs its own timeline period), animations stay
+  inside the 163x54 header bands, temps/dates stay sharp beneath, no
+  ghost icon, and the 5.6s rain loop wraps phase-consistently.
+- One client bug found by this verification, as the server session
+  predicted: ImageCache had an actor-reentrancy hole - the awaited
+  fetch suspends the actor, so N views requesting one sheet
+  concurrently ALL missed the cache and ALL fetched+decoded (six
+  cells share the rain sheet). Fixed with in-flight task coalescing:
+  one fetch+decode per URL, latecomers await the same task, failures
+  retry fresh, evict() cancels in-flight fetches for the evicted URL.
+
 ## Not yet ported (Phase B remainder)
 
 - Celebrations (burst + finale; needs `tools/generate-celebrations.js`

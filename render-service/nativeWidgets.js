@@ -861,7 +861,9 @@ const CW_PERIODS_S = {
   "wind-snow": 5.4, wind: 5.2, frigid: 5.2, hail: 5.4,
 };
 const CW_DEFAULT_PERIOD_S = 5.5;
-const CW_MAX_SHOTS = 150;
+const CW_STEP_MS = 70; // virtual-time sampling interval = playback frameMs
+const CW_MAX_SHOTS = 200; // 13s cloudy cycle at 70ms = 186 steps
+const CW_TARGET_FRAMES = 96; // slow cycles stride down to about this many
 
 const cellWeatherHandler = {
   type: "cellWeather",
@@ -997,23 +999,56 @@ const cellWeatherHandler = {
     await page.addStyleTag({ content: "/*mm-film*/html,body{background:transparent !important}" });
     await page.waitForTimeout(200);
 
+    // Filmed in VIRTUAL time, not wall-clock: real-time shooting can only
+    // sample as fast as a screenshot returns (~300ms on the fleet), which
+    // played back as jerky rain (Dave, 2026-08-26). Instead every CSS
+    // animation is paused and SEEKED - frame i sits at exactly i*70ms of
+    // animation time, whatever the screenshot costs. Seeking currentTime
+    // reproduces delays and ensemble phasing exactly, and the double-rAF
+    // before each shot is the compositor-commit lesson from the
+    // celebrations filming.
+    await frame.evaluate(() => {
+      const list = document.getAnimations ? document.getAnimations({ subtree: true }) : [];
+      window.__mmCwAnims = list.map((a) => ({ a, t: a.currentTime }));
+      list.forEach((a) => {
+        try {
+          a.pause();
+        } catch (e) {}
+      });
+    });
+
     const windowS = Math.min(
       13,
       Math.max(...[...need.values()].map((o) => CW_PERIODS_S[o.cellWeather] || CW_DEFAULT_PERIOD_S)),
     );
+    const steps = Math.min(CW_MAX_SHOTS, Math.round((windowS * 1000) / CW_STEP_MS));
     const shots = [];
     const stamps = [];
-    const t0 = Date.now();
-    while (Date.now() - t0 < windowS * 1000 && shots.length < CW_MAX_SHOTS) {
-      stamps.push(Date.now() - t0);
+    for (let i = 0; i < steps; i++) {
+      const t = i * CW_STEP_MS;
+      await frame.evaluate((vt) => {
+        (window.__mmCwAnims || []).forEach((rec) => {
+          try {
+            rec.a.currentTime = vt;
+          } catch (e) {}
+        });
+        return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      }, t);
+      stamps.push(t);
       shots.push(await page.screenshot({ type: "png", omitBackground: true }));
-      await page.waitForTimeout(100);
     }
-    const realGapMs = shots.length > 1 ? (stamps[stamps.length - 1] - stamps[0]) / (shots.length - 1) : 100;
 
-    // settle goes back on before anything else can be photographed
+    // hand the clocks back, then the settle goes back on before anything
+    // else can be photographed
     await frame
       .evaluate(() => {
+        (window.__mmCwAnims || []).forEach((rec) => {
+          try {
+            rec.a.currentTime = rec.t;
+            rec.a.play();
+          } catch (e) {}
+        });
+        window.__mmCwAnims = null;
         const settle = document.getElementById("mm-weather-settle");
         if (settle) settle.disabled = false;
       })
@@ -1039,7 +1074,9 @@ const cellWeatherHandler = {
         count = Math.max(2, Math.min(count, shots.length));
         const capacity =
           Math.max(1, Math.floor(2048 / dr.width)) * Math.max(1, Math.floor(2048 / dr.height));
-        const stride = Math.max(1, Math.ceil(count / capacity));
+        // slow cycles (clouds at 13s) don't need 70ms sampling on the TV -
+        // stride them down; fast ones (rain) keep every frame
+        const stride = Math.max(1, Math.ceil(count / Math.min(capacity, CW_TARGET_FRAMES)));
         const picked = [];
         for (let i = 0; i < count; i += stride) picked.push(i);
 
@@ -1080,7 +1117,7 @@ const cellWeatherHandler = {
           frameCount: frames.length,
           cols,
           rows,
-          frameMs: Math.max(60, Math.round(realGapMs * stride)),
+          frameMs: Math.max(40, CW_STEP_MS * stride),
         };
         fsHandlers.writeFileSync(
           pathHandlers.join(ctx.outDir, fileName.replace(/\.png$/, ".json")),

@@ -701,7 +701,31 @@ class DisplayWorker {
     // so, and the device swaps just the page image instead of rebuilding
     // every native layer - which restarts each GIF from frame one and
     // blanks them while their sheets reload.
-    const imageOnly = reason === "interaction";
+    //
+    // UNLESS the interaction changed the native layers themselves:
+    // scrolling a calendar off the forecast window removes its
+    // cell-weather overlays, and an image-only update left last month's
+    // rain falling over the new month's image (Dave, 2026-08-27). When
+    // any page's overlay set differs from what was last published, this
+    // update must be a full one - the GIF-restart flicker is the honest
+    // cost of layers that genuinely changed.
+    let imageOnly = reason === "interaction";
+    if (imageOnly) {
+      try {
+        const prev = JSON.parse(fs.readFileSync(path.join(this.dir, "display.json"), "utf8"));
+        const key = (o) => JSON.stringify(o || []);
+        pages.forEach((p, i) => {
+          const old = (prev.pages || [])[i];
+          if (imageOnly && (!old || key(old.overlays) !== key(p.overlays))) {
+            imageOnly = false;
+            this.log("interaction changed page " + i + " overlays - publishing full manifest");
+          }
+        });
+      } catch (e) {
+        /* no previous manifest to compare against: publish full */
+        imageOnly = false;
+      }
+    }
     const effects = man0.effects || []; // display-wide, not per page
     const gestures = meta.gestures || { pageSwipe: false, calendarScroll: false };
     fs.writeFileSync(

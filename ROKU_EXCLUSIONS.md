@@ -22,6 +22,17 @@ would slot in alongside them. The check is on the display's `deviceId`.
 
 ## Exclusions
 
+> **STATUS 2026-08-27: implemented in the webapp** — PR
+> [mangomi/MangomirrorWebApp#142](https://github.com/mangomi/MangomirrorWebApp/pull/142)
+> (branch `roku-unsupported-options`, not yet merged). Dave chose
+> disable-with-explanation over hiding: each unsupported option is
+> greyed with a "Not supported on Roku / Apple TV" caption + tooltip
+> (`DevicePlatformService` + `<app-not-supported-note>`), values
+> force-cleared on load and save, TV Remote mode forced. Covers #4-#10
+> below for BOTH `RK` and `ATV` prefixes. Still open: #3 (video widget
+> hidden from the picker) — not in the PR, needs its own decision on
+> picker treatment.
+
 | # | Where | Option | Setting key | Status | Why |
 |---|---|---|---|---|---|
 | 1 | Settings → Visual Overlays | **Fireworks & Confetti** | `firework` | ~~Confirmed — hide for RK~~ **RESOLVED 2026-08-24 — supported, do NOT exclude** | Originally excluded because per-particle physics judder in BrightScript. Solved instead by filming the portal's own tsparticles preset at build time into a sprite sheet (`tools/generate-celebrations.js`); the render service plays it as a popup effect (`bundledBurstEffect` in `nativeWidgets.js`), same path as the GIF overlays. No webapp change needed. |

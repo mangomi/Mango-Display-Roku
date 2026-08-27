@@ -144,10 +144,22 @@ class AssetPublisher {
         Key: key,
         Body: body,
         ContentType: TYPES[path.extname(localPath).toLowerCase()] || "application/octet-stream",
-        // display.json must never be served stale - it is how a device
-        // learns there is anything new. The images it names are already
-        // cache-busted per render.
-        CacheControl: key.endsWith("display.json") ? "no-store" : "public, max-age=31536000",
+        // Version-correctness lives in these headers, not in query-string
+        // cache busting: CloudFront's flat-rate plans only allow MANAGED
+        // cache policies, and every managed policy that keys on query
+        // strings also forwards the Host header - which breaks S3 origins
+        // (bucket resolution follows Host; live 404s on existing keys,
+        // 2026-08-27). So the CDN ignores query strings entirely and:
+        // - display.json is never cached (a device's "anything new?")
+        // - page images revalidate every fetch (stable names, changing
+        //   pixels; a 304 from same-region S3 is trivially cheap)
+        // - content-named sprite art caches for a year (a new filming is
+        //   a new filename by design)
+        CacheControl: key.endsWith("display.json")
+          ? "no-store"
+          : /^(overlay_|effect_)/.test(path.basename(key))
+            ? "public, max-age=31536000, immutable"
+            : "public, no-cache",
       }),
     );
     return body.length;

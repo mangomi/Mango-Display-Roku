@@ -227,14 +227,29 @@ Landed 2026-08-26 (chunk 5 — celebrations):
   keyboard remote. The finale path is a literal port; it shows the
   first time a whole list is completed on-device.
 
-## Not yet ported (Phase B remainder)
-- Exit/lifecycle reporting (`&lastexit=`; lifecycle notifications +
-  MetricKit) and real memory-level reporting (currently coarse
-  `normal`→`low` after a pressure warning).
-- The 60s fallback refresh timer (`refreshTimer`); the in-loop
-  heartbeat covers dead connections for now.
-- Dev helper: Roku's `*` key regenerates the device code — no tvOS
-  equivalent mapped yet.
+Landed 2026-08-26 (chunk 6 — the Phase B tail):
+
+- **Exit reporting**: lifecycle breadcrumbs persisted on the way down
+  (background / terminate / no-notice→"killed"), read at next launch,
+  riding `&launch=1` as `&lastexit=&lastexitat=` exactly like Roku's
+  launchInfo. VERIFIED: hard kill + relaunch reported
+  `&lastexit=killed`. **MetricKit is a dead end on tvOS** — the
+  framework imports but the subscriber/diagnostic types are marked
+  unavailable (tvOS 26.5 SDK); APPLE_TV.md §3's hope is corrected.
+- **60s fallback refresh timer**: skips while the long-poll is healthy
+  (version event <90s ago); otherwise reloads the current page in
+  place — a cache-hit no-op on a quiet display. Roku refreshTimer
+  parity.
+- **Dev gesture**: triple play/pause within 2s = Roku's hidden `*` —
+  discards the Keychain identity and re-pairs with a fresh code.
+  Deliberately NOT live-fired on this rig (it orphans the claimed
+  ATV447393236); detection exercised, action code-reviewed only.
+
+**Phase B is COMPLETE.** Remaining known gaps are variant coverage
+only: slideshow as a placed widget, brightness<1 photo dim, slide/flip
+photo swaps, and the celebration finale (fires the first time a whole
+list completes on-device). Phase C (hardware, trackpad pointer, soak)
+is next.
 
 ## Spike-only conveniences to revisit
 

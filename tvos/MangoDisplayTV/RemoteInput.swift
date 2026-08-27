@@ -39,7 +39,8 @@ final class RemoteInputUIView: UIView {
         case .leftArrow: return "left"
         case .rightArrow: return "right"
         case .select: return "OK"
-        default: return nil   // menu, playPause, ... stay with the system
+        case .playPause: return "playpause"   // dev gesture (triple-press)
+        default: return nil   // menu stays with the system - App Review rule
         }
     }
 
@@ -101,7 +102,7 @@ enum DebugRemote {
             }
         }
         let center = CFNotificationCenterGetDarwinNotifyCenter()
-        for key in ["up", "down", "left", "right", "OK"] {
+        for key in ["up", "down", "left", "right", "OK", "playpause"] {
             for phase in ["press", "release", "tap"] {
                 CFNotificationCenterAddObserver(
                     center, nil, callback,

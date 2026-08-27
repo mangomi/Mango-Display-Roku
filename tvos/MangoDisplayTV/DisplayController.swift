@@ -102,6 +102,10 @@ final class DisplayController: ObservableObject {
     private var runTask: Task<Void, Never>?
     private var rotateTask: Task<Void, Never>?
     private var spinnerWatchdog: Task<Void, Never>?
+    private var fallbackTask: Task<Void, Never>?
+    private var lastVersionAt = Date.distantPast   // last version EVENT, not last reply
+    private var launchExitQuery = ""               // previous run's exit, rides &launch=1
+    private var playPauseTaps: [Date] = []         // dev-gesture press timestamps
 
     func start() {
         guard runTask == nil else { return }
@@ -128,6 +132,24 @@ final class DisplayController: ObservableObject {
         // headless remote for test harnesses (RemoteInput.swift)
         DebugRemote.install { [weak self] key, press in self?.handleKey(key, press: press) }
         #endif
+        // breadcrumbs for the next launch's &lastexit=, and the previous
+        // run's answer for this launch's announcement
+        ExitReport.install()
+        launchExitQuery = ExitReport.launchQuery()
+        // Fallback only: the /wait long-poll is the primary refresh
+        // signal; this cadence catches a silently wedged connection. When
+        // the poll is healthy (a version event in the last 90s) the tick
+        // skips - and on a quiet display the reload is an in-place
+        // cache-hit no-op, exactly like Roku's refreshTimer.
+        fallbackTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard let self, !Task.isCancelled else { return }
+                guard !self.pages.isEmpty, !self.loading, !self.animating else { continue }
+                guard Date().timeIntervalSince(self.lastVersionAt) >= 90 else { continue }
+                self.loadPage(self.pageIndex, animated: false)
+            }
+        }
         // The closest tvOS offers to Roku's per-poll GetGeneralMemoryLevel:
         // after a pressure warning, every subsequent poll reports mem=low -
         // the service logs it as the flight recorder that separates an OS
@@ -154,8 +176,42 @@ final class DisplayController: ObservableObject {
     /// Remote keys drive the interaction pointer - only once paired
     /// (MainScene.onKeyEvent's pages guard); Menu is never seen here.
     func handleKey(_ key: String, press: Bool) {
+        // Hidden dev helper (Roku's `*` key, handled before the pages
+        // guard so it works on the pairing screen too): triple play/pause
+        // within 2s discards the code and starts over. The old code's
+        // webapp claim is orphaned - deliberate, for dev rigs only.
+        if key == "playpause" {
+            guard press else { return }
+            let now = Date()
+            playPauseTaps = playPauseTaps.filter { now.timeIntervalSince($0) < 2 } + [now]
+            NSLog("[Mango] playpause %d/3", playPauseTaps.count)
+            if playPauseTaps.count >= 3 {
+                playPauseTaps = []
+                regeneratePairing()
+            }
+            return
+        }
         guard phase == .display else { return }
         if press { interaction.keyDown(key) } else { interaction.keyUp(key) }
+    }
+
+    /// Discard the identity and re-pair from scratch (dev helper).
+    private func regeneratePairing() {
+        NSLog("[Mango] dev gesture: discarding device code, back to pairing")
+        runTask?.cancel(); runTask = nil
+        rotateTask?.cancel()
+        spinnerWatchdog?.cancel()
+        slots = []
+        pages = []
+        latestManifest = nil
+        effects = []; effectsKey = ""; effectAssetURLs = []
+        celebrationBursts = []
+        busy = false; showSpinner = false; busyAt = nil
+        identity = ""
+        interaction.setTargets(nil, regions: [], pageIndex: 0)
+        code = DeviceIdentity.regenerate()
+        phase = .pairing
+        runTask = Task { await run() }
     }
 
     /// Double-click left/right on the remote. The device already holds
@@ -189,7 +245,8 @@ final class DisplayController: ObservableObject {
         var launchPending = true
         var loggedReply = false
         while !Task.isCancelled {
-            let launch = launchPending ? "&launch=1" : ""
+            // the exit reason only matters alongside the launch announcement
+            let launch = launchPending ? "&launch=1" + launchExitQuery : ""
             let url = URL(string: "\(base)/wait?since=\(ver)&busy=\(busy ? "1" : "0")&mem=\(memLevel)\(launch)\(identity)")!
             // server holds up to 50s; give it 55 then re-arm
             if let reply = await getJSON(url, timeout: 55) {
@@ -219,6 +276,7 @@ final class DisplayController: ObservableObject {
                     // version, and requiring ">" left the Roku deaf until
                     // reinstall (VersionTask.brs:127)
                     ver = v
+                    lastVersionAt = Date()
                     NSLog("[Mango] new render version: %d", ver)
                     // the manifest rides inline in the /wait reply (the
                     // service knows our since differs); fall back to

@@ -18,6 +18,14 @@ enum DeviceIdentity {
         return code
     }
 
+    /// Dev helper (Roku's hidden `*` key): discard the identity and mint
+    /// a fresh code. The old code's claim in the webapp is orphaned - the
+    /// display must be re-claimed.
+    static func regenerate() -> String {
+        SecItemDelete(baseQuery() as CFDictionary)
+        return getOrCreateCode()
+    }
+
     /// "ATV" + 9 random digits 1-9. The prefix is the ONLY backend-visible
     /// difference from a Roku (confirmed by Dave 2026-08-26); the digit
     /// range mirrors the Roku/Tizen generator (BrightScript Rnd(9) yields

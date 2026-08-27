@@ -67,14 +67,26 @@ struct SpriteSheetView: View {
     var body: some View {
         // ~30fps cap, same clamp as the Roku player
         let period = max(frameMs, 33) / 1000
+        // Sample by the sheet's REAL packed grid, not the manifest's
+        // frameW: the service composites frames at integer pixel
+        // positions (it films at the ROUNDED element size), while
+        // frameW is the fractional on-screen width. Stepping by the
+        // fractional value drifted the sample window ~0.16px per frame
+        // and snapped back ~1.7px at every row wrap - a horizontal
+        // sawtooth that read as jerky motion on the cell-weather icons
+        // (sheet 1956px wide, 12 cols: 163.0 packed vs 162.84 declared).
+        // Drawing at native sheet size also skips a 0.999x resample
+        // that softened every frame.
+        let strideX = (sheet.size.width / CGFloat(max(1, cols))).rounded()
+        let strideY = (sheet.size.height / CGFloat(max(1, rows))).rounded()
         TimelineView(.periodic(from: .now, by: period)) { ctx in
             let idx = frameCount > 1 ? Int(ctx.date.timeIntervalSinceReferenceDate / period) % frameCount : 0
             let col = idx % cols
             let row = idx / cols
             Image(uiImage: sheet)
                 .resizable()
-                .frame(width: Double(cols) * frameW, height: Double(rows) * frameH)
-                .offset(x: -Double(col) * frameW, y: -Double(row) * frameH)
+                .frame(width: sheet.size.width, height: sheet.size.height)
+                .offset(x: -CGFloat(col) * strideX, y: -CGFloat(row) * strideY)
         }
     }
 }

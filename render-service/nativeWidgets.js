@@ -891,9 +891,21 @@ const weatherIconHandler = {
 async function svgSwapIn(frame, svgBySrc) {
   await frame.evaluate((map) => {
     window.__mmSvgSwaps = [];
+    let uidSeq = 0;
     document.querySelectorAll("img").forEach((img) => {
-      const text = map[img.src];
+      let text = map[img.src];
       if (!text || !img.parentNode) return;
+      // Icon sets reuse one-letter internal ids (id="a" gradients,
+      // id="b" symbols). Inline several icons at once and those ids
+      // collide DOCUMENT-wide: url(#a)/href="#b" resolve to whichever
+      // copy came first, and the losers render nothing - the fleet's
+      // suns came out as fully transparent sheets (2026-08-26). Every
+      // instance gets its ids namespaced, so each copy is self-contained.
+      const uid = "-mmswap" + uidSeq++;
+      text = text
+        .replace(/id=("([^"]+)"|'([^']+)')/g, (m, q, d, s) => 'id="' + (d || s) + uid + '"')
+        .replace(/url\(#([^)]+)\)/g, (m, id) => "url(#" + id + uid + ")")
+        .replace(/(xlink:href|href)=("#([^"]+)"|'#([^']+)')/g, (m, attr, q, d, s) => attr + '="#' + (d || s) + uid + '"');
       const holder = document.createElement("div");
       holder.innerHTML = text;
       const svg = holder.querySelector("svg");

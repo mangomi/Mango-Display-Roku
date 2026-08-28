@@ -40,6 +40,14 @@ off there, not deleted here.
   overlays on a full manifest even mid-gesture. If the tvOS gesture
   path assumes swipe answers are always imageOnly, revisit.
 
+- [ ] **Staged publishes arrive as two manifests seconds apart**
+  (`dbf5b6e`): a user-driven multi-page render publishes the priority
+  page first (with `showPage`), then everything again moments later.
+  Verify the client applies consecutive versions gracefully - and that
+  a briefly SMALLER page count (page-add: stage one may carry N pages,
+  stage two N+1) doesn't reset rotation state or crash an
+  out-of-range current page.
+
 ## DONE by the tvOS session already (listed for the record)
 
 - [x] Calendar cell-weather overlays (`overlay_cw_*` gif entries,

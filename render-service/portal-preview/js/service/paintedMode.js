@@ -151,8 +151,33 @@
    * a good moment to screenshot?" - for captures a client takes on its
    * own schedule (page steps, catch-up renders), which no ready signal
    * precedes. */
+  /* Any page mid-transition is not a moment to screenshot - and not
+   * only bridge-driven steps: a layout push makes the portal navigate
+   * ITSELF (goToPage), and captures that raced that crossfade baked two
+   * pages into one JPEG (Dave's add-a-page test, 2026-08-28). Same
+   * visual test whenPageShown applies, as an instant predicate. */
+  function pagesMidTransition() {
+    try {
+      var groups = (bridge && bridge.scope && bridge.scope.groups) || [];
+      var visible = 0;
+      for (var i = 0; i < groups.length; i++) {
+        var el = groups[i] && document.getElementById(groups[i].pageId);
+        if (!el) continue;
+        var cs = getComputedStyle(el);
+        var opacity = parseFloat(cs.opacity);
+        if (cs.visibility === "hidden" || opacity <= 0.01) continue;
+        if (opacity < 0.99) return true;
+        if (cs.transform !== "none" && cs.transform !== "matrix(1, 0, 0, 1, 0, 0)") return true;
+        visible++;
+      }
+      return visible > 1; /* two pages up = mid-crossfade */
+    } catch (e) {
+      return false; /* never stall the client on a DOM surprise */
+    }
+  }
+
   function isSettled() {
-    return !pending.length && !debounceTimer && !gate && !anySpinnerVisible();
+    return !pending.length && !debounceTimer && !gate && !anySpinnerVisible() && !pagesMidTransition();
   }
 
   /* Wait for anything still decoding before calling the paint done - the

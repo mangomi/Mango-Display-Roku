@@ -36,7 +36,7 @@ sub init()
     m.dblTimer = m.top.findNode("dblTimer")
     m.dblTimer.observeField("fire", "onDblWindowEnd")
     m.dblKey = ""
-    m.didGlide = false
+    m.glideSteps = 0
     m.swipeBusy = false
     m.swipeCooldown = m.top.findNode("swipeCooldown")
     m.swipeCooldown.observeField("fire", "onSwipeCooldown")
@@ -235,7 +235,20 @@ sub onKeyUp()
     key = m.top.keyRelease
     if key = "" then return
     m.top.keyRelease = ""
-    glided = m.didGlide
+    ' A press only counts as a HOLD (and so cannot be half of a
+    ' double-click) once it has actually glided the pointer a visible
+    ' distance. Treating the very first glide step as a hold made a
+    ' double-click nearly impossible: holdDelay is 350ms, so any
+    ' deliberate press past that was disqualified and the second press
+    ' just nudged the pointer (Dave, 2026-08-28: "the double-click needs
+    ' to be really quick, otherwise it's just moving the mouse"). The
+    ' portal's own remote (remotePointer.js) never disqualifies a held
+    ' press at all - it only asks whether two releases fall inside
+    ' ARROW_DOUBLE_TAP_GAP. GLIDE_CLICK_STEPS keeps genuine gliding out
+    ' while allowing ~0.5s of press: 4 steps at holdRepeat 40ms is 160ms
+    ' of glide, about 40px, harmless for a page turn (position-free) and
+    ' well inside a calendar widget for a swipe.
+    glided = (m.glideSteps >= 4)
     if key = m.heldKey then stopHold()
     ' Arm the double-click window from the RELEASE, the way the portal
     ' does. Measuring press-to-press instead leaves the user only
@@ -298,7 +311,7 @@ end sub
 
 sub stopHold()
     m.heldKey = ""
-    m.didGlide = false
+    m.glideSteps = 0
     m.holdDelay.control = "stop"
     m.holdRepeat.control = "stop"
 end sub
@@ -308,7 +321,7 @@ sub onHoldStart()
 end sub
 
 sub onHoldStep()
-    m.didGlide = true
+    m.glideSteps = m.glideSteps + 1
     if m.heldKey = ""
         m.holdRepeat.control = "stop"
         return

@@ -2908,13 +2908,25 @@ window.myApp.controller("MainCtrl", [
                 response && response.data ? response.data.object : undefined;
               if (responseObject == undefined) {
                 $scope.refreshWidget();
+                /* painted mode: fell back to a full redraw - recapture all */
+                if (window.mmPaintedNotify) window.mmPaintedNotify("layout", "structural");
                 return;
               }
               $scope.patchWidgetGeometry(responseObject);
+              /* painted mode: geometry applied - announce each changed
+               * widget so the render service recaptures exactly the
+               * pages they live on (widget MOVES arrive here) */
+              if (window.mmPaintedNotify) {
+                angular.forEach(changedWidgets, function (changedWidget) {
+                  window.mmPaintedNotify("layout", "widget", changedWidget.widgetSettingId);
+                });
+              }
             },
             function () {
               // Preserve the reliable legacy behavior if the partial read fails.
               $scope.refreshWidget();
+              /* painted mode: fell back to a full redraw - recapture all */
+              if (window.mmPaintedNotify) window.mmPaintedNotify("layout", "structural");
             }
           );
         };

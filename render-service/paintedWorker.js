@@ -251,6 +251,19 @@ class PaintedWorker extends DisplayWorker {
       /* the first one is the portal booting; later ones mean someone
        * applied a new layout, which IS worth showing a spinner for */
       const reason = this.sawFirstReload ? "layout change" : "startup";
+      /* a user-driven reload (relayout, page add/reorder/delete) boots
+       * the portal onto a page - usually the first. The TV mirrors it
+       * (Dave 2026-08-28: "whatever page the portal lands on needs to
+       * reflect on the Roku side"), and that page is captured and
+       * published FIRST so the user sees it in seconds while the rest
+       * render behind it. Background reloads (startup) leave the TV
+       * alone - nobody is watching an edit then. */
+      if (this.sawFirstReload) {
+        const landing = typeof message.pageIndex === "number" ? message.pageIndex : 0;
+        this.pendingShowPage = landing;
+        this.showPageUntil = Date.now() + 15000;
+        this.priorityPage = landing;
+      }
       this.sawFirstReload = true;
       /* a relayout (or a portal self-reload) starts over on page 0, so
        * whatever page we last stepped to is no longer where the portal is.
@@ -291,6 +304,7 @@ class PaintedWorker extends DisplayWorker {
      * published manifest carries that page so the TV mirrors it - the
      * user watches the page they are changing (Dave, 2026-08-28) */
     if (message.source === "layout" && typeof message.pageIndex === "number") {
+      this.priorityPage = message.pageIndex;
       this.pendingShowPage = message.pageIndex;
       /* sticky for a window, not one publish: the layout save drags
        * trailing socket ticks behind it (calendar/todo refreshes) that
@@ -328,8 +342,10 @@ class PaintedWorker extends DisplayWorker {
     const pages = this.captureQueue.has("*") ? null : [...this.captureQueue].sort();
     this.captureQueue.clear();
     const reason = this.captureReason || "change";
-    if (pages === null) return this.renderAll(reason);
-    return this.renderPages(pages, reason);
+    const priority = typeof this.priorityPage === "number" ? this.priorityPage : null;
+    this.priorityPage = null;
+    if (pages === null) return this.renderAll(reason, priority);
+    return this.renderPages(pages, reason, priority);
   }
 
   /* ---- capturing ------------------------------------------------------ */
@@ -348,7 +364,7 @@ class PaintedWorker extends DisplayWorker {
     });
   }
 
-  async renderPages(indexes, reason) {
+  async renderPages(indexes, reason, priorityPage) {
     if (!this.portal || !this.portal.ready) return;
     this.rendering = true;
     /* The spinner means "the change YOU made is being applied", so it
@@ -363,7 +379,34 @@ class PaintedWorker extends DisplayWorker {
     const release = await this.gate.acquire();
     const t0 = Date.now();
     try {
-      for (const index of indexes) {
+      /* Staged publish: when one page is what the user is (about to be)
+       * looking at, capture and publish IT first - the manifest's
+       * pageMeta comes from the fresh capture so page counts are right
+       * immediately, other pages ride one version stale for the seconds
+       * until stage two lands, and the TV is parked on the fresh page
+       * anyway (showPage + 30s dwells make the stale window unreachable
+       * in practice). */
+      let remaining = indexes;
+      if (
+        typeof priorityPage === "number" &&
+        indexes.length > 1 &&
+        indexes.includes(priorityPage)
+      ) {
+        if (priorityPage !== this.portalPage) {
+          await this.portal.gotoPage(priorityPage);
+          this.portalPage = priorityPage;
+        }
+        await this.capturePageIndex(priorityPage);
+        await this.publishFromDisk(reason);
+        this.log(
+          "captured page " + priorityPage + " first in " + (Date.now() - t0) + "ms (" + reason + ", staged)",
+        );
+        /* the page the user cares about is up: the spinner's promise is
+         * kept, the rest happens quietly */
+        this.clearBusySoon(true);
+        remaining = indexes.filter((i) => i !== priorityPage);
+      }
+      for (const index of remaining) {
         if (index !== this.portalPage) {
           await this.portal.gotoPage(index);
           this.portalPage = index;
@@ -384,12 +427,12 @@ class PaintedWorker extends DisplayWorker {
     }
   }
 
-  async renderAll(reason) {
+  async renderAll(reason, priorityPage) {
     if (!this.portal || !this.portal.ready) return;
     const count = await this.portal.pageCount();
     const all = [];
     for (let i = 0; i < count; i++) all.push(i);
-    return this.renderPages(all, reason);
+    return this.renderPages(all, reason, priorityPage);
   }
 
   /* the scheduled catch-up: cheap insurance against a signal we never got */
@@ -405,11 +448,16 @@ class PaintedWorker extends DisplayWorker {
     return this.renderAll(reason);
   }
 
-  clearBusySoon() {
+  clearBusySoon(force) {
     if (!this.busy) return;
     const held = Date.now() - this.busySince;
     const clear = () => {
-      if (!this.rendering && !this.pendingRender) this.setBusy(false, "capture published");
+      /* force: a staged publish already put the page the user cares
+       * about on screen - the spinner's promise is kept even though the
+       * remaining pages are still rendering */
+      if (force || (!this.rendering && !this.pendingRender)) {
+        this.setBusy(false, force ? "priority page published" : "capture published");
+      }
     };
     if (held >= 3000) clear();
     else setTimeout(clear, 3000 - held);

@@ -3577,7 +3577,23 @@ window.myApp.controller("MainCtrl", [
     }
 
     $scope.refreshdataOnNextday = function () {
-      if (window.mmPaintedNotify) window.mmPaintedNotify("portal", "day-rollover", null);
+      /* Despite the name, the backend arms this via refreshTime as a
+       * PERIODIC data refresh - it fires all day, not just at midnight.
+       * Painted mode only cares when the local DATE actually rolled
+       * (every page showing a date must repaint); same-day firings stay
+       * silent, their data updates already flow through the widget
+       * hooks as targeted signals. Without the guard, every firing
+       * caused a full capture-all (seen at 12:51pm and 1:32pm,
+       * 2026-08-28 - one of them queued a real user edit behind 19s of
+       * pointless rendering). */
+      if (window.mmPaintedNotify) {
+        var mmToday = new Date().toDateString();
+        if (window.__mmLastRolloverDay === undefined) window.__mmLastRolloverDay = mmToday;
+        if (window.__mmLastRolloverDay !== mmToday) {
+          window.__mmLastRolloverDay = mmToday;
+          window.mmPaintedNotify("portal", "day-rollover", null);
+        }
+      }
       try {
         let widgetSettingIds = [];
         for (var i = 0; i < $scope.calendarRefreshTimeout.length; i++) {

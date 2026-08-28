@@ -38,8 +38,8 @@ const { capturePage } = require("./capture");
  * yesterday until the next catch-up render. */
 const DEVICE_DRAWN = new Set(["clock", "countdown", "gif"]);
 
-/* Only these raise the TV's spinner - see renderPages */
-const SHOWS_SPINNER = new Set(["interaction", "layout change"]);
+/* the spinner follows reasonRank: every user-driven render (rank 3)
+ * shows it - see renderPages */
 
 /* Changes that are display-wide, not per page. Gesture settings decide
  * which checkboxes exist (targets are extracted per page), overlay
@@ -319,11 +319,42 @@ class PaintedWorker extends DisplayWorker {
     for (const page of pages) this.queueCapture(page, reason);
   }
 
+  /* User-driven work outranks background work: the rank decides which
+   * reason labels a coalesced capture (spinner + updateReason follow
+   * it), and whether an in-flight render is worth preempting. */
+  reasonRank(reason) {
+    if (!reason) return 1;
+    if (
+      reason.startsWith("layout") ||
+      reason === "interaction" ||
+      reason === "app launch" ||
+      reason.endsWith(" settings")
+    ) {
+      return 3;
+    }
+    if (reason.startsWith("socket:")) return 2;
+    return 1; /* startup, scheduled, midnight, probes */
+  }
+
   /* A burst of signals should cost one capture, not one each. */
   queueCapture(pageIndex, reason) {
+    const fresh = this.captureQueue.size === 0;
     if (pageIndex === null) this.captureQueue.add("*");
     else this.captureQueue.add(pageIndex);
-    this.captureReason = reason;
+    /* coalesced bursts keep the HIGHEST-ranked reason - a user edit
+     * arriving among socket ticks must not be relabeled as background
+     * (it lost its spinner and its showPage semantics that way) */
+    if (fresh || this.reasonRank(reason) >= this.reasonRank(this.captureReason)) {
+      this.captureReason = reason;
+    }
+    /* a user-driven change does not wait behind a background render:
+     * the render in flight is told to stop after its current page and
+     * the queue reruns immediately (its remaining pages re-render on
+     * the next catch-up anyway) */
+    if (this.rendering && this.reasonRank(reason) > (this.renderRank || 3)) {
+      this.abortRender = true;
+      this.log("preempting in-flight render for '" + reason + "'");
+    }
     if (this.captureTimer) clearTimeout(this.captureTimer);
     this.captureTimer = setTimeout(() => {
       this.captureTimer = null;
@@ -367,6 +398,9 @@ class PaintedWorker extends DisplayWorker {
   async renderPages(indexes, reason, priorityPage) {
     if (!this.portal || !this.portal.ready) return;
     this.rendering = true;
+    this.renderRank = this.reasonRank(reason);
+    this.abortRender = false;
+    let aborted = false;
     /* The spinner means "the change YOU made is being applied", so it
      * belongs to user-initiated work only: a gesture on the TV, or an
      * edit someone just made in the webapp. Data arriving on its own -
@@ -375,7 +409,7 @@ class PaintedWorker extends DisplayWorker {
      * make. It also has nowhere sensible to point: the spinner sits on
      * the widget a gesture touched, and background updates have no
      * gesture, so it fell back to the middle of the screen. */
-    if (SHOWS_SPINNER.has(reason)) this.setBusy(true, reason);
+    if (this.renderRank >= 3) this.setBusy(true, reason);
     const release = await this.gate.acquire();
     const t0 = Date.now();
     try {
@@ -397,6 +431,10 @@ class PaintedWorker extends DisplayWorker {
           this.portalPage = priorityPage;
         }
         await this.capturePageIndex(priorityPage);
+        /* the jump instruction must outlive however long this render
+         * queued and however long the rest takes: slide its window at
+         * every publish instead of trusting the arm-time clock */
+        if (typeof this.pendingShowPage === "number") this.showPageUntil = Date.now() + 15000;
         await this.publishFromDisk(reason);
         this.log(
           "captured page " + priorityPage + " first in " + (Date.now() - t0) + "ms (" + reason + ", staged)",
@@ -407,20 +445,32 @@ class PaintedWorker extends DisplayWorker {
         remaining = indexes.filter((i) => i !== priorityPage);
       }
       for (const index of remaining) {
+        if (this.abortRender) {
+          aborted = true;
+          break;
+        }
         if (index !== this.portalPage) {
           await this.portal.gotoPage(index);
           this.portalPage = index;
         }
         await this.capturePageIndex(index);
       }
-      await this.publishFromDisk(reason);
-      this.log("captured page(s) " + indexes.join(",") + " in " + (Date.now() - t0) + "ms (" + reason + ")");
+      if (aborted) {
+        /* no publish: the preempting render follows in milliseconds and
+         * publishes everything, including whatever landed on disk here */
+        this.log("render preempted after " + (Date.now() - t0) + "ms (" + reason + ") - rerunning queue");
+      } else {
+        if (typeof this.pendingShowPage === "number") this.showPageUntil = Date.now() + 15000;
+        await this.publishFromDisk(reason);
+        this.log("captured page(s) " + indexes.join(",") + " in " + (Date.now() - t0) + "ms (" + reason + ")");
+      }
     } catch (e) {
       this.log("capture FAILED:", e.message);
     }
     release();
     this.rendering = false;
-    this.clearBusySoon();
+    this.abortRender = false;
+    if (!aborted) this.clearBusySoon();
     if (this.pendingRender) {
       this.pendingRender = false;
       this.runCapture().catch(() => {});

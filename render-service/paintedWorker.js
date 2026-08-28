@@ -552,6 +552,16 @@ class PaintedWorker extends DisplayWorker {
      * elapsed inside the calendar's silent loading window and baked
      * its blurred "Loading" spinner overlay into the published image. */
     const redraw = swipe ? this.portal.nextSignal(15000, (m) => m.source !== "page") : null;
+    /* Each gesture gets a token. A previous gesture's wait can still be
+     * pending when the next one starts (its waiter is resolved by the
+     * redraw, but a timeout that outlives it fires anyway), and the
+     * stale timeout used to clear THIS gesture's flags: seen live
+     * 2026-08-28, swipe #1's 15s timeout landed 65ms into swipe #2,
+     * cleared gestureInFlight, and swipe #2's redraw was then filed as
+     * ordinary data - no "interaction" reason, no imageOnly, so the TV
+     * held its one-swipe lock for the full cooldown and the spinner
+     * lied about being finished. */
+    const myGesture = (this.gestureSeq = (this.gestureSeq || 0) + 1);
     if (swipe) {
       this.setBusy(true, type);
       this.gestureInFlight = true;
@@ -578,11 +588,15 @@ class PaintedWorker extends DisplayWorker {
      * portal's own refresh will report anything else that changed. */
     if (swipe) {
       const done = await redraw;
-      if (!done) {
+      if (!done && this.gestureSeq === myGesture) {
         /* the portal never announced a redraw: nothing will capture, so
-         * do not leave the TV spinning until the catch-up render */
+         * do not leave the TV spinning until the catch-up render. Only
+         * when this is still the CURRENT gesture - a later one owns the
+         * flags now. */
         this.gestureInFlight = false;
         this.setBusy(false, "no redraw signal");
+      } else if (!done) {
+        this.log("stale redraw timeout for a superseded gesture - ignored");
       }
       /* busy clears when the queued interaction capture publishes */
     }

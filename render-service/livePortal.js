@@ -123,6 +123,16 @@ class LivePortal {
     await this.installEffectHide();
 
     this.page.on("pageerror", (e) => this.log("[portal error]", e.message));
+    /* the portal's own complaints are the only visibility into failures
+     * that never produce a signal (an API 500, an exception inside a
+     * success callback) - errors and warnings only, so the log stays
+     * quiet in health */
+    this.page.on("console", (m) => {
+      const kind = m.type();
+      if (kind === "error" || kind === "warning") {
+        this.log("[portal " + kind + "]", m.text().slice(0, 300));
+      }
+    });
     this.page.on("close", () => {
       this.ready = false;
     });

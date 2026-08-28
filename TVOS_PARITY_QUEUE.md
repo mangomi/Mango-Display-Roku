@@ -48,6 +48,15 @@ off there, not deleted here.
   stage two N+1) doesn't reset rotation state or crash an
   out-of-range current page.
 
+- [ ] **Remote double-click timing** (`<latest>`): if the tvOS client
+  implements an arrow/button double-press gesture, match the Roku's
+  corrected rule - a press is only a "hold" once it has glided a
+  visible distance (4 steps), not on its first glide tick, and the
+  window from release to next press is 550ms. The portal's own
+  `remotePointer.js` uses 250ms release-to-release with no hold
+  disqualification at all; a too-strict rule makes gestures feel
+  impossible to trigger on a real remote.
+
 ## DONE by the tvOS session already (listed for the record)
 
 - [x] Calendar cell-weather overlays (`overlay_cw_*` gif entries,

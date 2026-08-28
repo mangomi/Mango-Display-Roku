@@ -195,6 +195,9 @@ sub onVersionChange()
     ' never apply mid-transition/mid-load - deferred to finalizeSwap
     m.latestPages = man.pages
     m.latestImageOnly = (man.imageOnly = true)
+    ' a layout edit names the page being edited (mirrors the portal)
+    m.latestShowPage = invalid
+    if man.showPage <> invalid then m.latestShowPage = Int(man.showPage)
     m.latestReason = ""
     if man.updateReason <> invalid then m.latestReason = man.updateReason
     maybeApplyPages()
@@ -223,7 +226,20 @@ sub maybeApplyPages()
     wasImageOnly = (m.latestImageOnly = true)
     m.forceInPlace = wasImageOnly
     m.latestImageOnly = false
-    loadPage(m.pageIndex, false)
+    ' a layout edit carries the page being edited: mirror the portal and
+    ' take the TV there (animated, like a manual page turn), so the user
+    ' watches the page they are changing. The dwell timer restarts for
+    ' that page via finalizeSwap.
+    sp = m.latestShowPage
+    m.latestShowPage = invalid
+    if sp <> invalid and sp >= 0 and sp < m.pages.Count() and sp <> m.pageIndex
+        print "[Mango] layout edit on page "; sp; " - showing it"
+        m.forceInPlace = false
+        m.pageTimer.control = "stop"
+        loadPage(sp, true)
+    else
+        loadPage(m.pageIndex, false)
+    end if
     m.forceInPlace = false
     ' an imageOnly manifest is a swipe's answer landing: tell the
     ' interaction layer so its one-swipe-at-a-time lock releases now

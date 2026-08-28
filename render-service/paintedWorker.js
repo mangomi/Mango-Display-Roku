@@ -287,6 +287,12 @@ class PaintedWorker extends DisplayWorker {
           : [null];
     const label = pages.length && pages[0] !== null ? pages.join(",") : "?";
     this.log("change: " + message.source + "/" + (type || "page") + " on page " + label);
+    /* a layout edit navigates the portal to the page being edited; the
+     * published manifest carries that page so the TV mirrors it - the
+     * user watches the page they are changing (Dave, 2026-08-28) */
+    if (message.source === "layout" && typeof message.pageIndex === "number") {
+      this.pendingShowPage = message.pageIndex;
+    }
     const reason = message.source + (type ? ":" + type : "");
     if (!pages.length) this.queueCapture(null, reason);
     for (const page of pages) this.queueCapture(page, reason);

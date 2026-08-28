@@ -728,6 +728,10 @@ class DisplayWorker {
     }
     const effects = man0.effects || []; // display-wide, not per page
     const gestures = meta.gestures || { pageSwipe: false, calendarScroll: false };
+    /* one-shot: set by the painted worker when a layout edit names the
+     * page being edited; the TV jumps there on apply */
+    const showPage = typeof this.pendingShowPage === "number" ? this.pendingShowPage : undefined;
+    this.pendingShowPage = undefined;
     fs.writeFileSync(
       path.join(this.dir, "display.json"),
       JSON.stringify(
@@ -736,6 +740,7 @@ class DisplayWorker {
           canvas: { width: this.display.canvasW, height: this.display.canvasH },
           updateReason,
           imageOnly,
+          showPage,
           effects,
           gestures,
           pages,

@@ -728,10 +728,15 @@ class DisplayWorker {
     }
     const effects = man0.effects || []; // display-wide, not per page
     const gestures = meta.gestures || { pageSwipe: false, calendarScroll: false };
-    /* one-shot: set by the painted worker when a layout edit names the
-     * page being edited; the TV jumps there on apply */
-    const showPage = typeof this.pendingShowPage === "number" ? this.pendingShowPage : undefined;
-    this.pendingShowPage = undefined;
+    /* set by the painted worker when a layout edit names the page being
+     * edited; carried by every publish inside its 15s window so the
+     * TV's next fetch cannot miss it, then expires */
+    let showPage;
+    if (typeof this.pendingShowPage === "number" && Date.now() < (this.showPageUntil || 0)) {
+      showPage = this.pendingShowPage;
+    } else {
+      this.pendingShowPage = undefined;
+    }
     fs.writeFileSync(
       path.join(this.dir, "display.json"),
       JSON.stringify(

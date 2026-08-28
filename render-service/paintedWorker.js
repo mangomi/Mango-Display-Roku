@@ -292,6 +292,11 @@ class PaintedWorker extends DisplayWorker {
      * user watches the page they are changing (Dave, 2026-08-28) */
     if (message.source === "layout" && typeof message.pageIndex === "number") {
       this.pendingShowPage = message.pageIndex;
+      /* sticky for a window, not one publish: the layout save drags
+       * trailing socket ticks behind it (calendar/todo refreshes) that
+       * republish within the second, and the TV's single fetch sees
+       * whichever manifest is newest - a one-shot flag lost the race */
+      this.showPageUntil = Date.now() + 15000;
     }
     const reason = message.source + (type ? ":" + type : "");
     if (!pages.length) this.queueCapture(null, reason);

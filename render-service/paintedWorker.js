@@ -46,7 +46,10 @@ const SHOWS_SPINNER = new Set(["interaction", "layout change"]);
  * settings live in the manifest's display-level effects block - which is
  * read from page 0's capture - and orientation reshapes everything. A
  * single-page capture would publish only part of any of these. */
-const DISPLAY_WIDE = new Set(["gesture", "overlay", "orientation"]);
+// "structural" = a layout edit that changed page structure (widget
+// deleted + blank page pruned, new page created, background flags):
+// page indexes shifted, so every page recaptures
+const DISPLAY_WIDE = new Set(["gesture", "overlay", "orientation", "structural"]);
 
 /* A live portal costs real memory (~a browser tab per display) and holds
  * the display's socket, so it runs ONLY while a TV is actually watching.

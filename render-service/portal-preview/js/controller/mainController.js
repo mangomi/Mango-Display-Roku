@@ -2824,6 +2824,386 @@ window.myApp.controller("MainCtrl", [
         var goalFailureImage;
         var mirrorBackgroundSettings;
 
+        $scope.patchWidgetGeometry = function (geometryResponse) {
+          if (
+            geometryResponse == undefined ||
+            geometryResponse.changedPages == undefined
+          ) {
+            return;
+          }
+
+          var geometryByWidgetId = {};
+          angular.forEach(geometryResponse.changedPages, function (changedPage) {
+            angular.forEach(changedPage.widgets, function (widgetGeometry) {
+              geometryByWidgetId[widgetGeometry.widgetSettingId] = widgetGeometry;
+            });
+          });
+
+          var patchCollection = function (pages) {
+            angular.forEach(pages, function (page) {
+              angular.forEach(page.widgets, function (widget) {
+                var geometry = geometryByWidgetId[widget.widgetSettingId];
+                if (geometry == undefined) {
+                  return;
+                }
+                widget.xPos = geometry.xPos;
+                widget.yPos = geometry.yPos;
+                widget.width = geometry.width;
+                widget.height = geometry.height;
+              });
+            });
+          };
+
+          patchCollection($scope.groups);
+          patchCollection($scope.temppgroups);
+
+          var targetPage = geometryResponse.targetPage;
+          if (targetPage == undefined) {
+            return;
+          }
+
+          var targetPageIndex = -1;
+          angular.forEach($scope.groups, function (page, index) {
+            if (targetPageIndex === -1 && page.pageId == targetPage.pageId) {
+              targetPageIndex = index;
+            }
+          });
+
+          if (targetPageIndex < 0) {
+            return;
+          }
+
+          $scope.pageCounter = 0;
+          $timeout(function () {
+            if (targetPageIndex !== $scope.quoteIndex) {
+              $scope.goToPage(targetPageIndex);
+            } else {
+              $scope.autoResizeByPageNumber($scope.quoteIndex);
+            }
+          }, 0);
+        };
+
+        $scope.refreshChangedWidgets = function (notificationData) {
+          var changedWidgets = [];
+          angular.forEach(notificationData.changedPages, function (changedPage) {
+            angular.forEach(changedPage.widgetSettingIds, function (widgetSettingId) {
+              changedWidgets.push({
+                pageId: changedPage.pageId,
+                widgetSettingId: widgetSettingId,
+              });
+            });
+          });
+
+          if (changedWidgets.length === 0) {
+            return;
+          }
+
+          APIServices.getWidgetGeometryData({
+            deviceWidth: Math.round(Number($scope.bodyWidth)),
+            deviceHeight: Math.round(Number($scope.bodyHeight)),
+            changedWidgets: changedWidgets,
+          }).then(
+            function (response) {
+              var responseObject =
+                response && response.data ? response.data.object : undefined;
+              if (responseObject == undefined) {
+                $scope.refreshWidget();
+                return;
+              }
+              $scope.patchWidgetGeometry(responseObject);
+            },
+            function () {
+              // Preserve the reliable legacy behavior if the partial read fails.
+              $scope.refreshWidget();
+            }
+          );
+        };
+
+        $scope.refreshPageBackground = function (changedPages) {
+          var targetPageIndex = -1;
+          var lowestPageNumber = Number.MAX_VALUE;
+          angular.forEach(changedPages, function (changedPage) {
+            angular.forEach($scope.groups, function (page, index) {
+              if (page.pageId == changedPage.pageId) {
+                page.isBackgroundImage = changedPage.isBackgroundImage;
+                if (Number(page.pageNumber) < lowestPageNumber) {
+                  targetPageIndex = index;
+                  lowestPageNumber = Number(page.pageNumber);
+                }
+              }
+            });
+          });
+
+          if (targetPageIndex < 0) {
+            return;
+          }
+
+          /* painted mode: background flags changed on specific pages */
+          if (window.mmPaintedNotify) window.mmPaintedNotify("layout", "structural");
+
+          $scope.pageCounter = 0;
+          if (targetPageIndex === $scope.quoteIndex) {
+            $scope.checkAndUpdatePageBg();
+          } else {
+            $scope.goToPage(targetPageIndex);
+          }
+        };
+
+        $scope.refreshPageWidgets = function (notificationData) {
+          if (
+            notificationData == undefined ||
+            notificationData.operation == undefined
+          ) {
+            return;
+          }
+
+          var operation = notificationData.operation.toUpperCase();
+          var widgetSettingIds = notificationData.widgetSettingIds || [];
+          var targetPageIndex = -1;
+
+          if (operation === "INDEX") {
+            var widgetIndexes = notificationData.widgetIndexes || [];
+            var widgetIndexById = {};
+            angular.forEach(widgetIndexes, function (widgetIndex) {
+              widgetIndexById[widgetIndex.widgetSettingId] = widgetIndex.zindex;
+            });
+
+            angular.forEach($scope.groups, function (page, pageIndex) {
+              angular.forEach(page.widgets || [], function (widget) {
+                var updatedIndex = widgetIndexById[widget.widgetSettingId];
+                if (updatedIndex != undefined) {
+                  widget.zindex = updatedIndex;
+                }
+              });
+
+              if (page.pageId == notificationData.pageId) {
+                targetPageIndex = pageIndex;
+              }
+            });
+
+            if (targetPageIndex < 0) {
+              angular.forEach($scope.groups, function (page, pageIndex) {
+                if (
+                  targetPageIndex < 0 &&
+                  page.pageNumber == notificationData.pageNumber
+                ) {
+                  targetPageIndex = pageIndex;
+                }
+              });
+            }
+
+            if (targetPageIndex < 0) {
+              return;
+            }
+
+            /* painted mode: the z-order change is applied - announce the
+             * touched widgets so the render service recaptures exactly
+             * the pages they live on */
+            if (window.mmPaintedNotify) {
+              angular.forEach(widgetIndexes, function (widgetIndex) {
+                window.mmPaintedNotify("layout", "index", widgetIndex.widgetSettingId);
+              });
+            }
+
+            $scope.pageCounter = 0;
+            $timeout(function () {
+              if (targetPageIndex !== $scope.quoteIndex) {
+                $scope.goToPage(targetPageIndex);
+              }
+            }, 0);
+            return;
+          }
+
+          if (operation === "DELETE") {
+            var currentPage = $scope.groups[$scope.quoteIndex];
+            var currentPageId = currentPage ? currentPage.pageId : undefined;
+            angular.forEach(widgetSettingIds, function (widgetSettingId) {
+              $scope.removedExistingImageSetting(widgetSettingId);
+              $scope.removeExistingGifSetting(widgetSettingId);
+              $scope.removeOldMappedIframeData(widgetSettingId);
+              $scope.clearSnapshotExistObject(widgetSettingId);
+              $scope.clearTodoExistingObject(widgetSettingId);
+              $scope.clearChoresExistingObject(widgetSettingId);
+              $scope.clearCalendarNextRefreshTimeout(widgetSettingId);
+
+              angular.forEach($scope.groups, function (page, pageIndex) {
+                var widgets = page.widgets || [];
+                for (
+                  var widgetIndex = widgets.length - 1;
+                  widgetIndex >= 0;
+                  widgetIndex--
+                ) {
+                  if (widgets[widgetIndex].widgetSettingId == widgetSettingId) {
+                    widgets.splice(widgetIndex, 1);
+                  }
+                }
+                page.isPageBlank =
+                  widgets.length === 0 &&
+                  page.isBackgroundImage !== true &&
+                  page.isBackgroundImage !== "true";
+              });
+            });
+
+            for (
+              var pageIndex = $scope.groups.length - 1;
+              pageIndex >= 0;
+              pageIndex--
+            ) {
+              if ($scope.groups[pageIndex].isPageBlank === true) {
+                $scope.groups.splice(pageIndex, 1);
+              }
+            }
+
+            $scope.noOfPages = $scope.groups.length;
+            $localStorage.totalPage = $scope.noOfPages;
+            $scope.pruneOrphanedMediaCache();
+
+            if ($scope.groups.length === 0) {
+              $scope.quoteIndex = 0;
+              $scope.pageCounter = 0;
+              $scope.transitionPage = [];
+              $scope.clearBackgroundImageLayers();
+              return;
+            }
+
+            angular.forEach($scope.groups, function (page, pageIndex) {
+              if (page.pageId == notificationData.pageId) {
+                targetPageIndex = pageIndex;
+              }
+            });
+
+            if (targetPageIndex < 0) {
+              var deletedPageNumber = Number(notificationData.pageNumber);
+              angular.forEach($scope.groups, function (page, pageIndex) {
+                if (
+                  targetPageIndex < 0 &&
+                  Number(page.pageNumber) > deletedPageNumber
+                ) {
+                  targetPageIndex = pageIndex;
+                }
+              });
+            }
+
+            if (targetPageIndex < 0) {
+              targetPageIndex = $scope.groups.length - 1;
+            }
+
+            /* painted mode: widgets left the DOM and blank pages may have
+             * been pruned, so page indexes shifted - a structural change
+             * recaptures every page */
+            if (window.mmPaintedNotify) window.mmPaintedNotify("layout", "structural");
+
+            var targetPageId = $scope.groups[targetPageIndex].pageId;
+            $scope.pageCounter = 0;
+            $timeout(function () {
+              if (currentPageId != targetPageId) {
+                if (targetPageIndex === $scope.quoteIndex) {
+                  $scope.quoteIndex = -1;
+                }
+                $scope.goToPage(targetPageIndex);
+              } else {
+                $scope.quoteIndex = targetPageIndex;
+                $scope.autoResizeByPageNumber($scope.quoteIndex);
+              }
+            }, 0);
+            return;
+          }
+
+          if (operation !== "ADD" || widgetSettingIds.length === 0) {
+            return;
+          }
+
+          APIServices.getWidgetRefreshData({
+            pageId: notificationData.pageId,
+            widgetSettingId: widgetSettingIds[0],
+            deviceWidth: Math.round(Number($scope.bodyWidth)),
+            deviceHeight: Math.round(Number($scope.bodyHeight)),
+          }).then(
+            function (response) {
+              var responseObject =
+                response && response.data ? response.data.object : undefined;
+              if (
+                responseObject == undefined ||
+                responseObject.page == undefined ||
+                responseObject.widget == undefined
+              ) {
+                return;
+              }
+
+              var refreshedPage = responseObject.page;
+              var refreshedWidget = responseObject.widget;
+              var previousPageCount = $scope.groups.length;
+              angular.forEach($scope.groups, function (page, pageIndex) {
+                if (page.pageId == refreshedPage.pageId) {
+                  targetPageIndex = pageIndex;
+                }
+              });
+
+              if (targetPageIndex < 0) {
+                var newPage = angular.copy(refreshedPage);
+                newPage.widgets = [];
+                $scope.groups.push(newPage);
+                $scope.groups.sort(function (firstPage, secondPage) {
+                  return (
+                    Number(firstPage.pageNumber) - Number(secondPage.pageNumber)
+                  );
+                });
+              }
+
+              var isPinned =
+                refreshedWidget.pinned === true ||
+                refreshedWidget.pinned === "true";
+              angular.forEach($scope.groups, function (page, pageIndex) {
+                if (!isPinned && page.pageId != refreshedPage.pageId) {
+                  return;
+                }
+
+                page.widgets = page.widgets || [];
+                var widgetExists = false;
+                angular.forEach(page.widgets, function (widget) {
+                  if (
+                    widget.widgetSettingId == refreshedWidget.widgetSettingId
+                  ) {
+                    widgetExists = true;
+                  }
+                });
+                if (!widgetExists) {
+                  page.widgets.push(angular.copy(refreshedWidget));
+                }
+                page.isPageBlank = false;
+                if (page.pageId == refreshedPage.pageId) {
+                  targetPageIndex = pageIndex;
+                }
+              });
+
+              $scope.noOfPages = $scope.groups.length;
+              $localStorage.totalPage = $scope.noOfPages;
+
+              /* painted mode: widget applied (page count may have grown -
+               * that case is structural) */
+              if (window.mmPaintedNotify) {
+                if ($scope.groups.length !== previousPageCount) {
+                  window.mmPaintedNotify("layout", "structural");
+                } else {
+                  window.mmPaintedNotify("layout", "widget", refreshedWidget.widgetSettingId);
+                }
+              }
+
+              $scope.pageCounter = 0;
+              $timeout(function () {
+                if (targetPageIndex !== $scope.quoteIndex) {
+                  $scope.goToPage(targetPageIndex);
+                } else {
+                  $scope.autoResizeByPageNumber($scope.quoteIndex);
+                }
+              }, 0);
+            },
+            function (error) {
+              console.log("Unable to refresh added widget", error);
+            }
+          );
+        };
+
         taskSocket.onmessage = function (message) {
           if (userAgent.indexOf("aftt") !== -1) {
             $scope.isFireTvApp = true;
@@ -2961,10 +3341,19 @@ window.myApp.controller("MainCtrl", [
               $scope.deviceMotionStop();
             }
           } else if (
+            message.type === MANGO_MIRROR_CONSTANT.MESSAGE_REFRESH_WIDGETS
+          ) {
+            var obj = JSON.parse(message.data);
+            $scope.refreshChangedWidgets(obj);
+          } else if (
             message.type === MANGO_MIRROR_CONSTANT.MESSAGE_REFRESH_LAYOUT
           ) {
             var obj = JSON.parse(message.data);
-            if (obj.refreshWidget != undefined) {
+            if (obj.refreshPageBackground != undefined) {
+              $scope.refreshPageBackground(obj.refreshPageBackground);
+            } else if (obj.refreshPageWidgets != undefined) {
+              $scope.refreshPageWidgets(obj.refreshPageWidgets);
+            } else if (obj.refreshWidget != undefined) {
               var obj = obj.refreshWidget;
               $scope.userId = obj.userId;
               if ($scope.userId != undefined) {
@@ -7371,7 +7760,7 @@ window.myApp.controller("MainCtrl", [
             dayCellContent: function (arg) {
             	var day = arg.date.getDate();
             	if (day === 1) {
-            	    var monthName = arg.date.toLocaleDateString(language, { month: "long" });
+            	    var monthName = arg.date.toLocaleDateString(language, { month: "short" });
             	    return { html: monthName + ' <span class="cal-day-num">' + day + '</span>' };
             	}
             	return { html: '<span class="cal-day-num">' + day + '</span>' };
@@ -7388,7 +7777,7 @@ window.myApp.controller("MainCtrl", [
             dayCellContent: function (arg) {
               var day = arg.date.getDate();
               if (day === 1) {
-                var monthName = arg.date.toLocaleDateString(language, { month: "long" });
+                var monthName = arg.date.toLocaleDateString(language, { month: "short" });
                 return { html: monthName + ' <span class="cal-day-num">' + day + '</span>' };
               }
               return { html: '<span class="cal-day-num">' + day + '</span>' };

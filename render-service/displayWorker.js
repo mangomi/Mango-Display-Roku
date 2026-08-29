@@ -112,6 +112,10 @@ class DisplayWorker {
   async start() {
     fs.mkdirSync(this.dir, { recursive: true });
     this.publisher = new AssetPublisher(await derivePrefix(this.deviceId));
+    /* what the bucket already holds for this display, so the reaper can
+     * prune art left behind by earlier processes (best effort) */
+    const seeded = await this.publisher.seedFromRemote().catch(() => 0);
+    if (seeded) this.log("assets: " + seeded + " existing object(s) known for reaping");
     try {
       const prev = parseInt(fs.readFileSync(this.versionFile(), "utf8").trim(), 10);
       // A SMALL counter, persisted. It must stay small: BrightScript's
@@ -776,7 +780,11 @@ class DisplayWorker {
     // so callers that manage the busy flag can hold it until the
     // announcement: clearing busy first cost the TV an extra /wait
     // round trip (busy=false reply, re-arm, then the version reply).
-    if (r2Enabled()) return this.pushToR2(reason).then(announce, announce);
+    /* Only a publish that carries EVERY page may prune pre-existing
+     * objects: a staged publish lists one page's files, and pruning on
+     * it would delete art the other pages still reference. */
+    const complete = pages.length === meta.pageCount;
+    if (r2Enabled()) return this.pushToR2(reason, complete).then(announce, announce);
     announce();
     return Promise.resolve();
   }
@@ -803,18 +811,20 @@ class DisplayWorker {
   // announces a new version, so returning early while another upload is
   // in flight would announce content that is not on R2 yet - the very
   // race this is here to close. Concurrent publishes queue instead.
-  pushToR2(reason) {
+  pushToR2(reason, complete) {
     if (!r2Enabled()) return Promise.resolve();
     this.uploadChain = (this.uploadChain || Promise.resolve())
       .catch(() => {})
-      .then(() => this.uploadOnce(reason));
+      .then(() => this.uploadOnce(reason, complete));
     return this.uploadChain;
   }
 
-  async uploadOnce(reason) {
+  async uploadOnce(reason, complete) {
     try {
       const t0 = Date.now();
-      const r = await this.publisher.publish(this.dir, this.publishableFiles());
+      const r = await this.publisher.publish(this.dir, this.publishableFiles(), {
+        reapRemote: complete === true,
+      });
       if (r.sent || r.removed || (r.failed && r.failed.length)) {
         this.log(
           "r2:", r.sent, "file(s),", Math.round(r.bytes / 1024) + "KB in " + (Date.now() - t0) + "ms",

@@ -29,7 +29,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { S3Client, PutObjectCommand, DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
 
 // 2026-08-27: publishing moved to native S3 + CloudFront (bucket
 // mango-roku-assets, flat-rate CloudFront plans made egress a non-issue
@@ -115,6 +115,36 @@ class AssetPublisher {
   constructor(prefix) {
     this.prefix = prefix;
     this.uploaded = new Map(); // name -> size:mtime stamp
+    /* objects already in the bucket when this process started, not yet
+     * re-uploaded by it. The reaper only ever knew about files IT had
+     * uploaded, so superseded sprite art from before a restart orphaned
+     * forever - two displays had accumulated 214 objects that way. */
+    this.remote = new Set();
+  }
+
+  /* Learn what the bucket already holds for this display, so reaping can
+   * remove art that predates this process. Best effort: a failure here
+   * only means we prune less, never that we publish wrongly. */
+  async seedFromRemote() {
+    if (!enabled()) return 0;
+    const base = rootedKey(this.prefix + "/");
+    let token;
+    try {
+      do {
+        const page = await s3().send(
+          new ListObjectsV2Command({ Bucket: BUCKET, Prefix: base, ContinuationToken: token }),
+        );
+        for (const obj of page.Contents || []) {
+          const name = obj.Key.slice(base.length);
+          if (name && !name.includes("/")) this.remote.add(name);
+        }
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (token);
+    } catch (e) {
+      this.remote.clear();
+      return 0;
+    }
+    return this.remote.size;
   }
 
   // The base a device fetches from. Handed out over the control channel
@@ -169,7 +199,7 @@ class AssetPublisher {
   // sprite sheets are content-hashed and mostly identical between renders;
   // re-uploading them would burn write operations, which unlike egress are
   // not free.
-  async publish(dir, files) {
+  async publish(dir, files, opts) {
     let sent = 0;
     let bytes = 0;
     const failed = [];
@@ -203,6 +233,7 @@ class AssetPublisher {
         if (r.status === "fulfilled") {
           bytes += r.value;
           this.uploaded.set(w.name, w.stamp);
+          this.remote.delete(w.name); /* ours now, tracked by stamp */
           sent++;
         } else {
           // One bad file must not strand the rest - a missing sprite is a
@@ -213,7 +244,7 @@ class AssetPublisher {
         }
       });
     }
-    const removed = await this.reap(files);
+    const removed = await this.reap(files, opts && opts.reapRemote === true);
     return { sent, bytes, prefix: this.prefix, failed, removed };
   }
 
@@ -231,15 +262,22 @@ class AssetPublisher {
   // Best effort by design: a failed delete is retried on the next publish
   // (the name stays in `uploaded`), and it never touches the version
   // announcement.
-  async reap(files) {
+  async reap(files, includeRemote) {
     const live = new Set(files);
-    const stale = [...this.uploaded.keys()].filter((name) => !live.has(name) && REAPABLE.test(name));
+    let candidates = [...this.uploaded.keys()];
+    /* Pre-existing objects are only safe to judge against a COMPLETE
+     * publish: a staged publish (priority page first) lists just that
+     * page's files, and pruning on it would delete art the other pages
+     * still reference. */
+    if (includeRemote) candidates = candidates.concat([...this.remote]);
+    const stale = candidates.filter((name) => !live.has(name) && REAPABLE.test(name));
     if (!stale.length) return 0;
     let removed = 0;
     for (const name of stale) {
       try {
         await s3().send(new DeleteObjectCommand({ Bucket: BUCKET, Key: rootedKey(this.prefix + "/" + name) }));
         this.uploaded.delete(name);
+        this.remote.delete(name);
         removed++;
       } catch (e) {
         // leave it in `uploaded` so the next publish tries again

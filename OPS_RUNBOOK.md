@@ -179,6 +179,36 @@ A 1-year Compute Savings Plan sized to the on-demand base task takes
 Note: displays only cost while **watched**. The portal closes after
 3 minutes without a device poll, and the worker is evicted after 30.
 
+### Asset retention and cleanup
+
+Two layers keep the bucket from growing forever:
+
+1. **Lifecycle rules on `mango-roku-assets`** (applied 2026-08-28):
+   objects untouched for **60 days** expire, and incomplete multipart
+   uploads abort after 7 days. This is the churned-display case — a
+   user who tries the product and stops. It is safe because any display
+   still in use re-uploads its whole set whenever its worker restarts
+   (every deploy, and after 30 minutes idle), refreshing the clock.
+   **Do not shorten this window without thought**: sprite sheets can
+   sit unchanged for a long time on a lightly-used display, and
+   deleting one that is still referenced leaves a blank patch on
+   someone's wall (CloudFront serves it from cache for a while, then
+   404s).
+2. **In-process reaping.** Each worker lists its display's prefix at
+   startup and prunes content-addressed sprite art that the current
+   manifest no longer references. Only `overlay_wxc_*` / `overlay_gif_*`
+   names are ever deleted — manifests and page images keep stable names
+   and are never reaped — and pre-existing objects are only judged
+   against a COMPLETE publish, never a staged single-page one.
+   Log lines: `N existing object(s) known for reaping`, `N stale
+   removed`. First run pruned 60 orphans across two displays.
+
+Storage is not a meaningful cost (10,000 displays ≈ $2–3/month). The
+reasons this matters are hygiene on active displays and **data
+retention**: these images are households' calendars, chores with
+children's names, and family photos. The 60-day window is the figure
+to quote in app-store privacy disclosures.
+
 ---
 
 ## 7. Deployment

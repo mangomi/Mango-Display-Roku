@@ -2961,6 +2961,216 @@ window.myApp.controller("MainCtrl", [
           }
         };
 
+        $scope.goToWidgetPage = function (pageContext) {
+          if (
+            pageContext == undefined ||
+            pageContext.pageId == undefined ||
+            pageContext.pageNumber == undefined
+          ) {
+            return;
+          }
+
+          var targetPageIndex = -1;
+          angular.forEach($scope.groups, function (page, pageIndex) {
+            if (targetPageIndex < 0 && page.pageId == pageContext.pageId) {
+              targetPageIndex = pageIndex;
+            }
+          });
+
+          if (targetPageIndex < 0) {
+            angular.forEach($scope.groups, function (page, pageIndex) {
+              if (
+                targetPageIndex < 0 &&
+                page.pageNumber == pageContext.pageNumber
+              ) {
+                targetPageIndex = pageIndex;
+              }
+            });
+          }
+
+          if (targetPageIndex < 0) {
+            return;
+          }
+
+          $scope.pageCounter = 0;
+          $timeout(function () {
+            if (targetPageIndex !== $scope.quoteIndex) {
+              $scope.goToPage(targetPageIndex);
+            }
+            /* painted mode: the backend named the page this change
+             * belongs to and we have navigated there - tell the render
+             * service, so the TV mirrors the portal instead of sitting
+             * on whatever page it happened to be showing */
+            if (window.mmPaintedNotify) window.mmPaintedNotify("layout", "widget");
+          }, 0);
+        };
+
+        $scope.clearTargetedWidgetRuntime = function (refreshedWidget) {
+          var widgetSettingId = refreshedWidget.widgetSettingId;
+          var existingWidget;
+
+          angular.forEach($scope.groups, function (page) {
+            angular.forEach(page.widgets || [], function (widget) {
+              if (
+                existingWidget == undefined &&
+                widget.widgetSettingId == widgetSettingId
+              ) {
+                existingWidget = widget;
+              }
+            });
+          });
+
+          var widgetToClear = existingWidget || refreshedWidget;
+          var contentType = widgetToClear.contentType;
+          var widgetMasterCategory = widgetToClear.widgetMasterCategory;
+
+          if (contentType == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_IMAGE) {
+            var refreshedImageData = angular.copy(refreshedWidget.data || {});
+            refreshedImageData.widgetId = widgetSettingId;
+            $scope.checkAndRemoveCurrentRendering(refreshedImageData);
+            $scope.removedExistingImageSetting(widgetSettingId);
+          } else if (contentType == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_GIF) {
+            $scope.removeExistingGifSetting(widgetSettingId);
+          }
+
+          if (
+            widgetMasterCategory == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_IFRAMILY
+          ) {
+            if (existingWidget != undefined) {
+              $scope.discardReplacedMediaUrl(
+                existingWidget.data,
+                refreshedWidget.data,
+                "baseurl",
+                "processedBaseurl",
+                "trustedVideoUrl",
+                widgetSettingId
+              );
+            }
+            var refreshedIframeData = angular.copy(refreshedWidget.data || {});
+            refreshedIframeData.widgetId = widgetSettingId;
+            $scope.checkAndRemoveCurrentPdfImgRendering(refreshedIframeData);
+            $scope.removeOldMappedIframeData(widgetSettingId);
+            $scope.removedExistingImageSetting(widgetSettingId);
+          }
+
+          if (
+            contentType == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_BROWSER_SNAPSHOT
+          ) {
+            $scope.clearSnapshotExistObject(widgetSettingId);
+          } else if (
+            contentType == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_POWER_BI
+          ) {
+            $scope.clearPowerBiExistObject(widgetSettingId);
+          } else if (
+            contentType == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_TODO
+          ) {
+            $scope.clearTodoExistingObject(widgetSettingId);
+          } else if (
+            contentType == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_CHORES
+          ) {
+            $scope.clearChoresExistingObject(widgetSettingId);
+            $scope.clearTodoExistingObject(widgetSettingId);
+          } else if (
+            contentType == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_CALENDAR ||
+            contentType == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_MEALPLAN
+          ) {
+            $scope.clearCalendarTimeout(widgetSettingId);
+            $scope.clearCalendarNextRefreshTimeout(widgetSettingId);
+          } else if (
+            contentType == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_CLOCK
+          ) {
+            for (var i = $scope.clockWidgetList.length - 1; i >= 0; i--) {
+              if ($scope.clockWidgetList[i].widgetId == widgetSettingId) {
+                if ($scope.clockWidgetList[i].intervalObject != null) {
+                  $interval.cancel($scope.clockWidgetList[i].intervalObject);
+                }
+                $scope.clockWidgetList.splice(i, 1);
+              }
+            }
+          } else if (
+            contentType == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_COUNTDOWN
+          ) {
+            for (
+              var countdownIndex =
+                $scope.countdownWidgetInterval.length - 1;
+              countdownIndex >= 0;
+              countdownIndex--
+            ) {
+              if (
+                $scope.countdownWidgetInterval[countdownIndex].widgetId ==
+                widgetSettingId
+              ) {
+                $interval.cancel(
+                  $scope.countdownWidgetInterval[countdownIndex].intervalObject
+                );
+                $scope.countdownWidgetInterval.splice(countdownIndex, 1);
+              }
+            }
+          }
+        };
+
+        $scope.updateTargetedWidgetSharedRuntime = function (refreshedWidget) {
+          var widgetSettingId = refreshedWidget.widgetSettingId;
+          var widgetData = refreshedWidget.data || {};
+
+          if (
+            refreshedWidget.contentType ==
+            MANGO_MIRROR_CONSTANT.WIDGET_TYPE_TODO
+          ) {
+            $scope.updateTodoDataInterval(false);
+          } else if (
+            refreshedWidget.contentType ==
+            MANGO_MIRROR_CONSTANT.WIDGET_TYPE_CHORES
+          ) {
+            $scope.updateChoresExistingWidgetList(
+              widgetSettingId,
+              widgetData.todos && Object.keys(widgetData.todos).length > 0
+                ? "add"
+                : "remove"
+            );
+          } else if (
+            refreshedWidget.contentType ==
+            MANGO_MIRROR_CONSTANT.WIDGET_TYPE_CALENDAR
+          ) {
+            $scope.UpdateIcalId(widgetSettingId, widgetData.iCal);
+            if (widgetData.isIcalUpdate == true) {
+              $scope.updateIcalAccountAndCalendar(widgetData);
+            } else {
+              $scope.updateIcalEtag(widgetData.icalCalendar);
+            }
+          }
+        };
+
+        $scope.initializeTargetedWidgetRuntime = function (
+          widget,
+          pageIndex,
+          widgetIndex
+        ) {
+          if (widget.status != "on") {
+            return;
+          }
+
+          // These widgets are not initialized by autoResizeByPageNumber.
+          // Todo, Chores, Calendar, Meal Plan, Countdown, and Browser Snapshot
+          // are restarted by that existing page-render pass after navigation.
+          if (widget.contentType == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_IMAGE) {
+            $scope.initializeImageWidget(widget, pageIndex);
+          } else if (
+            widget.widgetMasterCategory ==
+            MANGO_MIRROR_CONSTANT.WIDGET_TYPE_IFRAMILY
+          ) {
+            $scope.initializeIframilyWidget(widget, pageIndex);
+          } else if (
+            widget.contentType == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_POWER_BI
+          ) {
+            $scope.initializePowerBiWidget(widget, pageIndex, widgetIndex);
+          } else if (
+            widget.contentType == MANGO_MIRROR_CONSTANT.WIDGET_TYPE_CLOCK
+          ) {
+            $scope.initClock(widget, pageIndex, widgetIndex);
+          }
+        };
+
         $scope.refreshPageWidgets = function (notificationData) {
           if (
             notificationData == undefined ||
@@ -3026,17 +3236,118 @@ window.myApp.controller("MainCtrl", [
             return;
           }
 
+          if (operation === "UPDATE") {
+            if (widgetSettingIds.length === 0) {
+              return;
+            }
+
+            $timeout(function () {
+              var widgetRefreshRequests = [];
+              angular.forEach(widgetSettingIds, function (widgetSettingId) {
+                widgetRefreshRequests.push(
+                  APIServices.getWidgetRefreshData({
+                    pageId: notificationData.pageId,
+                    widgetSettingId: widgetSettingId,
+                    deviceWidth: Math.round(Number($scope.bodyWidth)),
+                    deviceHeight: Math.round(Number($scope.bodyHeight)),
+                  })
+                );
+              });
+
+              $q.all(widgetRefreshRequests).then(
+              function (responses) {
+                var refreshedWidgetCount = 0;
+                angular.forEach(responses, function (response) {
+                  var responseObject =
+                    response && response.data
+                      ? response.data.object
+                      : undefined;
+                  if (
+                    responseObject == undefined ||
+                    responseObject.widget == undefined
+                  ) {
+                    return;
+                  }
+
+                  var refreshedWidget = responseObject.widget;
+                  $scope.clearTargetedWidgetRuntime(refreshedWidget);
+                  $scope.updateTargetedWidgetSharedRuntime(refreshedWidget);
+                  angular.forEach($scope.groups, function (page, pageIndex) {
+                    angular.forEach(
+                      page.widgets || [],
+                      function (widget, widgetIndex) {
+                        if (
+                          widget.widgetSettingId ==
+                          refreshedWidget.widgetSettingId
+                        ) {
+                          angular.extend(widget, angular.copy(refreshedWidget));
+                          $scope.loadPageData(widget, pageIndex);
+                          $scope.initializeTargetedWidgetRuntime(
+                            widget,
+                            pageIndex,
+                            widgetIndex
+                          );
+                          refreshedWidgetCount++;
+                        }
+                      }
+                    );
+
+                    if (page.pageId == notificationData.pageId) {
+                      targetPageIndex = pageIndex;
+                    }
+                  });
+                });
+
+                if (refreshedWidgetCount === 0) {
+                  return;
+                }
+
+                if (targetPageIndex < 0) {
+                  angular.forEach($scope.groups, function (page, pageIndex) {
+                    if (
+                      targetPageIndex < 0 &&
+                      page.pageNumber == notificationData.pageNumber
+                    ) {
+                      targetPageIndex = pageIndex;
+                    }
+                  });
+                }
+
+                if (targetPageIndex < 0) {
+                  return;
+                }
+
+                $scope.pageCounter = 0;
+                $timeout(function () {
+                  if (targetPageIndex !== $scope.quoteIndex) {
+                    $scope.goToPage(targetPageIndex);
+                  } else {
+                    $scope.autoResizeByPageNumber($scope.quoteIndex);
+                  }
+                  /* painted mode: settings edits reach us here now that
+                   * the backend sends them targeted rather than as a
+                   * restart-display. The ids let the service resolve
+                   * which page changed. */
+                  if (window.mmPaintedNotify) {
+                    window.mmPaintedNotify("layout", "widget", widgetSettingIds);
+                  }
+                }, 0);
+              },
+              function (error) {
+                console.log("Unable to refresh updated widget", error);
+              }
+              );
+            }, 300);
+            return;
+          }
+
           if (operation === "DELETE") {
             var currentPage = $scope.groups[$scope.quoteIndex];
             var currentPageId = currentPage ? currentPage.pageId : undefined;
             angular.forEach(widgetSettingIds, function (widgetSettingId) {
-              $scope.removedExistingImageSetting(widgetSettingId);
-              $scope.removeExistingGifSetting(widgetSettingId);
-              $scope.removeOldMappedIframeData(widgetSettingId);
-              $scope.clearSnapshotExistObject(widgetSettingId);
-              $scope.clearTodoExistingObject(widgetSettingId);
-              $scope.clearChoresExistingObject(widgetSettingId);
-              $scope.clearCalendarNextRefreshTimeout(widgetSettingId);
+              $scope.clearTargetedWidgetRuntime({
+                widgetSettingId: widgetSettingId,
+              });
 
               angular.forEach($scope.groups, function (page, pageIndex) {
                 var widgets = page.widgets || [];
@@ -3434,6 +3745,9 @@ window.myApp.controller("MainCtrl", [
               } 
               if(obj.refreshPowerBI != undefined){
                   $scope.updatePowerBiData(obj.refreshPowerBI);            	  
+              }
+              if (obj.pageContext != undefined) {
+                $scope.goToWidgetPage(obj.pageContext);
               }
             }
           } else if (
@@ -5764,12 +6078,20 @@ window.myApp.controller("MainCtrl", [
           mirrorBgData &&
           mirrorBgData.widgetBackgroundSettingModel
         ) {
+          // A targeted refresh reuses the existing DOM element. Clear the
+          // previously applied format first so custom/default/preset changes
+          // render the same way as they do after a full page load.
+          widgetDiv.style.backgroundColor = "";
+          widgetDiv.style.webkitBackdropFilter = "";
+          widgetDiv.style.backdropFilter = "";
+          widgetDiv.style.boxShadow = "none";
+          widgetDiv.style.borderRadius = "0px";
+          widgetDiv.style.overflow = "";
+          widgetDiv.style.fontFamily = "";
+          widgetDiv.style.color = "";
+
           if (backgroundFormatType === "preset") {
             widgetDiv.style.backgroundColor = "transparent";
-            widgetDiv.style.webkitBackdropFilter = "";
-            widgetDiv.style.backdropFilter = "";
-            widgetDiv.style.boxShadow = "none";
-            widgetDiv.style.borderRadius = "0px";
             widgetDiv.style.overflow = "visible";
             widgetDiv.style.zIndex = String(
               997 - (Number(mirrorBgData.zindex) || 0)
@@ -5834,10 +6156,20 @@ window.myApp.controller("MainCtrl", [
             widgetDiv.style.backgroundColor =
               mirrorBgData.widgetBackgroundSettingModel.backgroundColor;
           }
-          widgetDiv.style.fontFamily =
-            mirrorBgData.widgetBackgroundSettingModel.fontFamily;
-          widgetDiv.style.color =
-            mirrorBgData.widgetBackgroundSettingModel.fontColor;
+          if (
+            mirrorBgData.widgetBackgroundSettingModel.fontFamily &&
+            mirrorBgData.widgetBackgroundSettingModel.fontFamily != "default"
+          ) {
+            widgetDiv.style.fontFamily =
+              mirrorBgData.widgetBackgroundSettingModel.fontFamily;
+          }
+          if (
+            mirrorBgData.widgetBackgroundSettingModel.fontColor &&
+            mirrorBgData.widgetBackgroundSettingModel.fontColor != "default"
+          ) {
+            widgetDiv.style.color =
+              mirrorBgData.widgetBackgroundSettingModel.fontColor;
+          }
 
           if (backgroundFormatType !== "preset") {
             widgetDiv.style.boxShadow = mirrorBgData.widgetBackgroundSettingModel
@@ -5848,6 +6180,13 @@ window.myApp.controller("MainCtrl", [
               mirrorBgData.widgetBackgroundSettingModel.corner === "rounded"
                 ? "15px"
                 : "0px";
+            if (
+              mirrorBgData.contentType ==
+                MANGO_MIRROR_CONSTANT.WIDGET_TYPE_IMAGE &&
+              mirrorBgData.widgetBackgroundSettingModel.corner === "rounded"
+            ) {
+              widgetDiv.style.overflow = "hidden";
+            }
           }
 
           var widgetTitle = window.document.getElementById(

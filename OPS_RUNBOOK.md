@@ -300,8 +300,8 @@ Create in both environments (prod at minimum):
 
 | Alarm | Threshold | Meaning / action |
 |---|---|---|
-| `MemoryUtilization` (ECS service) | > 70% for 15 min | Approaching the display ceiling → resize (§9) |
-| Render-queue depth (custom metric, to be emitted) | sustained > 3 | Renders are queuing; raise `RENDER_CONCURRENCY` and/or vCPU |
+| `MemoryUtilization` (ECS service) | > 70% for 15 min | Approaching the display ceiling → auto-resizer steps up (§9) |
+| `RenderQueueDepth` (custom, §9) | sustained > 3 for 15 min | Renders are queuing; the auto-resizer should act — if it has not, resize manually |
 | `RunningTaskCount` | < 1 for 5 min | Fleet is down — check Spot interruption / task crash |
 | ALB `HTTPCode_Target_5XX_Count` | > 10 in 5 min | Service erroring; check logs |
 | Deployment failure (EventBridge `ECS Deployment State Change` = FAILED) | any | Roll back (§7.4) |
@@ -318,30 +318,67 @@ Useful log greps (`/ecs/roku-render*`):
 
 ---
 
-## 9. Capacity and growth
+## 9. Capacity, scaling, and growth
+
+### Decision (2026-08-29)
+
+**Launch and grow on a SINGLE task with automated vertical scaling. Do
+not enable ECS target-tracking autoscaling.** Build the display
+ownership layer when the trigger signals below say so — expected in the
+low hundreds of concurrent displays. Ownership is *additive*: workers
+already isolate cleanly per display, so nothing shipped now has to be
+undone to add it.
 
 ### The hard constraint
 
-**The service runs as ONE task.** Each display's portal holds that
-display's backend socket, and the backend closes duplicates. Two tasks
-behind the ALB would both open portals for the same display and fight
-over its socket.
+Each display's portal holds that display's backend socket, and the
+backend closes duplicates. The service therefore runs as ONE task.
 
 > **Never raise `desiredCount` above 1** on the current architecture.
-> If memory is high, resize the task (below) — do not add tasks.
-> Horizontal scaling requires the display→task router, which is not
-> built yet.
+> If memory or CPU is high, resize the task — do not add tasks.
 
-### Growth is manual by design
+### Why not ECS target-tracking autoscaling
 
-Fargate task size is fixed in the task definition; a running task
-cannot be resized, and AWS auto-scaling scales task *count*, not size.
-So growth is a deliberate action:
+This gets proposed regularly because it is correct for stateless
+services. It is not correct for this one. With a second task behind the
+ALB:
 
-1. Edit `deploy/taskdef-<env>.json`: raise `cpu`, `memory`, and
-   `RENDER_CONCURRENCY` together.
-2. Register the revision and update the service (a ~60–90 s rolling
-   restart, same as any deploy).
+1. The TV's long-poll is round-robined to task B instead of task A.
+2. Task B has no worker for that display, so it creates one — which
+   opens a live portal, which opens the backend socket for that device.
+3. The backend allows one socket per display, so it closes task A's.
+4. Task A's portal is now deaf to change pushes, but still answers
+   polls with **its own version counter** and still publishes to **the
+   same S3 prefix**.
+5. The TV sees the version jump between two counters while the tasks
+   overwrite each other's page images.
+
+Result: corrupted display state *and* doubled render cost. Two further
+reasons it would misbehave even setting that aside:
+
+- **Bursty CPU.** A capture pegs a core for 1–4 s, then idles for
+  minutes. Average CPU stays low and spikes hard, so a CPU target
+  either never fires or flaps.
+- **Sticky memory.** Memory is a floor that rises with watched displays
+  and that Chromium does not return quickly, so a memory target
+  ratchets out and rarely scales back in.
+- **Destructive scale-in.** Terminating a task kills the portals for
+  every display it owns; they freeze until their next poll lands
+  elsewhere and a fresh portal boots (15–30 s each).
+
+### Automated vertical scaling (the launch answer)
+
+An alarm fires → a small Lambda registers the next task-definition size
+and updates the service. Hands-off; the cost is a ~60–90 s rolling
+restart per resize, during which TVs show cached pages.
+
+Hysteresis is mandatory, or displays restart repeatedly:
+
+- scale **up** only after sustained pressure (e.g. memory > 70% or
+  queue depth > 3 for 15 minutes)
+- scale **down** only after hours of quiet (e.g. < 35% for 6 hours)
+- at most **one resize per hour**
+- raise `cpu`, `memory`, and `RENDER_CONCURRENCY` together
 
 ### Capacity ladder
 
@@ -356,18 +393,64 @@ renders one page at a time).
 | 2 vCPU / 16 GB | 2–3 | ~80 |
 | 4 vCPU / 30 GB | 4 | ~150 |
 | 8 vCPU / 60 GB | 6 | ~300 |
-| 16 vCPU / 120 GB (Fargate max) | 8–12 | ~600 (untested) |
+| 16 vCPU / 120 GB (Fargate max) | 8–12 | ~550 (unverified) |
 
-Memory was measured (Phase 0 density test); the render-queue behaviour
-at high display counts is **not** yet load-tested. Do that before
-relying on the bottom two rows.
+### Metrics to emit (custom CloudWatch, namespace `MangoDisplay/Render`)
 
-Beyond ~600 displays, or when the fleet needs high availability, build
-the router: an always-on front door mapping display → task. It is also
-the first component of the cheaper "socket sentinel" architecture
-(see the cost brainstorm in the project memory).
+These are the honest signals — better than CPU/memory percentages both
+for alarms now and as the target metric for autoscaling later:
 
----
+- `WatchedDisplays` — workers with a live portal
+- `RenderQueueDepth` — captures waiting on the gate
+- `RenderDurationMs` — p50 and p95
+- `EditToPublishMs` — signal received → manifest published
+- plus the standard ECS memory/CPU utilisation
+
+### When to build ownership — trigger signals
+
+Whichever arrives first:
+
+- `RenderQueueDepth` sustained above ~3
+- Memory above 70% on a 60 GB+ task
+- `EditToPublishMs` p95 creeping past ~10 s
+- **Deploy restarts becoming customer-visible** — in practice this is
+  the one most likely to bind. At 20 displays a 90 s freeze is
+  invisible; at 300 paying customers it is an incident.
+
+Estimates, with confidence labelled:
+
+| Limit | Estimate | Basis |
+|---|---|---|
+| Memory | ~550 displays | measured to N=20, linear; ~19 MB/h/portal creep observed |
+| Render throughput | ~480–700 | arithmetic from measured capture times (~36 s of gate time per display per hour) |
+| Background CPU of many live portals | **unknown — could bind at 150–250** | **never measured above N=20** |
+| Blast radius | ~200–300 | judgement, not measurement |
+
+Note these are **concurrently watched** displays, not registered ones.
+If a third of the installed base has the TV on at peak, 300 concurrent
+≈ 900–1,000 registered displays.
+
+### Load test before trusting the top of the ladder
+
+`render-service/phase0-harness.js` already stands up synthetic portals;
+extend it to drive renders (not just hold portals open) and run it at
+**50 and 150 displays**. That replaces the weakest guess above —
+background CPU — with a real number. Roughly a day's work, and it can
+run during the beta rather than blocking launch.
+
+### What ownership looks like when it is built
+
+- Each task claims displays with short leases in DynamoDB; only the
+  owner opens that display's portal and publishes.
+- Requests arriving at a non-owner are proxied or redirected.
+- On SIGTERM a task releases its leases so survivors take over
+  immediately instead of waiting for polls.
+- Only then enable target tracking — on `WatchedDisplays` per task, not
+  on CPU.
+
+It is also the first component of the cheaper "socket sentinel"
+architecture (see the cost brainstorm in project memory) and what gives
+the fleet real high availability.
 
 ## 10. Three artifacts, three release cadences
 

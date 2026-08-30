@@ -136,6 +136,10 @@ class PaintedWorker extends DisplayWorker {
       this.interacting = true;
     }
     if (!this.portal) {
+      /* cold launch: the portal was closed (app off for more than a few
+       * minutes). The reload it is about to announce IS this launch, so
+       * label it accordingly - rank 3, spinner, staged, not preemptible. */
+      if (launching) this.launchReload = true;
       this.openPortal().catch((e) => {
         this.log("live portal failed to open:", e.message);
         if (launching) {
@@ -314,11 +318,18 @@ class PaintedWorker extends DisplayWorker {
        * published FIRST so the user sees it in seconds while the rest
        * render behind it. Background reloads (startup) leave the TV
        * alone - nobody is watching an edit then. */
+      const landing = typeof message.pageIndex === "number" ? message.pageIndex : 0;
+      /* Whatever page the portal landed on is captured and published
+       * FIRST, with the rest following moments later. On a launch that
+       * means the TV replaces its cached picture seconds after the
+       * portal boots instead of waiting out every page (Dave,
+       * 2026-08-30). */
+      this.priorityPage = landing;
+      /* Only a user-driven relayout also steers the TV to that page: on
+       * a launch the TV starts on page 0 by itself. */
       if (this.sawFirstReload && !launchBoot) {
-        const landing = typeof message.pageIndex === "number" ? message.pageIndex : 0;
         this.pendingShowPage = landing;
         this.showPageUntil = Date.now() + 15000;
-        this.priorityPage = landing;
       }
       this.sawFirstReload = true;
       /* a relayout (or a portal self-reload) starts over on page 0, so

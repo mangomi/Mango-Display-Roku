@@ -95,6 +95,22 @@ class PaintedWorker extends DisplayWorker {
     await portal.close("device stopped polling").catch(() => {});
   }
 
+  /* Close the current portal and boot a fresh one. Chained so two
+   * reopens cannot interleave, and portalPage is cleared because a new
+   * portal starts on page 0. */
+  reopenPortal(why) {
+    this.portalReopen = (this.portalReopen || Promise.resolve())
+      .catch(() => {})
+      .then(async () => {
+        const stale = this.portal;
+        this.portal = null;
+        this.portalPage = null;
+        if (stale) await stale.close(why).catch(() => {});
+        await this.openPortal();
+      });
+    return this.portalReopen;
+  }
+
   /* Any device contact means a TV is watching: make sure the portal is
    * up. handleWait runs on every poll, so this is the reopen path too. */
   handleWait(u, res, req) {
@@ -128,10 +144,29 @@ class PaintedWorker extends DisplayWorker {
         }
       });
     } else if (launching) {
-      /* the app restarted: it has no picture yet and the portal may hold
-       * a stale one, so rebuild from what the portal shows now */
-      this.log("app launch: recapturing every page");
-      this.queueCapture(null, "app launch");
+      /* The app restarted. Recapturing what the portal currently shows is
+       * not enough: a portal left open from the previous session holds
+       * that session's state - a calendar someone swiped three months
+       * ahead, a stepped page - and the user would relaunch into it
+       * (Dave, 2026-08-30). Reload the portal from scratch so a launch
+       * always shows the display as the portal freshly renders it.
+       *
+       * Guarded by age: duplicate launch polls, or an app crash-looping,
+       * must not thrash the portal. A portal that has just booted is
+       * already fresh, so recapture instead. */
+      const age = Date.now() - (this.portalOpenedAt || 0);
+      if (age > 20000) {
+        this.log("app launch: reloading the portal from scratch");
+        this.launchReload = true;
+        this.reopenPortal("app launch").catch((e) => {
+          this.log("launch reload failed:", e.message);
+          this.launchReload = false;
+          this.queueCapture(null, "app launch");
+        });
+      } else {
+        this.log("app launch: portal is " + Math.round(age / 1000) + "s old - recapturing every page");
+        this.queueCapture(null, "app launch");
+      }
     }
     return super.handleWait(u, res, req);
   }
@@ -152,7 +187,20 @@ class PaintedWorker extends DisplayWorker {
     }
   }
 
+  /* Serialises opening. Two callers arriving while this.portal is null -
+   * a poll and an /interact during a reopen, say - would each build a
+   * portal, and two portals for one display means two backend sockets,
+   * one of which the backend closes forever. */
   async openPortal() {
+    if (this.portal && this.portal.ready) return this.portal;
+    if (this.portalOpening) return this.portalOpening;
+    this.portalOpening = this.openPortalOnce().finally(() => {
+      this.portalOpening = null;
+    });
+    return this.portalOpening;
+  }
+
+  async openPortalOnce() {
     if (this.portal && this.portal.ready) return this.portal;
     const openWith = async (timezoneId) => {
       this.portal = new LivePortal({
@@ -192,6 +240,9 @@ class PaintedWorker extends DisplayWorker {
         this.log("portal timezone: '" + check.display + "' did not take (page runs in " + check.effective + ") - continuing");
       }
     }
+    /* how long this portal has been up, so a launch can tell a stale
+     * session's portal from one that just booted for this very launch */
+    this.portalOpenedAt = Date.now();
     /* No direct startup render: the portal's reload announcement queues
      * it through onPortalChange like every other capture. A second
      * renderAll here doubled every boot. */
@@ -250,7 +301,12 @@ class PaintedWorker extends DisplayWorker {
     if (message.source === "reload") {
       /* the first one is the portal booting; later ones mean someone
        * applied a new layout, which IS worth showing a spinner for */
-      const reason = this.sawFirstReload ? "layout change" : "startup";
+      /* a reload we asked for on app launch is a launch, not a relayout:
+       * rank 3 (spinner, not preemptible) and no page mirroring - the TV
+       * starts on page 0 by itself */
+      const launchBoot = this.launchReload === true;
+      this.launchReload = false;
+      const reason = launchBoot ? "app launch" : this.sawFirstReload ? "layout change" : "startup";
       /* a user-driven reload (relayout, page add/reorder/delete) boots
        * the portal onto a page - usually the first. The TV mirrors it
        * (Dave 2026-08-28: "whatever page the portal lands on needs to
@@ -258,7 +314,7 @@ class PaintedWorker extends DisplayWorker {
        * published FIRST so the user sees it in seconds while the rest
        * render behind it. Background reloads (startup) leave the TV
        * alone - nobody is watching an edit then. */
-      if (this.sawFirstReload) {
+      if (this.sawFirstReload && !launchBoot) {
         const landing = typeof message.pageIndex === "number" ? message.pageIndex : 0;
         this.pendingShowPage = landing;
         this.showPageUntil = Date.now() + 15000;

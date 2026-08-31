@@ -162,13 +162,40 @@ record. Test's `roku-control-test` already points at ALB `roku-control`.
 
 ## 6. Costs
 
-| Item | Test (today) | Prod at launch |
+| Item | Test (today) | Prod at ~100 screens |
 |---|---|---|
-| Fargate task | ~$9 (Spot, 1 vCPU/2 GB) | ~$34 (on-demand, 1 vCPU/4 GB) |
+| Fargate task | ~$9 (Spot, 1 vCPU/2 GB) | $68-89 (on-demand, 2 vCPU/8-16 GB) |
 | ALB | ~$17 | ~$17 |
-| Logs / ECR / Secrets | ~$3 | ~$3 |
+| Logs / ECR / Secrets / S3 requests | ~$3 | ~$7 |
 | Assets (S3 + CloudFront) | shared $15 Pro plan, covers both | — |
-| **Total** | **~$29** | **~$54** |
+| **Total** | **~$29** | **~$92-113** |
+
+All-in at ~100 prod screens (test + prod + the shared CloudFront plan):
+**~$136-157/month**, or ~$120-140 with a 1-year Compute Savings Plan.
+That is roughly **$1.00-1.15 per screen per month**.
+
+**Do not confuse this with the density test's $0.13-0.20/display.** That
+figure is the MARGINAL cost of one more display (RAM + compute) and is
+still accurate. At 100 screens the FIXED floor dominates - two ALBs and
+a task sized with headroom cost the same at 10 screens as at 100. The
+fully-loaded average falls with scale: ~$1.10/screen at 100,
+~$0.41 at 500, ~$0.37 at 1,000.
+
+Structural note: the ALB is not optional. The device long-poll holds a
+connection ~50s and API Gateway's ~30s timeout cannot carry it, so
+~$17 per environment is a floor until the ownership/sentinel work
+changes the shape.
+
+**Cost attribution:** ECS task costs only inherit tags when the service
+sets `propagateTags` - a service tagged `Project=Roku` whose tasks are
+untagged puts all its Fargate spend in "untagged" (this was the case
+until 2026-08-31). The test service is now set to `SERVICE`; **do the
+same when creating the prod service**:
+```
+aws ecs update-service --cluster <c> --service <s> --propagate-tags SERVICE
+```
+Tags attach only to tasks launched AFTER the change, so it takes effect
+on the next deployment.
 
 Prod growth (measured ~181 MB per watched display, plus an 80 MB floor):
 ~100 displays on 2 vCPU/16 GB ≈ **$89/mo (~$0.89/display)**;

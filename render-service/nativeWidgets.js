@@ -1366,7 +1366,12 @@ const slideshowHandler = {
       });
       return out;
     });
-    return raw.filter((o) => o.images && o.images.length > 1);
+    /* One photo counts. BLOCKED_MEDIA stops the portal loading ANY
+     * user photo, so a widget skipped here is not "left baked" - it is
+     * left EMPTY on the TV. Single-image widgets used to fall through
+     * that gap (LIVE_PORTAL.md open item 7). The device's slide timer
+     * already no-ops below two images, so a lone photo simply shows. */
+    return raw.filter((o) => o.images && o.images.length >= 1);
   },
 
   // photos are FULLY hidden from the render (Dave's call): with crop

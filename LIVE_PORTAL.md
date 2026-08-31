@@ -289,10 +289,11 @@ Each of these cost real debugging. Do not re-introduce them.
    2026-08-23 on MD4454256172 page 1): `BLOCKED_MEDIA` refuses
    myimages.mangodisplay.com, which is right for slideshows and
    backgrounds the device draws from the manifest — but the slideshow
-   handler deliberately SKIPS single-image widgets ("stay baked"), so
-   nothing overlays them and the blocked photo leaves an empty patch.
-   Either narrow the block to media an overlay will actually carry, or
-   emit single-image widgets as (static) overlays too.
+   handler deliberately SKIPPED single-image widgets ("stay baked"), so
+   nothing overlaid them and the blocked photo left an empty patch.
+   **FIXED 2026-08-31**: the slideshow extractor now emits widgets with
+   one or more images (the device's slide timer already no-ops below
+   two, so a lone photo shows statically).
 8. **Verify pixels means the file the MANIFEST names** (`imageFile`,
    .jpg for normal pages, .png only for layered ones). A stale
    `display_pN.png` from an older run sitting next to a fresh

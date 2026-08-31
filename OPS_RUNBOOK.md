@@ -235,7 +235,15 @@ run clean for a few days (Dave's convention across all repos).
 
 | Job | Triggers on | Result |
 |---|---|---|
-| **`Roku-Staging-Service`** (BUILT 2026-08-31) | any push to `test-release-auto-deploy` | auto-deploy of the render service to the test fleet |
+| **`Roku-Staging-Service`** (BUILT 2026-08-31) | a push to `test-release-auto-deploy` that touches `render-service/`, `fonts/` or `buildspec.yml` | auto-deploy of the render service to the test fleet |
+
+**Path filtering:** the job's Git SCM carries *included regions*
+(`render-service/.*`, `fonts/.*`, `buildspec\.yml`). The GitHub hook
+wakes Jenkins to poll, and polling honours those regions — so a push
+that only touches `tvos/`, the Roku channel (`components/`, `source/`,
+`images/`, `media/`, `manifest`) or documentation triggers **no build
+and no fleet restart**. A manual *Build Now* always builds, regardless,
+which is the escape hatch for a forced redeploy.
 | `roku-channel` | `manifest`, `components/**`, `source/**`, `images/**`, `media/**`, `fonts/**`, `package.sh` | signed channel zip as a build artifact; store submission stays manual |
 | `tvos-app` | `tvos/**` | archive; optional TestFlight upload; App Store release manual |
 

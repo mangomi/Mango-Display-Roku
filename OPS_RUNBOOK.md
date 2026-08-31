@@ -218,16 +218,24 @@ to quote in app-store privacy disclosures.
 | Branch | Deploys |
 |---|---|
 | feature branch → PR | nothing; CI checks only |
-| `test-release-auto-deploy` | test fleet |
-| `prod-release-auto-deploy` | prod fleet |
+| `test-release-auto-deploy` | test fleet, automatically |
+| `prod-release-auto-deploy` | prod fleet, automatically |
+| `main` | nothing — merged a few days AFTER a prod deploy has soaked |
 
 Protect `prod-release-auto-deploy` so only release owners can merge.
+`main` is the "this has survived production" marker, not a development
+branch: it deliberately lags, and is updated once a prod release has
+run clean for a few days (Dave's convention across all repos).
+
+**Live for the render service** (created 2026-08-31): Jenkins job
+`Roku-Staging-Service` builds and deploys on every push to
+`test-release-auto-deploy` in `mangomi/Mango-Display-Roku`. See §7.2.
 
 ### 7.2 Jenkins jobs (path-filtered — one repo, three artifacts)
 
 | Job | Triggers on | Result |
 |---|---|---|
-| `roku-render-service` | `render-service/**`, `fonts/**`, `buildspec.yml`, `deploy/**` | auto-deploy to the branch's environment |
+| **`Roku-Staging-Service`** (BUILT 2026-08-31) | any push to `test-release-auto-deploy` | auto-deploy of the render service to the test fleet |
 | `roku-channel` | `manifest`, `components/**`, `source/**`, `images/**`, `media/**`, `fonts/**`, `package.sh` | signed channel zip as a build artifact; store submission stays manual |
 | `tvos-app` | `tvos/**` | archive; optional TestFlight upload; App Store release manual |
 

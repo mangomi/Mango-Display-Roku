@@ -11,6 +11,12 @@
  * so a resurrected display serves its previous content immediately and
  * re-renders moments later.
  *
+ * Deployed by the Jenkins job Roku-Staging-Service: any push to
+ * test-release-auto-deploy syntax-checks this service, packages it
+ * (server files only - the TV clients in this repo are never included),
+ * builds the arm64 image on CodeBuild and rolls the ECS service. See
+ * OPS_RUNBOOK.md section 7.
+ *
  * A worker is only created for a display the backend recognises
  * (GET mirrors/deviceId/{code} -> isActive): this endpoint is on the open
  * internet, and booting Chromium for every scanner that guesses a

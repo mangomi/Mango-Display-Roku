@@ -1317,6 +1317,15 @@ const cellWeatherHandler = {
 // just carries that list + interval; the Roku crossfades through it
 // natively. The currently-baked photo stays in the image as fallback.
 // Single-image widgets stay baked (no overlay needed).
+/* How many photo URLs a slideshow or rotating background may carry to
+ * the device. The portal itself caps nothing - it holds whatever the
+ * backend or Unsplash returns - so this is the only limit, and a widget
+ * with more photos than this would loop the first N forever, silently.
+ * 250 is ~25KB of manifest against the ~31KB it already is: cheap
+ * against a manifest the TV refetches on every version change, and
+ * enough for any realistic album (Dave, 2026-08-31). */
+const MAX_ROTATION_IMAGES = 250;
+
 const slideshowHandler = {
   type: "slideshow",
 
@@ -1356,7 +1365,7 @@ const slideshowHandler = {
               widgetSettingId: d.widgetId,
               page: parseInt(pg, 10),
               rect: { x: r.x, y: r.y, w: r.width, h: r.height },
-              images: (d.images || []).slice(0, 60),
+              images: (d.images || []).slice(0, MAX_ROTATION_IMAGES),
               intervalSeconds: parseInt(iws.imageDelayTime, 10) || 60,
               cropToFill: iws.isCropToFill === true,
               transition: iws.transition || "fade",
@@ -1565,7 +1574,7 @@ const backgroundHandler = {
           // page-level, not a widget - synthetic id keeps state keys unique
           widgetSettingId: -1,
           page: pageIdx,
-          images: images.slice(0, 60),
+          images: images.slice(0, MAX_ROTATION_IMAGES),
           intervalSeconds: parseInt(obj.imageDelayTime, 10) || 60,
           cropToFill: obj.isCropToFill !== false,
           transition: obj.transition || "fade",

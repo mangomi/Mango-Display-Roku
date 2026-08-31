@@ -63,7 +63,16 @@ final class InteractionController: ObservableObject {
     private var swipeBusy = false
     private var warmSent = false
     private var heldKey = ""
-    private var didGlide = false
+    /// A press only counts as a HOLD (and so cannot be half of a
+    /// double-click) once it has glided the pointer a visible distance
+    /// - 4 steps (~160ms of glide, ~40px). Treating the very first
+    /// glide step as a hold made deliberate double-clicks nearly
+    /// impossible (Dave, 2026-08-28: "the double-click needs to be
+    /// really quick, otherwise it's just moving the mouse"); the
+    /// portal's own remote never disqualifies a held press at all.
+    /// (Roku 367a1de)
+    private var glideSteps = 0
+    private static let glideClickSteps = 4
     private var dblKey = ""
     private var hideTask: Task<Void, Never>?
     private var holdTask: Task<Void, Never>?
@@ -220,7 +229,7 @@ final class InteractionController: ObservableObject {
             try? await Task.sleep(for: .seconds(0.35))
             guard !Task.isCancelled else { return }
             while !Task.isCancelled, let self, !self.heldKey.isEmpty {
-                self.didGlide = true
+                self.glideSteps += 1
                 self.restartHide()
                 self.movePointer(self.heldKey)
                 try? await Task.sleep(for: .seconds(0.04))
@@ -229,16 +238,18 @@ final class InteractionController: ObservableObject {
     }
 
     func keyUp(_ key: String) {
-        let glided = didGlide
+        let glided = glideSteps >= Self.glideClickSteps
         if key == heldKey { stopHold() }
-        // the double-click window arms from the RELEASE (a thumb on a
-        // remote is slower than a keyboard); a press that glided the
-        // pointer was a hold, not a click
+        // The double-click window arms from the RELEASE to the next
+        // PRESS - 550ms, desktop double-click territory plus room for a
+        // remote thumb (the portal's 250ms is release-to-release, so its
+        // budget also covers the second press's own duration; ours does
+        // not). A press that genuinely glided is excluded. (Roku 367a1de)
         if !glided {
             dblKey = key
             dblTask?.cancel()
             dblTask = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(0.45))
+                try? await Task.sleep(for: .seconds(0.55))
                 guard !Task.isCancelled else { return }
                 self?.dblKey = ""
             }
@@ -247,7 +258,7 @@ final class InteractionController: ObservableObject {
 
     private func stopHold() {
         heldKey = ""
-        didGlide = false
+        glideSteps = 0
         holdTask?.cancel()
     }
 

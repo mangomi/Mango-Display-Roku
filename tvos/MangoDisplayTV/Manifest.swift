@@ -69,6 +69,10 @@ struct DisplayManifest {
     /// which remote gestures the user enabled: { pageSwipe,
     /// calendarScroll } - the same switches the portal obeys
     let gestures: [String: Any]
+    /// one-shot: a layout edit names the page being edited, and the TV
+    /// mirrors the portal by navigating there (absent on every other
+    /// publish; Roku b0c3f90)
+    let showPage: Int?
     let pages: [Page]
 
     init?(_ dict: [String: Any]) {
@@ -81,5 +85,6 @@ struct DisplayManifest {
         imageOnly = JSON.truthy(dict["imageOnly"])
         effects = (JSON.arr(dict["effects"]) ?? []).compactMap { JSON.obj($0) }
         gestures = JSON.obj(dict["gestures"]) ?? [:]
+        showPage = JSON.int(dict["showPage"])
     }
 }

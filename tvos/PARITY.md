@@ -1,6 +1,6 @@
 # tvOS ↔ Roku parity marker
 
-**Behavior parity as of Roku commit `56392b2`** (branch `live-portal`;
+**Behavior parity as of Roku commit `367a1de`** (branch `live-portal`;
 docs-only commits since `cfc6c1a`, which is the Roku client state this
 port was written against).
 
@@ -9,7 +9,7 @@ port was written against).
 Any session porting Roku-side changes into this app:
 
 1. Read this file.
-2. `git log 56392b2..HEAD -- components/ source/ images/ fonts/ manifest`
+2. `git log <hash above>..HEAD -- components/ source/ images/ fonts/ manifest`
    to list Roku-side changes since parity.
 3. Port the *behavioral* ones; skip Roku-only mechanics (texture-cap
    packing, the keep-alive video, registry plumbing). The commit messages

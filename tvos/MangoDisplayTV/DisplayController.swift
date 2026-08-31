@@ -410,11 +410,20 @@ final class DisplayController: ObservableObject {
         }
         keep.formUnion(effectAssetURLs)
         Task { await cache.prune(keep: keep) }
-        // quiet refresh of the current page, no transition. imageOnly is
-        // a swipe's answer landing: swap the image UNDER the live overlay
-        // layers rather than rebuilding them - a rebuild restarts every
-        // GIF and reads as the screen freezing (MainScene's forceInPlace).
-        loadPage(pageIndex, animated: false, forceInPlace: man.imageOnly)
+        // A layout edit carries the page being edited: mirror the portal
+        // and take the TV there, animated like a manual page turn, so
+        // the user watches the page they are changing (Roku b0c3f90).
+        // Out-of-range or already-current pages fall back to the normal
+        // quiet in-place refresh - no transition, image swapped UNDER
+        // the live overlay layers (imageOnly = a swipe's answer landing;
+        // a rebuild would restart every GIF).
+        if let sp = man.showPage, sp >= 0, sp < pages.count, sp != pageIndex {
+            NSLog("[Mango] layout edit on page %d - showing it", sp)
+            rotateTask?.cancel()
+            loadPage(sp, animated: true)
+        } else {
+            loadPage(pageIndex, animated: false, forceInPlace: man.imageOnly)
+        }
         // an imageOnly manifest is a swipe's answer: release the
         // one-swipe-at-a-time lock now rather than waiting out the
         // fallback cooldown (MainScene's swipeApplied bump)

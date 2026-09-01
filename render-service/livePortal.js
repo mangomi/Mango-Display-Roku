@@ -52,6 +52,31 @@ const PREVIEW_FILES = [
   { match: /\/js\/controller\/mainController\.js/, file: "js/controller/mainController.js" },
 ];
 
+/* A narrower cousin of PREVIEW_DIR. That one stands in for a portal with
+ * no painted mode at all and replaces a fixed set of files. This one
+ * serves whatever happens to be in a directory, matched by its path
+ * under the portal root - for trying ONE in-flight portal change against
+ * a deployed portal that is otherwise current. Injecting the full shim
+ * for that would drag along stale copies of everything else. */
+const PATCH_DIR = process.env.PORTAL_PATCH_DIR || "";
+
+function patchFiles(dir, base) {
+  const out = [];
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (e) {
+    return out;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    const rel = (base ? base + "/" : "") + entry.name;
+    if (entry.isDirectory()) out.push(...patchFiles(full, rel));
+    else if (entry.isFile()) out.push({ rel, full });
+  }
+  return out;
+}
+
 class LivePortal {
   /*
    * opts: { portalBase, major, minor, deviceId, outW, outH,
@@ -119,6 +144,7 @@ class LivePortal {
     }
 
     await this.installRoutes();
+    await this.installPatches();
     await this.installSignalBridge();
     await this.installEffectHide();
 
@@ -169,6 +195,26 @@ class LivePortal {
     }
     /* the deployed index.html does not load paintedMode.js yet */
     await this.page.addInitScript({ path: path.join(PREVIEW_DIR, PREVIEW_FILES[0].file) });
+  }
+
+  /* Serve individual local files over the deployed portal's own. */
+  async installPatches() {
+    if (!PATCH_DIR) return;
+    const files = patchFiles(PATCH_DIR, "");
+    if (!files.length) return;
+    this.log("*** patching " + files.length + " portal file(s) from " + PATCH_DIR + " ***");
+    for (const f of files) {
+      const suffix = "/" + f.rel;
+      await this.page.route(
+        (url) => url.pathname.endsWith(suffix),
+        (route) =>
+          route.fulfill({
+            contentType: f.rel.endsWith(".css") ? "text/css" : "application/javascript",
+            body: fs.readFileSync(f.full, "utf8"),
+          }),
+      );
+      this.log("    patched " + f.rel);
+    }
   }
 
   /* Effect elements are born hidden. hideEffects (capture-time inline

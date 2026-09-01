@@ -1150,7 +1150,12 @@ function csKey(o, outScale) {
       [
         CS_FILM_VERSION,
         o.date || "",
-        o.widgetId || "",
+        /* widgetSettingId, not widgetId: extract() has only ever set the
+         * former, so this term was the empty string for every cell and the
+         * key carried no widget identity at all. Two calendars sized alike,
+         * on the same date, with the same content height and duration would
+         * have shared one sheet. */
+        o.widgetSettingId || "",
         Math.round(o.rect.w * outScale),
         Math.round(o.rect.h * outScale),
         Math.round(o.innerHeight),

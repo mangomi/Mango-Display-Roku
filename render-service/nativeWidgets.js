@@ -592,7 +592,7 @@ const weatherIconHandler = {
   // animation detection happens here (Node side - the S3 icon bucket has
   // no CORS headers, so an in-page fetch cannot read the SVG text). The
   // same fetch yields each icon's animation period for seamless looping.
-  async process(overlays) {
+  async process(overlays, ctx) {
     const bySrc = {};
     for (const o of overlays) {
       if (!(o.src in bySrc)) {

@@ -324,6 +324,51 @@ aws ecs update-service --cluster roku-render --service roku-render --force-new-d
 Deploys restart the fleet: TVs keep showing cached pages and portals
 reopen on the next poll. Expect ~60–90 s.
 
+### 7.3b What a deployment does to a watching user
+
+Settings: `minimumHealthyPercent 100`, `maximumPercent 200`, target-group
+deregistration delay 60s. ECS starts the NEW task before stopping the
+old, so there is never zero capacity.
+
+What the user sees: **essentially nothing.**
+
+- The display never blanks - page images are on CloudFront and already
+  cached on the device.
+- No spinner: a deploy's render is "startup"/background (rank 1), and
+  the spinner is reserved for user-driven work.
+- Clock, countdowns, weather and effect animations keep running; they
+  are native on the device and independent of the server.
+- Worst case the display is a minute or two stale, then refreshes.
+
+What genuinely drops:
+
+- **The display's WebSocket**, for ~15-30s, while the old portal closes
+  and the new one boots. No data is lost: the new portal loads current
+  state from the API on boot, so anything pushed during the gap appears
+  in the first render after.
+- **An interaction mid-deploy** may be slow or need a retry if it lands
+  on a task whose portal has not opened yet.
+
+Two caveats:
+
+- **Brief double-socket window.** While the new task is live and the old
+  is draining, both can hold a portal for the same display, and the
+  backend closes one of the two sockets. It resolves as the old task
+  exits; the 60s deregistration delay bounds it.
+- **Cold sprite cache.** A fresh container (deploy OR Spot interruption)
+  has no filmed sheets. Filming used to block the first publish for
+  40-90s; since 2026-09-01 both the calendar cells and the widget icons
+  defer it - the page publishes immediately and the animations arrive a
+  few seconds later.
+
+**Production should enable the deployment circuit breaker** (currently
+off in test, so a bad deploy stays up until someone rolls back):
+```
+aws ecs update-service --cluster <c> --service <s> \
+  --deployment-configuration \
+  "deploymentCircuitBreaker={enable=true,rollback=true},minimumHealthyPercent=100,maximumPercent=200"
+```
+
 ### 7.4 Rollback
 
 ```

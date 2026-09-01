@@ -361,8 +361,12 @@ Two caveats:
   defer it - the page publishes immediately and the animations arrive a
   few seconds later.
 
-**Production should enable the deployment circuit breaker** (currently
-off in test, so a bad deploy stays up until someone rolls back):
+**The deployment circuit breaker is ENABLED on test (2026-09-01) and
+must be enabled on production too.** With it on, ECS gives up on a
+deployment whose tasks keep failing to start or stay healthy and rolls
+back to the last good task definition on its own, instead of leaving a
+broken deploy up until someone notices. Jenkins still fails the build,
+so you get both the automatic recovery and the alert:
 ```
 aws ecs update-service --cluster <c> --service <s> \
   --deployment-configuration \

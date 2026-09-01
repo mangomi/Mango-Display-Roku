@@ -1329,18 +1329,23 @@ const cellScrollHandler = {
         c && c.date === w.date && String(c.widgetId) === String(w.widgetSettingId);
       let hidden = 0;
       const stuck = [];
-      /* One cell's marquee is not one element: the directive's scrollTarget
-       * is a jQuery COLLECTION - one .-m-scroll-c per event - and .css()/
-       * .animate() drive every one of them, while mmPaintedScroll publishes
-       * only scrollTarget[0]. Acting on that alone hid and moved the first
-       * event and left its siblings behind, which is the scrap that stayed
-       * baked under the sprite (Dave, 2026-09-02). Take the whole group. */
-      const grp = (c) => {
-        if (!c || !c.content) return [];
-        const par = c.content.parentElement;
-        const all = par ? [...par.querySelectorAll(".-m-scroll-c")] : [];
-        return all.length ? all : [c.content];
-      };
+      /* Blank the BOX, not its contents.
+       *
+       * Enumerating content elements kept leaking: first scrollTarget[0]
+       * alone, then every .-m-scroll-c under the parent - and a scrap still
+       * survived on some cells (Dave, 2026-09-02: "you need to rethink how
+       * you're doing that"). Any element the enumeration misses is an
+       * element left baked under the sprite, so the enumeration itself is
+       * the bug.
+       *
+       * The sprite's footprint IS c.content.parentElement - extract() takes
+       * the rect from it. Setting opacity on that one box blanks exactly
+       * what the sprite covers, whatever is inside it and however the
+       * portal restructures it. Opacity applies to the whole rendered
+       * subtree, so content that overflows the box and is clipped further
+       * out goes transparent too - which is precisely where the leftover
+       * scrap was living. */
+      const box = (c) => (c && c.content ? c.content.parentElement || c.content : null);
 
       wanted.forEach((w) => {
         let c = list[w.idx];
@@ -1360,33 +1365,26 @@ const cellScrollHandler = {
            * animation, and the portal's animation stylesheets touch both
            * of these. In the cascade an !important inline declaration
            * outranks an animation, a normal inline one does not. */
-          grp(c).forEach((el) => {
-            el.style.setProperty("visibility", "hidden", "important");
-            el.style.setProperty("opacity", "0", "important");
-          });
+          const b = box(c);
+          if (b) {
+            b.style.setProperty("visibility", "hidden", "important");
+            b.style.setProperty("opacity", "0", "important");
+          }
           hidden++;
-          const cs = getComputedStyle(c.content);
-          const b = c.content.getBoundingClientRect();
-          stuck.push(
-            c.date + " op=" + cs.opacity + " vis=" + cs.visibility +
-              " at " + Math.round(b.x) + "," + Math.round(b.y) + " " +
-              Math.round(b.width) + "x" + Math.round(b.height),
-          );
+          if (b && getComputedStyle(b).opacity !== "0") {
+            stuck.push(c.date + " op=" + getComputedStyle(b).opacity);
+          }
         }
       });
-      /* how many copies of the scrolling content exist, and where they are:
-       * if the page keeps a second copy for transitions we may be hiding
-       * one and photographing the other */
-      const all = [...document.querySelectorAll(".-m-scroll-c")].map((el) => {
-        const b = el.getBoundingClientRect();
-        return Math.round(b.x) + "," + Math.round(b.y) + " op=" + getComputedStyle(el).opacity;
-      });
-      return { hidden, stuck, listLen: list.length, all };
+      return { hidden, stuck, listLen: list.length };
     }, overlays.map((o) => ({ idx: o.idx, date: o.date, widgetSettingId: o.widgetSettingId })));
-    console.log(
-      "cellScroll hide: " + n.hidden + "/" + overlays.length + " [" + n.stuck.join(" | ") + "]" +
-        " list=" + n.listLen + " dom(" + n.all.length + ")=" + n.all.join(" | "),
-    );
+    if (n.hidden < overlays.length || n.stuck.length) {
+      console.log(
+        "cellScroll: blanked " + n.hidden + "/" + overlays.length + " box(es)" +
+          (n.stuck.length ? " - still opaque: " + n.stuck.join(", ") : "") +
+          " (list " + n.listLen + ")",
+      );
+    }
   },
 
   async captureAfter(page, frame, items, ctx) {
@@ -1478,12 +1476,9 @@ const cellScrollHandler = {
             window.jQuery(c.content).stop(true, false);
           } catch (e) {}
         }
-        const par0 = c.content.parentElement;
-        const all0 = par0 ? [...par0.querySelectorAll(".-m-scroll-c")] : [c.content];
-        (all0.length ? all0 : [c.content]).forEach((el) => {
-          el.style.visibility = "";
-          el.style.opacity = "";
-        });
+        const b0 = c.content.parentElement || c.content;
+        b0.style.visibility = "";
+        b0.style.opacity = "";
       });
     }, need.map((o) => o.idx));
 
@@ -1603,12 +1598,9 @@ const cellScrollHandler = {
         idxs.forEach((i) => {
           const c = list[i];
           if (c && c.content) {
-            const par = c.content.parentElement;
-            const all = par ? [...par.querySelectorAll(".-m-scroll-c")] : [c.content];
-            (all.length ? all : [c.content]).forEach((el) => {
-              el.style.setProperty("visibility", "hidden", "important");
-              el.style.setProperty("opacity", "0", "important");
-            });
+            const b = c.content.parentElement || c.content;
+            b.style.setProperty("visibility", "hidden", "important");
+            b.style.setProperty("opacity", "0", "important");
           }
         });
       }, need.filter((o) => !o.skip).map((o) => o.idx));

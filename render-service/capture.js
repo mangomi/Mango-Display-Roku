@@ -580,6 +580,24 @@ async function capturePage(page, opts) {
     outPath = out.replace(/\.jpe?g$/i, "") + ".png";
   }
 
+  /* Re-assert the hides immediately before the shutter. Between the
+   * handler pass and here the page has had a settle timeout, an effects
+   * pass and a targets pass to run digests in, and Angular re-rendering a
+   * widget hands back fresh DOM carrying none of the inline styles we
+   * set - which baked scrolling calendar cells into the very screenshot
+   * their sprite is meant to replace (Dave, 2026-09-02). Cheap: one
+   * evaluate per handler that hides anything. */
+  if (portalFrame && groups.length) {
+    for (const g of groups) {
+      if (!g.handler.hide || !g.items.length) continue;
+      try {
+        await g.handler.hide(portalFrame, g.items);
+      } catch (e) {
+        console.error("re-hide '" + g.handler.type + "' failed:", e.message);
+      }
+    }
+  }
+
   if (layered) {
     await page.screenshot({ path: outPath, type: "png", omitBackground: true });
   } else {

@@ -198,7 +198,7 @@ const clockHandler = {
           // textfill sets the fitted font-size on the SPAN, not the container
           const cs = getComputedStyle(span || el);
           return {
-            rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+            rect: { x: r.x, y: r.y, w: r.width, h: winH },
             textRect: { x: sr.x, y: sr.y, w: sr.width, h: sr.height },
             fontSizePx: parseFloat(cs.fontSize),
             fontWeight: cs.fontWeight,
@@ -580,7 +580,7 @@ const weatherIconHandler = {
           type: "gif",
           widgetSettingId: parseInt(m[1], 10),
           page: parseInt(m[2], 10),
-          rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+          rect: { x: r.x, y: r.y, w: r.width, h: winH },
           src: el.src,
           liveCapture: true,
         });
@@ -1095,9 +1095,23 @@ const CW_WARMUP_MS = 3000;
  * the LONGEST cell's cycle, not the sum - and each cell keeps its own
  * frame count, so a short cell loops quickly and a tall one slowly, just
  * as the portal does. */
-const CS_STEP_MS = 70;
-const CS_MAX_FRAMES = 160;
-/* Playback is 1:1 with the portal and must stay that way. The marquee is
+const CS_MAX_FRAMES = 240;
+/* The marquee is a constant-velocity scroller - speed = (boxHeight +
+ * innerHeight) * 35 for Slow, * 19 for Fast - so it always travels
+ * 1000/35 = 28.6 px/s or 1000/19 = 52.6 px/s whatever the cell's size.
+ * That is comfortable on a tablet at arm's length and too quick to read
+ * across a room, so a television plays it at 1/CS_TV_PACE of that
+ * (Dave, 2026-09-02). This is a deliberate divergence from the portal,
+ * not a correction - an earlier 1.6x fudge pretended to be the latter.
+ *
+ * Slowing down is done by filming MORE frames, not by holding each one
+ * longer: the frame count comes from the television's cycle, so each
+ * frame still shows for ~CS_PLAY_MS and the step between frames gets
+ * smaller. Holding 66 frames for 3x as long would drop it to 5fps and
+ * turn the scroll into visible stepping. */
+const CS_TV_PACE = 3;
+const CS_PLAY_MS = 110;
+/* The old 1:1 note, kept because the arithmetic still matters: the marquee is
  * a constant-velocity scroller - speed = (boxHeight + innerHeight) * 35
  * for Slow, * 19 for Fast - so it always travels 1000/35 = 28.6 px/s or
  * 1000/19 = 52.6 px/s whatever the cell's size. Filming durationMs over
@@ -1209,13 +1223,31 @@ const cellScrollHandler = {
         const r = win.getBoundingClientRect();
         if (r.width < 20 || r.height < 12) return;
         if (!(c.innerHeight > r.height)) return; /* fits after all */
+        /* The sized box is not always the clipping box. On the month grid
+         * the directive sets the height on the events container but puts
+         * overflow:hidden on a different ancestor, so the marquee stays
+         * visible for another pixel or two below that container - down to
+         * the day cell's own edge. Filming the container alone left that
+         * strip uncovered, showing the baked screenshot underneath as a
+         * frozen scrap of an event at the bottom of the cell (Dave,
+         * 2026-09-02). Film whatever actually clips it. */
+        const cellR = c.el.getBoundingClientRect();
+        let clipBottom = r.bottom;
+        for (let n = win; n && n !== document.body; n = n.parentElement) {
+          if (getComputedStyle(n).overflowY !== "visible") {
+            clipBottom = n.getBoundingClientRect().bottom;
+            break;
+          }
+        }
+        const bottom = Math.min(clipBottom, cellR.bottom, r.bottom + 8);
+        const winH = Math.max(r.height, bottom - r.y);
         out.push({
           type: "cellScroll",
           idx: i,
           page: pageIdx,
           date: c.date || null,
           widgetSettingId: c.widgetId || null,
-          rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+          rect: { x: r.x, y: r.y, w: r.width, h: winH },
           boxHeight: c.boxHeight,
           innerHeight: c.innerHeight,
           durationMs: c.durationMs,
@@ -1255,15 +1287,38 @@ const cellScrollHandler = {
     return keep;
   },
 
-  /* Only cells that will actually be covered get hidden. */
+  /* Only cells that will actually be covered get hidden.
+   *
+   * Resolved by identity, not by the index extract() saw: the marquee
+   * splices itself out of window.mmScrollCells and pushes itself back at
+   * the end of every cycle, so a stored index can be pointing at another
+   * cell - or at a detached one - a few hundred milliseconds later. That
+   * hid the wrong cells and left the real ones baked into the screenshot
+   * underneath their own sprite (Dave, 2026-09-02). */
   async hide(frame, overlays) {
-    await frame.evaluate((idxs) => {
+    const n = await frame.evaluate((wanted) => {
       const list = window.mmScrollCells || [];
-      idxs.forEach((i) => {
-        const c = list[i];
-        if (c && c.content) c.content.style.visibility = "hidden";
+      const same = (c, w) =>
+        c && c.date === w.date && String(c.widgetId) === String(w.widgetSettingId);
+      let hidden = 0;
+      wanted.forEach((w) => {
+        let c = list[w.idx];
+        if (!(w.date != null ? same(c, w) : c)) {
+          c = w.date != null ? list.find((x) => same(x, w)) : null;
+        }
+        if (c && c.content && document.documentElement.contains(c.content)) {
+          c.content.style.visibility = "hidden";
+          hidden++;
+        }
       });
-    }, overlays.map((o) => o.idx));
+      return hidden;
+    }, overlays.map((o) => ({ idx: o.idx, date: o.date, widgetSettingId: o.widgetSettingId })));
+    if (n < overlays.length) {
+      console.log(
+        "cellScroll: hid " + n + " of " + overlays.length +
+          " cell(s) - the rest stay baked under their sprite",
+      );
+    }
   },
 
   async captureAfter(page, frame, items, ctx) {
@@ -1281,6 +1336,8 @@ const cellScrollHandler = {
       o.frameMs = meta.frameMs;
       o.type = "gif"; /* the device already plays sprite sheets */
       delete o.liveCapture;
+      delete o._frames;
+      delete o._tvMs;
       delete o.idx;
       delete o.boxHeight;
       delete o.innerHeight;
@@ -1298,7 +1355,9 @@ const cellScrollHandler = {
     /* frames per cell = its own cycle at the shared step */
     const need = live.filter((o, i) => !hits[i]);
     need.forEach((o) => {
-      o._frames = Math.max(2, Math.min(CS_MAX_FRAMES, Math.round(o.durationMs / CS_STEP_MS)));
+      /* the television's own cycle, sampled at the playback rate */
+      o._tvMs = o.durationMs * CS_TV_PACE;
+      o._frames = Math.max(2, Math.min(CS_MAX_FRAMES, Math.round(o._tvMs / CS_PLAY_MS)));
     });
     const steps = Math.max(...need.map((o) => o._frames));
 
@@ -1369,7 +1428,19 @@ const cellScrollHandler = {
           .composite(frames.map((f, i) => ({ input: f, left: (i % cols) * dr.width, top: Math.floor(i / cols) * dr.height })))
           .png()
           .toBuffer();
+        /* key first: it must be computed from the rect the cache lookup in
+         * process() saw, not the snapped one below, or write and read
+         * disagree and every render re-films. */
         const key = csKey(o, ctx.outScale);
+        /* The crop is whole output pixels; the rect it is drawn at must be
+         * the same region or the two disagree by a fraction of a pixel and
+         * the background shows through at the edge. */
+        o.rect = {
+          x: dr.left / ctx.outScale,
+          y: dr.top / ctx.outScale,
+          w: dr.width / ctx.outScale,
+          h: dr.height / ctx.outScale,
+        };
         const tag = crypto.createHash("md5").update(sheetBuf).digest("hex").slice(0, 8);
         const fileName = "overlay_cs_" + key + "_" + tag + ".png";
         fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, fileName), sheetBuf);
@@ -1378,7 +1449,7 @@ const cellScrollHandler = {
           frameCount: frames.length,
           cols,
           rows,
-          frameMs: Math.max(40, Math.round(o.durationMs / frames.length)),
+          frameMs: Math.max(40, Math.round(o._tvMs / frames.length)),
         };
         fsHandlers.writeFileSync(
           pathHandlers.join(ctx.outDir, fileName.replace(/\.png$/, ".json")),
@@ -1386,8 +1457,10 @@ const cellScrollHandler = {
         );
         console.log(
           "cellScroll sheet: " + o.date + " " + frames.length + "f @" + meta.frameMs + "ms (" +
-            o.speed + ", cycle " + Math.round(o.durationMs / 100) / 10 + "s, " +
-            Math.round((10 * (o.boxHeight + o.innerHeight)) / (o.durationMs / 1000)) / 10 + " px/s)",
+            o.speed + ", portal " + Math.round(o.durationMs / 100) / 10 + "s -> tv " +
+            Math.round(o._tvMs / 100) / 10 + "s, " +
+            Math.round((10 * (o.boxHeight + o.innerHeight)) / (o._tvMs / 1000)) / 10 + " px/s, " +
+            Math.round((100 * (o.boxHeight + o.innerHeight)) / frames.length) / 100 + "px/frame)",
         );
         fill(o, meta);
       } catch (e) {
@@ -1436,7 +1509,7 @@ const cellWeatherHandler = {
         out.push({
           type: "gif",
           cellWeather: m[1],
-          rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+          rect: { x: r.x, y: r.y, w: r.width, h: winH },
           liveCapture: true,
         });
       });
@@ -1783,7 +1856,7 @@ const slideshowHandler = {
               type: "slideshow",
               widgetSettingId: d.widgetId,
               page: parseInt(pg, 10),
-              rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+              rect: { x: r.x, y: r.y, w: r.width, h: winH },
               images: (d.images || []).slice(0, maxImages),
               intervalSeconds: parseInt(iws.imageDelayTime, 10) || 60,
               cropToFill: iws.isCropToFill === true,
@@ -1878,7 +1951,7 @@ const countdownHandler = {
           const r = value.getBoundingClientRect();
           const cs = getComputedStyle(value);
           elements[section] = {
-            rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+            rect: { x: r.x, y: r.y, w: r.width, h: winH },
             fontSizePx: parseFloat(cs.fontSize),
             bold: parseInt(cs.fontWeight, 10) >= 600,
             align: cs.textAlign,

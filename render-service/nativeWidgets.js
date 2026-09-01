@@ -1081,50 +1081,61 @@ const cellScrollProbe = {
 
   async extract(frame) {
     const found = await frame.evaluate(() => {
-      const out = [];
-      document.querySelectorAll(".-m-scroll-c").forEach((content) => {
-        /* the scroll box is the element the directive was applied to */
-        let box = content.closest("[mango-mirror-scroll], [data-mango-mirror-scroll]");
-        if (!box) {
-          const p = content.closest(".-m-scroll-p");
-          box = p ? p.parentElement : null;
-        }
-        if (!box) return;
-        const dateAttr =
-          box.getAttribute("date") || box.getAttribute("data-date") || null;
+      /* Walk every day cell the calendar rendered, not just the ones the
+       * scroll directive tagged - we need to see the ones it MISSED too.
+       * A cell is identified by its date attribute; the directive marks
+       * the content it animates with -m-scroll-c when it engages. */
+      const cells = new Map(); /* box element -> record (dedupes) */
+      const consider = (box) => {
+        if (!box || cells.has(box)) return;
+        const date =
+          box.getAttribute("date") ||
+          box.getAttribute("data-date") ||
+          (box.closest("[data-date]") && box.closest("[data-date]").getAttribute("data-date"));
+        if (!date) return;
+        const r = box.getBoundingClientRect();
+        if (r.width < 10 || r.height < 10) return;
         const first = box.firstElementChild;
-        const dateRow = first && first.children ? first.children[0] : null;
-        const events = first && first.children ? first.children[1] : null;
-        const boxRect = box.getBoundingClientRect();
-        if (boxRect.width < 10 || boxRect.height < 10) return;
-        out.push({
-          date: dateAttr,
-          isDateCell: dateAttr !== null,
-          boxRect: { x: Math.round(boxRect.x), y: Math.round(boxRect.y), w: Math.round(boxRect.width), h: Math.round(boxRect.height) },
-          dateRowH: dateRow ? Math.round(dateRow.getBoundingClientRect().height) : null,
-          eventsScrollH: events ? events.scrollHeight : null,
-          contentScrollH: content.scrollHeight,
-          contentTop: getComputedStyle(content).top,
-          wrapperClasses: (box.className || "").toString().split(/\s+/).filter((c) => c.indexOf("-mangoMirrorScroll") === 0),
+        const kids = first && first.children ? first.children : null;
+        const dateRow = kids && kids[0] ? kids[0] : null;
+        const events = kids && kids[1] ? kids[1] : null;
+        const content = box.querySelector(".-m-scroll-c");
+        const visible = dateRow
+          ? Math.round(r.height - dateRow.getBoundingClientRect().height - 1)
+          : Math.round(r.height);
+        const inner = events ? events.scrollHeight : content ? content.scrollHeight : 0;
+        cells.set(box, {
+          date,
+          tagged: !!content,
+          visible,
+          inner,
+          overflows: inner > visible,
+          top: content ? getComputedStyle(content).top : null,
+          rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
         });
+      };
+
+      document.querySelectorAll(".-m-scroll-c").forEach((c) => {
+        consider(c.closest("[mango-mirror-scroll]") || c.closest("[date]") || (c.closest(".-m-scroll-p") || {}).parentElement);
       });
-      return out;
+      document.querySelectorAll("[mango-mirror-scroll][date], [date][mango-mirror-scroll]").forEach(consider);
+      document.querySelectorAll(".fc-daygrid-day[data-date]").forEach(consider);
+
+      return [...cells.values()];
     });
 
     if (found.length) {
-      console.log("cellScroll probe: " + found.length + " overflowing cell(s)");
-      found.slice(0, 6).forEach((c) => {
-        const box = c.boxRect;
-        const inner = c.eventsScrollH || c.contentScrollH;
-        const visible = c.dateRowH ? box.h - c.dateRowH - 1 : box.h;
-        console.log(
-          "  date=" + c.date + " rect=" + box.w + "x" + box.h + "@" + box.x + "," + box.y +
-            " dateRow=" + c.dateRowH + " visible=" + visible + " inner=" + inner +
-            " top=" + c.contentTop + " wrapper=" + (c.wrapperClasses[0] || "-"),
-        );
-      });
+      const over = found.filter((c) => c.overflows);
+      const tagged = found.filter((c) => c.tagged);
+      console.log(
+        "cellScroll probe: " + found.length + " day cell(s), " + over.length +
+          " overflow, " + tagged.length + " tagged by the directive",
+      );
+      console.log("  overflowing: " + (over.map((c) => c.date.slice(5) + "(" + c.inner + "/" + c.visible + (c.tagged ? ",tagged,top=" + c.top : ",UNTAGGED") + ")").join(" ") || "none"));
+      const missed = found.filter((c) => c.overflows && !c.tagged);
+      if (missed.length) console.log("  MISSED by the directive: " + missed.map((c) => c.date).join(" "));
     }
-    return []; /* detection only - emits nothing */
+    return [];
   },
 
   async hide() {},

@@ -1097,6 +1097,11 @@ const CW_WARMUP_MS = 3000;
  * as the portal does. */
 const CS_STEP_MS = 70;
 const CS_MAX_FRAMES = 160;
+/* The portal's own pace reads as too fast on a television (Dave,
+ * 2026-09-02): what is comfortable on a tablet at arm's length is not
+ * comfortable at three metres. The frames are the portal's, played
+ * slower - so the motion is identical, just calmer. */
+const CS_SLOWDOWN = 1.6;
 
 function csKey(o, outScale) {
   return crypto
@@ -1142,20 +1147,46 @@ const cellScrollHandler = {
       const list = window.mmScrollCells || [];
       const out = [];
       /* Which page these cells belong to. Every page's DOM exists at
-       * once, so an overlay with no page is kept for ALL of them - which
+       * once - hidden pages are stacked, not display:none - so neither
+       * "what is visible" nor "the page being captured" identifies the
+       * owner, and an overlay with no page is kept for ALL pages, which
        * put scrolling calendar events on top of unrelated pages
-       * (2026-09-02). Captures step page by page, so the page the portal
-       * is showing right now owns whatever is visible. */
-      let pageIdx = 0;
+       * (2026-09-02). Ask the scope which page holds the widget, the way
+       * the other handlers read it out of the widget's own DOM ids. */
+      let groups = null;
       try {
-        if (window.mmScreenshot && window.mmScreenshot.pageIndex) {
-          pageIdx = window.mmScreenshot.pageIndex();
+        const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
+        for (const r of roots) {
+          if (!r || !window.angular) continue;
+          const inj = window.angular.element(r).injector();
+          if (!inj) continue;
+          const walk = (sc) => {
+            if (!sc || groups) return;
+            if (sc.groups && sc.groups.length) {
+              groups = sc.groups;
+              return;
+            }
+            walk(sc.$$childHead);
+            walk(sc.$$nextSibling);
+          };
+          walk(inj.get("$rootScope"));
+          break;
         }
       } catch (e) {}
+      const pageOfWidget = (widgetId) => {
+        if (!groups || widgetId == null) return null;
+        for (let p = 0; p < groups.length; p++) {
+          const widgets = (groups[p] && groups[p].widgets) || [];
+          for (const w of widgets) {
+            if (String(w.widgetSettingId) === String(widgetId)) return p;
+          }
+        }
+        return null;
+      };
       list.forEach((c, i) => {
         if (!c.el || !c.content || !document.documentElement.contains(c.el)) return;
-        /* hidden pages keep their layout, so measure visibility too */
-        if (c.el.offsetParent === null) return;
+        const pageIdx = pageOfWidget(c.widgetId);
+        if (pageIdx === null) return; /* cannot place it - never guess */
         /* the window the content scrolls inside: the directive sizes this
          * parent to boxHeight when a cell overflows */
         const win = c.content.parentElement;
@@ -1326,7 +1357,7 @@ const cellScrollHandler = {
           frameCount: frames.length,
           cols,
           rows,
-          frameMs: Math.max(40, Math.round(o.durationMs / frames.length)),
+          frameMs: Math.max(40, Math.round((o.durationMs * CS_SLOWDOWN) / frames.length)),
         };
         fsHandlers.writeFileSync(
           pathHandlers.join(ctx.outDir, fileName.replace(/\.png$/, ".json")),
@@ -1334,7 +1365,8 @@ const cellScrollHandler = {
         );
         console.log(
           "cellScroll sheet: " + o.date + " " + frames.length + "f @" + meta.frameMs + "ms (" +
-            o.speed + ", cycle " + Math.round(o.durationMs / 100) / 10 + "s)",
+            o.speed + ", portal " + Math.round(o.durationMs / 100) / 10 + "s -> tv " +
+            Math.round((o.durationMs * CS_SLOWDOWN) / 100) / 10 + "s)",
         );
         fill(o, meta);
       } catch (e) {

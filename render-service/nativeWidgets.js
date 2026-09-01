@@ -1307,7 +1307,16 @@ const cellScrollHandler = {
           c = w.date != null ? list.find((x) => same(x, w)) : null;
         }
         if (c && c.content && document.documentElement.contains(c.content)) {
+          /* opacity, not visibility alone: visibility is inherited, so any
+           * descendant carrying visibility:visible - and the portal's
+           * animation CSS sets that on a lot of things - re-shows itself
+           * through a hidden ancestor. hide() then reported success while
+           * the events stayed baked in the screenshot (Dave, 2026-09-02).
+           * Opacity applies to the whole subtree and cannot be undone from
+           * inside it. Neither affects layout, so the marquee we are about
+           * to film is unmoved. */
           c.content.style.visibility = "hidden";
+          c.content.style.opacity = "0";
           hidden++;
         }
       });
@@ -1374,6 +1383,7 @@ const cellScrollHandler = {
           } catch (e) {}
         }
         c.content.style.visibility = "";
+        c.content.style.opacity = "";
       });
     });
 
@@ -1479,7 +1489,10 @@ const cellScrollHandler = {
       });
       idxs.forEach((i) => {
         const c = list[i];
-        if (c && c.content) c.content.style.visibility = "hidden";
+        if (c && c.content) {
+          c.content.style.visibility = "hidden";
+          c.content.style.opacity = "0";
+        }
       });
     }, need.filter((o) => !o.skip).map((o) => o.idx));
 

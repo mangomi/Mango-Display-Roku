@@ -1095,7 +1095,12 @@ const CW_WARMUP_MS = 3000;
  * the LONGEST cell's cycle, not the sum - and each cell keeps its own
  * frame count, so a short cell loops quickly and a tall one slowly, just
  * as the portal does. */
-const CS_MAX_FRAMES = 240;
+/* At this pace the frame count would run past 500 if it were purely
+ * tvMs/CS_PLAY_MS. Cap it: the step is sub-pixel well before then, so the
+ * extra frames buy no smoothness and cost filming time and sheet size.
+ * 220 frames leaves ~0.4 output px per frame, which antialiasing carries
+ * as a smooth crawl rather than visible stepping. */
+const CS_MAX_FRAMES = 220;
 /* The marquee is a constant-velocity scroller - speed = (boxHeight +
  * innerHeight) * 35 for Slow, * 19 for Fast - so it always travels
  * 1000/35 = 28.6 px/s or 1000/19 = 52.6 px/s whatever the cell's size.
@@ -1109,7 +1114,17 @@ const CS_MAX_FRAMES = 240;
  * frame still shows for ~CS_PLAY_MS and the step between frames gets
  * smaller. Holding 66 frames for 3x as long would drop it to 5fps and
  * turn the scroll into visible stepping. */
-const CS_TV_PACE = 3;
+/* THE knob. It multiplies the portal's own cycle, and the portal has
+ * already folded Fast vs Slow into that (speed = travel * 19 for Fast,
+ * * 35 for Slow), so one number covers both modes and keeps their ratio:
+ *
+ *   Slow  28.6 px/s / 12 = 2.4 px/s
+ *   Fast  52.6 px/s / 12 = 4.4 px/s
+ *
+ * 3 was still too quick to read across a room (Dave, 2026-09-02: "make it
+ * like a quarter of the current speed"). A typical month cell - 132px of
+ * travel - now takes ~55s to come round on Slow. */
+const CS_TV_PACE = 12;
 const CS_PLAY_MS = 110;
 /* The old 1:1 note, kept because the arithmetic still matters: the marquee is
  * a constant-velocity scroller - speed = (boxHeight + innerHeight) * 35

@@ -1694,7 +1694,6 @@ const cellWeatherHandler = {
       o.stripFile = c.stripFile;
       /* a cached sheet was cropped from a snapped rect - reuse it, or the
        * sprite is drawn at a different box than it was filmed from */
-      if (meta.rect) o.rect = { ...meta.rect };
       o.frameW = o.rect.w;
       o.frameH = o.rect.h;
       o.frameCount = c.frameCount;
@@ -1893,7 +1892,6 @@ const cellWeatherHandler = {
         }
         const meta = {
           stripFile: fileName,
-          rect: { ...o.rect },
           frameCount: frames.length,
           cols,
           rows,

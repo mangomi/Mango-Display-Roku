@@ -1457,7 +1457,11 @@ const slideshowHandler = {
   type: "slideshow",
 
   async extract(frame) {
-    const raw = await frame.evaluate(() => {
+    /* the cap is a Node constant: it must be PASSED IN, not referenced
+     * inside the page (2026-09-02: referencing it threw
+     * "MAX_ROTATION_IMAGES is not defined" in the browser and killed
+     * the whole handler) */
+    const raw = await frame.evaluate((maxImages) => {
       if (!window.angular) return [];
       const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
       let list = null;
@@ -1492,7 +1496,7 @@ const slideshowHandler = {
               widgetSettingId: d.widgetId,
               page: parseInt(pg, 10),
               rect: { x: r.x, y: r.y, w: r.width, h: r.height },
-              images: (d.images || []).slice(0, MAX_ROTATION_IMAGES),
+              images: (d.images || []).slice(0, maxImages),
               intervalSeconds: parseInt(iws.imageDelayTime, 10) || 60,
               cropToFill: iws.isCropToFill === true,
               transition: iws.transition || "fade",
@@ -1501,7 +1505,7 @@ const slideshowHandler = {
         } catch (e) {}
       });
       return out;
-    });
+    }, MAX_ROTATION_IMAGES);
     /* One photo counts. BLOCKED_MEDIA stops the portal loading ANY
      * user photo, so a widget skipped here is not "left baked" - it is
      * left EMPTY on the TV. Single-image widgets used to fall through
@@ -1639,7 +1643,7 @@ const backgroundHandler = {
   type: "background",
 
   async extract(frame) {
-    return await frame.evaluate(() => {
+    return await frame.evaluate((maxImages) => {
       let sc = null;
       const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
       for (const r of roots) {
@@ -1701,7 +1705,7 @@ const backgroundHandler = {
           // page-level, not a widget - synthetic id keeps state keys unique
           widgetSettingId: -1,
           page: pageIdx,
-          images: images.slice(0, MAX_ROTATION_IMAGES),
+          images: images.slice(0, maxImages),
           intervalSeconds: parseInt(obj.imageDelayTime, 10) || 60,
           cropToFill: obj.isCropToFill !== false,
           transition: obj.transition || "fade",
@@ -1709,7 +1713,7 @@ const backgroundHandler = {
           pageColor,
         },
       ];
-    });
+    }, MAX_ROTATION_IMAGES);
   },
 
   async hide(frame) {

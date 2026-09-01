@@ -300,3 +300,62 @@ Each of these cost real debugging. Do not re-introduce them.
    `display_pN.jpg` cost an hour of chasing a fixed bug on 2026-08-23 —
    and `publishableFiles()` still uploads such orphans. Consider pruning
    `display_p*.{png,jpg}` not named by any current manifest at publish.
+
+## Month-cell scrolling on painted displays (investigated 2026-09-02)
+
+**Status: designed, not built. Awaiting Dave's go-ahead.**
+
+The problem: month view fits only 2-3 events per cell. Other platforms
+scroll the overflow; painted displays cannot (a screenshot catches it
+mid-scroll), so scrolling is forced Off and users see "+2 more".
+
+### How the portal's scrolling actually works
+
+`WebContent/js/directives/mangoMirrorScroll.js` is a **jQuery marquee,
+not a scroll container**: the inner element is positioned `relative` and
+animated `top: boxHeight -> top: -innerHeight`, linear, looping.
+
+- Speeds are derived: `totalHeight * 19`ms (Fast), `* 35`ms (Slow),
+  where `totalHeight = boxHeight + innerHeight`. `Off` parks `top: 0`.
+- The directive **removes itself when content fits**
+  (`boxHeight >= innerHeight`), so overflowing cells are self-
+  identifying - the portal has already done that measurement.
+- For date cells (`attrs.date`) it excludes the first child (the date
+  number) and measures `firstChild.children[1]` - the events list only.
+- The wrapper classes and heights are applied BEFORE the `Off` check,
+  so the structure we need exists even with scrolling disabled.
+
+### The approach
+
+Because `top` is a CSS property we set directly, we can film the real
+marquee rather than settle for discrete pages:
+
+1. Capture with scrolling parked (`top: 0`) and **publish immediately** -
+   the user sees their events from the top within a second.
+2. Deferred pass (the publish-first machinery from 2026-09-01): for each
+   overflowing cell, step `top` across one cycle. All cells advance on a
+   SHARED screenshot timeline - set every cell's `top` for frame k, take
+   one screenshot, crop them all - so cost is ~60-90 screenshots
+   (5-8s) regardless of cell count. Each cell keeps its own frame count,
+   so short cells loop faster than tall ones.
+3. Ship one small sheet per cell, overlaying the events area only. The
+   date number and weather strip stay baked.
+4. Hide the baked events ONLY for cells that got a sheet (the weather-
+   icon lesson: hide-then-fail leaves a blank patch). Anything that
+   fails falls back to today's static behaviour.
+
+Likely **no device changes**: a scrolling cell is a sprite-sheet overlay
+with its own frameMs, which both clients already play.
+
+### Consequence worth remembering
+
+If this ships, the **Scrolling option can be re-enabled for TV devices**
+in the webapp (PR #142 currently forces it Off for RK/ATV, because we
+could not support it). The same directive drives chores and to-do lists,
+so those may gain it back too.
+
+### Prove first
+
+One throwaway experiment on a single cell: is a cell crop legible as a
+sprite at Roku's output scale, and how does the loop seam read when
+content wraps from bottom to top?

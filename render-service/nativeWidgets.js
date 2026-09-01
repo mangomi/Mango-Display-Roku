@@ -1146,6 +1146,7 @@ const cellScrollHandler = {
     const cells = await frame.evaluate(() => {
       const list = window.mmScrollCells || [];
       const out = [];
+      const unplaced = [];
       /* Which page these cells belong to. Every page's DOM exists at
        * once - hidden pages are stacked, not display:none - so neither
        * "what is visible" nor "the page being captured" identifies the
@@ -1173,12 +1174,18 @@ const cellScrollHandler = {
           break;
         }
       } catch (e) {}
-      const pageOfWidget = (widgetId) => {
-        if (!groups || widgetId == null) return null;
+      /* The directive's id is the calendar's DOM id, not a bare setting
+       * id: "calendar_592345", "mealplan_...", "todo_<id>_<index>",
+       * "chores_<id>_<label>_<index>". Comparing it raw matched nothing
+       * and silently dropped every cell (2026-09-02). */
+      const pageOfWidget = (rawId) => {
+        if (!groups || rawId == null) return null;
+        const m = String(rawId).match(/_(\d+)/);
+        const wid = m ? m[1] : String(rawId);
         for (let p = 0; p < groups.length; p++) {
           const widgets = (groups[p] && groups[p].widgets) || [];
           for (const w of widgets) {
-            if (String(w.widgetSettingId) === String(widgetId)) return p;
+            if (String(w.widgetSettingId) === wid) return p;
           }
         }
         return null;
@@ -1186,7 +1193,10 @@ const cellScrollHandler = {
       list.forEach((c, i) => {
         if (!c.el || !c.content || !document.documentElement.contains(c.el)) return;
         const pageIdx = pageOfWidget(c.widgetId);
-        if (pageIdx === null) return; /* cannot place it - never guess */
+        if (pageIdx === null) {
+          unplaced.push(String(c.widgetId));
+          return; /* cannot place it - never guess, it would land on every page */
+        }
         /* the window the content scrolls inside: the directive sizes this
          * parent to boxHeight when a cell overflows */
         const win = c.content.parentElement;
@@ -1208,9 +1218,15 @@ const cellScrollHandler = {
           liveCapture: true,
         });
       });
-      return out;
+      return { out, unplaced, registered: list.length };
     });
-    return cells;
+    if (cells.unplaced.length) {
+      console.log(
+        "cellScroll: " + cells.unplaced.length + " cell(s) could not be placed on a page (" +
+          [...new Set(cells.unplaced)].join(",") + ") - skipped",
+      );
+    }
+    return cells.out;
   },
 
   /* Publish first, film after: an uncached cell is dropped here, and

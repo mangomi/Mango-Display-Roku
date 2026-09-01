@@ -154,17 +154,34 @@ const truthy = (v) => v === true || v === 1 || v === "true" || v === "1";
 // The backend is the authority on which displays exist. The same
 // unauthenticated GET the device itself pairs with; isActive means a
 // person claimed this code in the webapp.
+/* Last good backend record per display. No display is pinned by env vars
+ * any more, so every worker is built from this call - which makes the API
+ * being briefly unreachable able to take a working display down. It must
+ * not: an unreachable API is not a verdict, so we answer from the last
+ * record we were given and let the next poll try again. */
+const lastKnownDisplay = new Map();
+
 async function validateDisplay(deviceId) {
   const r = await httpGetJson(ENV.apiBase + "mirrors/deviceId/" + encodeURIComponent(deviceId));
-  if (!r || !r.json || !r.json.object) return null;
+  if (!r) {
+    const cached = lastKnownDisplay.get(deviceId);
+    if (cached) {
+      log("api unreachable - using last known record for", deviceId);
+      return cached;
+    }
+    return { unreachable: true };
+  }
+  if (!r.json || !r.json.object) return null;
   const o = r.json.object;
   if (!truthy(o.isActive)) return null;
-  return {
+  const rec = {
     major: parseInt(o.major, 10),
     minor: parseInt(o.minor, 10),
     w: parseInt(o.deviceWidth, 10) || 0,
     h: parseInt(o.deviceHeight, 10) || 0,
   };
+  lastKnownDisplay.set(deviceId, rec);
+  return rec;
 }
 
 function identityFrom(u) {
@@ -230,6 +247,11 @@ async function getOrCreateWorker(id) {
 
   const p = (async () => {
     const known = await validateDisplay(id.device);
+    /* unreachable is not "unknown": hold no grudge, the device polls again */
+    if (known && known.unreachable) {
+      log("api unreachable - deferring", id.device, "to its next poll");
+      return null;
+    }
     if (!known || !(known.major > 0) || !(known.minor > 0)) {
       log("refused unknown display:", id.device);
       rejected.set(id.device, Date.now() + REJECT_HOLD_MS);
@@ -266,6 +288,15 @@ async function startLegacyWorker() {
     log("no DISPLAY_DEVICE_ID: fleet starts empty, workers come from device requests");
     return;
   }
+  /* Retired 2026-09-02: every fielded channel sends identity, so a display
+   * now reports its own resolution and the backend record breaks ties.
+   * Pinning one here forced a fleet-wide DISPLAY_OUT_W/H on it instead -
+   * which had the Roku rendering 1280x720 for an fhd graphics plane while
+   * the Apple TV, on the identity path, was already native 1920x1080. The
+   * block stays as an emergency re-pin; setting the env vars brings it
+   * back. */
+  log("DISPLAY_DEVICE_ID is set: pinning", deviceId, "at", env("DISPLAY_OUT_W", "1920") + "x" + env("DISPLAY_OUT_H", "1080"),
+      "- this overrides what the display reports about itself");
   legacyWorker = await startWorker({
     deviceId,
     major: parseInt(env("DISPLAY_MAJOR", "1"), 10),

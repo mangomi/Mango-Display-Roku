@@ -1141,8 +1141,21 @@ const cellScrollHandler = {
     const cells = await frame.evaluate(() => {
       const list = window.mmScrollCells || [];
       const out = [];
+      /* Which page these cells belong to. Every page's DOM exists at
+       * once, so an overlay with no page is kept for ALL of them - which
+       * put scrolling calendar events on top of unrelated pages
+       * (2026-09-02). Captures step page by page, so the page the portal
+       * is showing right now owns whatever is visible. */
+      let pageIdx = 0;
+      try {
+        if (window.mmScreenshot && window.mmScreenshot.pageIndex) {
+          pageIdx = window.mmScreenshot.pageIndex();
+        }
+      } catch (e) {}
       list.forEach((c, i) => {
         if (!c.el || !c.content || !document.documentElement.contains(c.el)) return;
+        /* hidden pages keep their layout, so measure visibility too */
+        if (c.el.offsetParent === null) return;
         /* the window the content scrolls inside: the directive sizes this
          * parent to boxHeight when a cell overflows */
         const win = c.content.parentElement;
@@ -1153,6 +1166,7 @@ const cellScrollHandler = {
         out.push({
           type: "cellScroll",
           idx: i,
+          page: pageIdx,
           date: c.date || null,
           widgetSettingId: c.widgetId || null,
           rect: { x: r.x, y: r.y, w: r.width, h: r.height },

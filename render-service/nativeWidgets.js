@@ -1301,6 +1301,7 @@ const cellScrollHandler = {
       const same = (c, w) =>
         c && c.date === w.date && String(c.widgetId) === String(w.widgetSettingId);
       let hidden = 0;
+      const stuck = [];
       wanted.forEach((w) => {
         let c = list[w.idx];
         if (!(w.date != null ? same(c, w) : c)) {
@@ -1315,17 +1316,24 @@ const cellScrollHandler = {
            * Opacity applies to the whole subtree and cannot be undone from
            * inside it. Neither affects layout, so the marquee we are about
            * to film is unmoved. */
-          c.content.style.visibility = "hidden";
-          c.content.style.opacity = "0";
+          /* !important: a plain inline declaration loses to a running CSS
+           * animation, and the portal's animation stylesheets touch both
+           * of these. In the cascade an !important inline declaration
+           * outranks an animation, a normal inline one does not. */
+          c.content.style.setProperty("visibility", "hidden", "important");
+          c.content.style.setProperty("opacity", "0", "important");
           hidden++;
+          const cs = getComputedStyle(c.content);
+          if (cs.opacity !== "0") stuck.push(c.date + ":op=" + cs.opacity + ",vis=" + cs.visibility);
         }
       });
-      return hidden;
+      return { hidden, stuck, listLen: list.length, inDom: document.querySelectorAll(".-m-scroll-c").length };
     }, overlays.map((o) => ({ idx: o.idx, date: o.date, widgetSettingId: o.widgetSettingId })));
-    if (n < overlays.length) {
+    if (n.hidden < overlays.length || n.stuck.length) {
       console.log(
-        "cellScroll: hid " + n + " of " + overlays.length +
-          " cell(s) - the rest stay baked under their sprite",
+        "cellScroll: hid " + n.hidden + " of " + overlays.length + " cell(s)" +
+          (n.stuck.length ? " - refused to go transparent: " + n.stuck.join(" ") : "") +
+          " (list " + n.listLen + ", .-m-scroll-c in dom " + n.inDom + ")",
       );
     }
   },
@@ -1337,6 +1345,9 @@ const cellScrollHandler = {
 
     const fill = (o, meta) => {
       o.stripFile = meta.stripFile;
+      /* a cached sheet was cropped from a snapped rect - reuse it, or the
+       * sprite is drawn at a different box than it was filmed from */
+      if (meta.rect) o.rect = { ...meta.rect };
       o.frameW = o.rect.w;
       o.frameH = o.rect.h;
       o.frameCount = meta.frameCount;
@@ -1456,6 +1467,7 @@ const cellScrollHandler = {
         fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, fileName), sheetBuf);
         const meta = {
           stripFile: fileName,
+          rect: { ...o.rect },
           frameCount: frames.length,
           cols,
           rows,
@@ -1582,6 +1594,9 @@ const cellWeatherHandler = {
     };
     const fill = (o, c) => {
       o.stripFile = c.stripFile;
+      /* a cached sheet was cropped from a snapped rect - reuse it, or the
+       * sprite is drawn at a different box than it was filmed from */
+      if (meta.rect) o.rect = { ...meta.rect };
       o.frameW = o.rect.w;
       o.frameH = o.rect.h;
       o.frameCount = c.frameCount;
@@ -1780,6 +1795,7 @@ const cellWeatherHandler = {
         }
         const meta = {
           stripFile: fileName,
+          rect: { ...o.rect },
           frameCount: frames.length,
           cols,
           rows,

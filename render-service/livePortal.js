@@ -236,6 +236,7 @@ class LivePortal {
     const tags = [
       { id: "mm-capture-hygiene", css: nw.effectHideCss() },
       { id: "mm-weather-settle", css: nw.weatherSettleCss() },
+      { id: "mm-scroll-park", css: nw.scrollParkCss() },
     ];
     await this.page.addInitScript((list) => {
       const add = () => {

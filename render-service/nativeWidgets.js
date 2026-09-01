@@ -1076,69 +1076,279 @@ const CW_WARMUP_MS = 3000;
  * The directive tags the content it animates with `-m-scroll-c` and its
  * parent with `-m-scroll-p`, and only when the cell actually overflows -
  * which makes those classes a precise "needs scrolling" marker. */
-const cellScrollProbe = {
-  type: "cellScrollProbe",
+/* ---- month-cell scrolling ---------------------------------------------
+ * A TV shows a photograph of the portal, so it cannot scroll. Month cells
+ * holding more events than fit are MARQUEED there
+ * (js/directives/mangoMirrorScroll.js animates top from +boxHeight to
+ * -innerHeight, linear, looping) - a still lands at a random point in
+ * that cycle, and at the start and end of every cycle the content sits
+ * entirely outside its window, so the cell photographs EMPTY.
+ *
+ * So we film the marquee and hand the device a sprite that moves
+ * identically. The portal tells us which cells scroll and how, on
+ * window.mmScrollCells - the directive publishes it, because it already
+ * computes the geometry and the duration; inferring that from outside
+ * missed cells in testing and would break the next time that file moves.
+ *
+ * All cells advance on ONE shared screenshot timeline: set every cell's
+ * top for frame k, take one screenshot, crop them all. Cost is therefore
+ * the LONGEST cell's cycle, not the sum - and each cell keeps its own
+ * frame count, so a short cell loops quickly and a tall one slowly, just
+ * as the portal does. */
+const CS_STEP_MS = 70;
+const CS_MAX_FRAMES = 160;
+
+function csKey(o, outScale) {
+  return crypto
+    .createHash("md5")
+    .update(
+      [
+        o.date || "",
+        o.widgetId || "",
+        Math.round(o.rect.w * outScale),
+        Math.round(o.rect.h * outScale),
+        Math.round(o.innerHeight),
+        Math.round(o.durationMs),
+      ].join("|"),
+    )
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function csCachedSheet(o, outDir, outScale) {
+  const key = csKey(o, outScale);
+  let metas;
+  try {
+    metas = fsHandlers
+      .readdirSync(outDir)
+      .filter((f) => f.startsWith("overlay_cs_" + key + "_") && f.endsWith(".json"));
+  } catch (e) {
+    return null;
+  }
+  for (const m of metas) {
+    try {
+      const c = JSON.parse(fsHandlers.readFileSync(pathHandlers.join(outDir, m), "utf8"));
+      if (c.stripFile && fsHandlers.existsSync(pathHandlers.join(outDir, c.stripFile))) return c;
+    } catch (e) {}
+  }
+  return null;
+}
+
+const cellScrollHandler = {
+  type: "cellScroll",
 
   async extract(frame) {
-    const found = await frame.evaluate(() => {
-      /* Walk every day cell the calendar rendered, not just the ones the
-       * scroll directive tagged - we need to see the ones it MISSED too.
-       * A cell is identified by its date attribute; the directive marks
-       * the content it animates with -m-scroll-c when it engages. */
-      const cells = new Map(); /* box element -> record (dedupes) */
-      const consider = (box) => {
-        if (!box || cells.has(box)) return;
-        const date =
-          box.getAttribute("date") ||
-          box.getAttribute("data-date") ||
-          (box.closest("[data-date]") && box.closest("[data-date]").getAttribute("data-date"));
-        if (!date) return;
-        const r = box.getBoundingClientRect();
-        if (r.width < 10 || r.height < 10) return;
-        const first = box.firstElementChild;
-        const kids = first && first.children ? first.children : null;
-        const dateRow = kids && kids[0] ? kids[0] : null;
-        const events = kids && kids[1] ? kids[1] : null;
-        const content = box.querySelector(".-m-scroll-c");
-        const visible = dateRow
-          ? Math.round(r.height - dateRow.getBoundingClientRect().height - 1)
-          : Math.round(r.height);
-        const inner = events ? events.scrollHeight : content ? content.scrollHeight : 0;
-        cells.set(box, {
-          date,
-          tagged: !!content,
-          visible,
-          inner,
-          overflows: inner > visible,
-          top: content ? getComputedStyle(content).top : null,
-          rect: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) },
+    const cells = await frame.evaluate(() => {
+      const list = window.mmScrollCells || [];
+      const out = [];
+      list.forEach((c, i) => {
+        if (!c.el || !c.content || !document.documentElement.contains(c.el)) return;
+        /* the window the content scrolls inside: the directive sizes this
+         * parent to boxHeight when a cell overflows */
+        const win = c.content.parentElement;
+        if (!win) return;
+        const r = win.getBoundingClientRect();
+        if (r.width < 20 || r.height < 12) return;
+        if (!(c.innerHeight > r.height)) return; /* fits after all */
+        out.push({
+          type: "cellScroll",
+          idx: i,
+          date: c.date || null,
+          widgetSettingId: c.widgetId || null,
+          rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+          boxHeight: c.boxHeight,
+          innerHeight: c.innerHeight,
+          durationMs: c.durationMs,
+          speed: c.speed,
+          liveCapture: true,
         });
-      };
-
-      document.querySelectorAll(".-m-scroll-c").forEach((c) => {
-        consider(c.closest("[mango-mirror-scroll]") || c.closest("[date]") || (c.closest(".-m-scroll-p") || {}).parentElement);
       });
-      document.querySelectorAll("[mango-mirror-scroll][date], [date][mango-mirror-scroll]").forEach(consider);
-      document.querySelectorAll(".fc-daygrid-day[data-date]").forEach(consider);
-
-      return [...cells.values()];
+      return out;
     });
-
-    if (found.length) {
-      const over = found.filter((c) => c.overflows);
-      const tagged = found.filter((c) => c.tagged);
-      console.log(
-        "cellScroll probe: " + found.length + " day cell(s), " + over.length +
-          " overflow, " + tagged.length + " tagged by the directive",
-      );
-      console.log("  overflowing: " + (over.map((c) => c.date.slice(5) + "(" + c.inner + "/" + c.visible + (c.tagged ? ",tagged,top=" + c.top : ",UNTAGGED") + ")").join(" ") || "none"));
-      const missed = found.filter((c) => c.overflows && !c.tagged);
-      if (missed.length) console.log("  MISSED by the directive: " + missed.map((c) => c.date).join(" "));
-    }
-    return [];
+    return cells;
   },
 
-  async hide() {},
+  /* Publish first, film after: an uncached cell is dropped here, and
+   * because the caller only hides survivors of process(), its events
+   * stay baked - the portal's own first frame - until the follow-up
+   * capture films it. */
+  async process(overlays, ctx) {
+    if (!ctx || !ctx.deferFilming) return overlays;
+    const pending = [];
+    const keep = overlays.filter((o) => {
+      if (csCachedSheet(o, ctx.outDir, ctx.outScale)) return true;
+      pending.push(o);
+      return false;
+    });
+    if (pending.length) {
+      if (ctx.filmState) ctx.filmState.pending = true;
+      console.log(
+        "cellScroll: " + pending.length + " cell(s) need filming - left baked, filming on the follow-up",
+      );
+    }
+    return keep;
+  },
+
+  /* Only cells that will actually be covered get hidden. */
+  async hide(frame, overlays) {
+    await frame.evaluate((idxs) => {
+      const list = window.mmScrollCells || [];
+      idxs.forEach((i) => {
+        const c = list[i];
+        if (c && c.content) c.content.style.visibility = "hidden";
+      });
+    }, overlays.map((o) => o.idx));
+  },
+
+  async captureAfter(page, frame, items, ctx) {
+    const live = items.filter((i) => i.liveCapture);
+    if (!live.length) return items;
+    const sharp = require("sharp");
+
+    const fill = (o, meta) => {
+      o.stripFile = meta.stripFile;
+      o.frameW = o.rect.w;
+      o.frameH = o.rect.h;
+      o.frameCount = meta.frameCount;
+      o.cols = meta.cols;
+      o.rows = meta.rows;
+      o.frameMs = meta.frameMs;
+      o.type = "gif"; /* the device already plays sprite sheets */
+      delete o.liveCapture;
+      delete o.idx;
+      delete o.boxHeight;
+      delete o.innerHeight;
+      delete o.durationMs;
+      delete o.speed;
+    };
+
+    const hits = live.map((o) => csCachedSheet(o, ctx.outDir, ctx.outScale));
+    if (hits.every(Boolean)) {
+      live.forEach((o, i) => fill(o, hits[i]));
+      console.log("cellScroll: " + live.length + " cell(s) from cached sheets, filming skipped");
+      return items;
+    }
+
+    /* frames per cell = its own cycle at the shared step */
+    const need = live.filter((o, i) => !hits[i]);
+    need.forEach((o) => {
+      o._frames = Math.max(2, Math.min(CS_MAX_FRAMES, Math.round(o.durationMs / CS_STEP_MS)));
+    });
+    const steps = Math.max(...need.map((o) => o._frames));
+
+    /* let the marquees move, and stop the portal animating them itself */
+    await frame.evaluate(() => {
+      const park = document.getElementById("mm-scroll-park");
+      if (park) park.disabled = true;
+      const list = window.mmScrollCells || [];
+      list.forEach((c) => {
+        if (!c.content) return;
+        if (window.jQuery) {
+          try {
+            window.jQuery(c.content).stop(true, false);
+          } catch (e) {}
+        }
+        c.content.style.visibility = "";
+      });
+    });
+
+    const shots = [];
+    const t0 = Date.now();
+    for (let k = 0; k < steps; k++) {
+      await frame.evaluate(
+        (args) => {
+          const list = window.mmScrollCells || [];
+          args.cells.forEach((cell) => {
+            const c = list[cell.idx];
+            if (!c || !c.content) return;
+            /* the portal's own path: +boxHeight -> -innerHeight, linear */
+            const t = Math.min(1, args.k / cell.frames);
+            const top = cell.boxHeight - t * (cell.boxHeight + cell.innerHeight);
+            c.content.style.top = top + "px";
+          });
+          return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        },
+        { k, cells: need.map((o) => ({ idx: o.idx, frames: o._frames, boxHeight: o.boxHeight, innerHeight: o.innerHeight })) },
+      );
+      shots.push(await page.screenshot({ type: "png" }));
+    }
+
+    const shotMeta = await sharp(shots[0]).metadata();
+    for (const o of need) {
+      try {
+        const dr = {
+          left: Math.round(o.rect.x * ctx.outScale),
+          top: Math.round(o.rect.y * ctx.outScale),
+          width: Math.max(1, Math.round(o.rect.w * ctx.outScale)),
+          height: Math.max(1, Math.round(o.rect.h * ctx.outScale)),
+        };
+        dr.left = Math.min(Math.max(0, dr.left), shotMeta.width - 1);
+        dr.top = Math.min(Math.max(0, dr.top), shotMeta.height - 1);
+        dr.width = Math.min(dr.width, shotMeta.width - dr.left);
+        dr.height = Math.min(dr.height, shotMeta.height - dr.top);
+
+        const capacity =
+          Math.max(1, Math.floor(2048 / dr.width)) * Math.max(1, Math.floor(2048 / dr.height));
+        const stride = Math.max(1, Math.ceil(o._frames / capacity));
+        const picked = [];
+        for (let i = 0; i < o._frames; i += stride) picked.push(i);
+
+        const frames = [];
+        for (const idx of picked) frames.push(await sharp(shots[idx]).extract(dr).png().toBuffer());
+        const cols = Math.max(1, Math.min(Math.floor(2048 / dr.width), frames.length));
+        const rows = Math.ceil(frames.length / cols);
+        const sheetBuf = await sharp({
+          create: { width: cols * dr.width, height: rows * dr.height, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+        })
+          .composite(frames.map((f, i) => ({ input: f, left: (i % cols) * dr.width, top: Math.floor(i / cols) * dr.height })))
+          .png()
+          .toBuffer();
+        const key = csKey(o, ctx.outScale);
+        const tag = crypto.createHash("md5").update(sheetBuf).digest("hex").slice(0, 8);
+        const fileName = "overlay_cs_" + key + "_" + tag + ".png";
+        fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, fileName), sheetBuf);
+        const meta = {
+          stripFile: fileName,
+          frameCount: frames.length,
+          cols,
+          rows,
+          frameMs: Math.max(40, Math.round(o.durationMs / frames.length)),
+        };
+        fsHandlers.writeFileSync(
+          pathHandlers.join(ctx.outDir, fileName.replace(/\.png$/, ".json")),
+          JSON.stringify(meta),
+        );
+        console.log(
+          "cellScroll sheet: " + o.date + " " + frames.length + "f @" + meta.frameMs + "ms (" +
+            o.speed + ", cycle " + Math.round(o.durationMs / 100) / 10 + "s)",
+        );
+        fill(o, meta);
+      } catch (e) {
+        console.error("cell scroll film failed (" + o.date + "):", e.message);
+        o.skip = true;
+      }
+    }
+
+    /* park them again and re-hide the ones we now cover */
+    await frame.evaluate((idxs) => {
+      const park = document.getElementById("mm-scroll-park");
+      if (park) park.disabled = false;
+      const list = window.mmScrollCells || [];
+      list.forEach((c) => {
+        if (c && c.content) c.content.style.top = "";
+      });
+      idxs.forEach((i) => {
+        const c = list[i];
+        if (c && c.content) c.content.style.visibility = "hidden";
+      });
+    }, need.filter((o) => !o.skip).map((o) => o.idx));
+
+    live.forEach((o, i) => {
+      if (hits[i]) fill(o, hits[i]);
+    });
+    console.log("cellScroll: filmed " + need.filter((o) => !o.skip).length + " cell(s) in " + (Date.now() - t0) + "ms");
+    return items.filter((o) => !o.skip);
+  },
 };
 
 const cellWeatherHandler = {
@@ -2389,6 +2599,20 @@ function effectHideCss() {
   const sel = effectHideSelectors();
   return sel.ids.map((i) => "#" + i).concat(sel.classes.map((c) => "." + c)).join(",") + "{opacity:0 !important}";
 }
+/* Month cells with more events than fit are MARQUEED by the portal
+ * (mangoMirrorScroll animates top from +boxHeight to -innerHeight,
+ * looping). A still lands at a random point in that cycle - sometimes
+ * mid-row, and at each end of the cycle the content is entirely outside
+ * its window, so the cell photographs EMPTY (a blank 14th, 2026-09-02).
+ * Parking every marquee at the top makes captures deterministic: the
+ * first events, cleanly. A stylesheet !important beats the inline top
+ * jQuery animates, so the animation may keep running underneath.
+ * Its own element so the cell-scroll film can disable JUST this while it
+ * drives `top` itself. */
+function scrollParkCss() {
+  return ".-m-scroll-c{top:0 !important}";
+}
+
 function weatherSettleCss() {
   const weatherParticles = [".mm-rain-drop", ".mm-snow-flake", ".mm-hail-pellet", ".mm-wind-line", ".mm-fog-line", ".mm-storm-bolt"];
   const weatherScope = [
@@ -2418,6 +2642,7 @@ async function hideEffects(frame) {
   }, [
     { id: "mm-capture-hygiene", css: effectHideCss() },
     { id: "mm-weather-settle", css: weatherSettleCss() },
+    { id: "mm-scroll-park", css: scrollParkCss() },
   ]);
   // effects handled outside the particle table still have to be kept out
   // of the still (the Roku animates them natively)
@@ -2697,11 +2922,12 @@ module.exports = {
   effectHideSelectors,
   effectHideCss,
   weatherSettleCss,
+  scrollParkCss,
   extractTargets,
   extractRegions,
   hideTargets,
   handlers: [
-    cellScrollProbe,
+    cellScrollHandler,
     clockHandler,
     gifHandler,
     weatherIconHandler,

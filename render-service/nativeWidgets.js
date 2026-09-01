@@ -198,7 +198,7 @@ const clockHandler = {
           // textfill sets the fitted font-size on the SPAN, not the container
           const cs = getComputedStyle(span || el);
           return {
-            rect: { x: r.x, y: r.y, w: r.width, h: winH },
+            rect: { x: r.x, y: r.y, w: r.width, h: r.height },
             textRect: { x: sr.x, y: sr.y, w: sr.width, h: sr.height },
             fontSizePx: parseFloat(cs.fontSize),
             fontWeight: cs.fontWeight,
@@ -580,7 +580,7 @@ const weatherIconHandler = {
           type: "gif",
           widgetSettingId: parseInt(m[1], 10),
           page: parseInt(m[2], 10),
-          rect: { x: r.x, y: r.y, w: r.width, h: winH },
+          rect: { x: r.x, y: r.y, w: r.width, h: r.height },
           src: el.src,
           liveCapture: true,
         });
@@ -1640,7 +1640,7 @@ const cellWeatherHandler = {
         out.push({
           type: "gif",
           cellWeather: m[1],
-          rect: { x: r.x, y: r.y, w: r.width, h: winH },
+          rect: { x: r.x, y: r.y, w: r.width, h: r.height },
           liveCapture: true,
         });
       });
@@ -1991,7 +1991,7 @@ const slideshowHandler = {
               type: "slideshow",
               widgetSettingId: d.widgetId,
               page: parseInt(pg, 10),
-              rect: { x: r.x, y: r.y, w: r.width, h: winH },
+              rect: { x: r.x, y: r.y, w: r.width, h: r.height },
               images: (d.images || []).slice(0, maxImages),
               intervalSeconds: parseInt(iws.imageDelayTime, 10) || 60,
               cropToFill: iws.isCropToFill === true,
@@ -2086,7 +2086,7 @@ const countdownHandler = {
           const r = value.getBoundingClientRect();
           const cs = getComputedStyle(value);
           elements[section] = {
-            rect: { x: r.x, y: r.y, w: r.width, h: winH },
+            rect: { x: r.x, y: r.y, w: r.width, h: r.height },
             fontSizePx: parseFloat(cs.fontSize),
             bold: parseInt(cs.fontWeight, 10) >= 600,
             align: cs.textAlign,

@@ -483,6 +483,15 @@ async function capturePage(page, opts) {
   }
   mark("portal-settled");
 
+  /* set by any handler that skipped filming so the page could publish
+   * now; the caller re-captures with filming allowed straight after */
+  const filmState = { pending: false };
+  const handlerCtx = {
+    outDir,
+    outScale: outWidth / width,
+    deferFilming: opts.deferFilming === true,
+    filmState,
+  };
   if (portalFrame) {
     for (const handler of nativeWidgets.handlers) {
       try {
@@ -491,7 +500,7 @@ async function capturePage(page, opts) {
         if (found.length && handler.process) {
           // process may drop entries (e.g. non-animated GIFs) - only
           // survivors get hidden, so nothing leaves a blank hole
-          found = await handler.process(found, { outDir });
+          found = await handler.process(found, handlerCtx);
         }
         if (found.length) {
           await handler.hide(portalFrame, found);
@@ -684,7 +693,7 @@ async function capturePage(page, opts) {
   );
   /* set after the file is written, so it never lands on disk: a signal
    * to the caller that sheets still need filming for this page */
-  if (captureCtx.filmPending) manifest.filmPending = true;
+  if (captureCtx.filmPending || filmState.pending) manifest.filmPending = true;
   return manifest;
 }
 

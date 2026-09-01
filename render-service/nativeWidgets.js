@@ -521,6 +521,46 @@ function parseAnimationPeriodSeconds(svgText) {
   return Math.max(...valid);
 }
 
+/* A filmed weather-icon sheet is identified by icon + rendered size +
+ * animation period; the same sun at the same size is byte-identical
+ * every time, which is what makes it cacheable across renders. */
+function wxSheetKey(o, outScale) {
+  const w = Math.round(o.rect.w * outScale);
+  const h = Math.round(o.rect.h * outScale);
+  return crypto
+    .createHash("md5")
+    .update([o.src, w, h, o.period || 0].join("|"))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/* Any sheet already filmed for this icon+size, whatever its content tag. */
+function wxCachedSheet(o, outDir, outScale) {
+  const key = wxSheetKey(o, outScale);
+  let metas;
+  try {
+    metas = fsHandlers
+      .readdirSync(outDir)
+      .filter((f) => f.startsWith("overlay_wxc_" + key + "_") && f.endsWith(".json"))
+      .sort(
+        (a, b) =>
+          fsHandlers.statSync(pathHandlers.join(outDir, b)).mtimeMs -
+          fsHandlers.statSync(pathHandlers.join(outDir, a)).mtimeMs,
+      );
+  } catch (e) {
+    return null;
+  }
+  for (const m of metas) {
+    try {
+      const c = JSON.parse(fsHandlers.readFileSync(pathHandlers.join(outDir, m), "utf8"));
+      if (c.stripFile && fsHandlers.existsSync(pathHandlers.join(outDir, c.stripFile))) {
+        return { key, file: c.stripFile, ...c };
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
 const weatherIconHandler = {
   type: "weatherIcon",
 
@@ -589,6 +629,30 @@ const weatherIconHandler = {
         o.svgText = bySrc[o.src].text;
       }
     }
+
+    /* Publish first, film after. Filming icons for a size we have not
+     * seen costs tens of seconds (52s on a fresh container, 2026-09-01)
+     * and the page waits on all of it. When deferring, drop the icons
+     * whose sheets are not cached: dropped entries are never HIDDEN
+     * (see the caller), so they stay baked in the still - frozen for a
+     * few seconds rather than missing - and the follow-up capture films
+     * them properly. */
+    if (ctx && ctx.deferFilming) {
+      const pending = [];
+      overlays.forEach((o) => {
+        if (o.skip) return;
+        if (!wxCachedSheet(o, ctx.outDir, ctx.outScale)) {
+          o.skip = true;
+          pending.push(o);
+        }
+      });
+      if (pending.length) {
+        if (ctx.filmState) ctx.filmState.pending = true;
+        console.log(
+          "wx: " + pending.length + " icon sheet(s) need filming - leaving them baked, filming on the follow-up",
+        );
+      }
+    }
     return overlays.filter((o) => !o.skip);
   },
 
@@ -625,15 +689,7 @@ const weatherIconHandler = {
     // behind it. That makes it cacheable: the same sun over the same
     // forecast tile produces byte-identical frames every render, and the
     // set only changes when the actual weather does.
-    const wxKey = (o) => {
-      const w = Math.round(o.rect.w * ctx.outScale);
-      const h = Math.round(o.rect.h * ctx.outScale);
-      return crypto
-        .createHash("md5")
-        .update([o.src, w, h, o.period || 0].join("|"))
-        .digest("hex")
-        .slice(0, 16);
-    };
+    const wxKey = (o) => wxSheetKey(o, ctx.outScale);
     // Look up ANY sheet filmed for this icon+size, whatever its content
     // tag. The tag exists because filming is not deterministic: the same
     // sun filmed twice yields different frame counts (the sampling rate
@@ -641,31 +697,7 @@ const weatherIconHandler = {
     // re-samples every sheet). Writing that under the old name left TVs
     // pairing a cached 14-frame texture with a 44-column grid - the icons
     // crawl sideways through garbage. Content in the name, always.
-    const cachedFor = (o) => {
-      const key = wxKey(o);
-      let metas;
-      try {
-        metas = fsHandlers
-          .readdirSync(ctx.outDir)
-          .filter((f) => f.startsWith("overlay_wxc_" + key + "_") && f.endsWith(".json"))
-          .sort(
-            (a, b) =>
-              fsHandlers.statSync(pathHandlers.join(ctx.outDir, b)).mtimeMs -
-              fsHandlers.statSync(pathHandlers.join(ctx.outDir, a)).mtimeMs,
-          );
-      } catch (e) {
-        return null;
-      }
-      for (const m of metas) {
-        try {
-          const c = JSON.parse(fsHandlers.readFileSync(pathHandlers.join(ctx.outDir, m), "utf8"));
-          if (c.stripFile && fsHandlers.existsSync(pathHandlers.join(ctx.outDir, c.stripFile))) {
-            return { key, file: c.stripFile, ...c };
-          }
-        } catch (e) {}
-      }
-      return null;
-    };
+    const cachedFor = (o) => wxCachedSheet(o, ctx.outDir, ctx.outScale);
 
     const hits = live.map(cachedFor);
     if (hits.every(Boolean)) {

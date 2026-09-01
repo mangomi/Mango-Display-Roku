@@ -1062,6 +1062,74 @@ const CW_TARGET_FRAMES = CW_MAX_SHOTS;
 // its periodic regime and any window is as good as any other.
 const CW_WARMUP_MS = 3000;
 
+/* ---- month-cell scrolling: DETECTION PASS (2026-09-02) ---------------
+ * Month cells hold more events than fit. Other platforms marquee them
+ * (js/directives/mangoMirrorScroll.js: top: boxHeight -> top: -innerHeight,
+ * linear, looping, duration = (box+inner) * 19 Fast / * 35 Slow); painted
+ * displays cannot, so they show "+2 more".
+ *
+ * The plan is to film that marquee and ship it as a sprite the device
+ * plays - mimicking the portal exactly. This pass only MEASURES and
+ * LOGS: it emits no overlays and changes no pixels, so we can confirm
+ * the selectors against a real display before touching anything.
+ *
+ * The directive tags the content it animates with `-m-scroll-c` and its
+ * parent with `-m-scroll-p`, and only when the cell actually overflows -
+ * which makes those classes a precise "needs scrolling" marker. */
+const cellScrollProbe = {
+  type: "cellScrollProbe",
+
+  async extract(frame) {
+    const found = await frame.evaluate(() => {
+      const out = [];
+      document.querySelectorAll(".-m-scroll-c").forEach((content) => {
+        /* the scroll box is the element the directive was applied to */
+        let box = content.closest("[mango-mirror-scroll], [data-mango-mirror-scroll]");
+        if (!box) {
+          const p = content.closest(".-m-scroll-p");
+          box = p ? p.parentElement : null;
+        }
+        if (!box) return;
+        const dateAttr =
+          box.getAttribute("date") || box.getAttribute("data-date") || null;
+        const first = box.firstElementChild;
+        const dateRow = first && first.children ? first.children[0] : null;
+        const events = first && first.children ? first.children[1] : null;
+        const boxRect = box.getBoundingClientRect();
+        if (boxRect.width < 10 || boxRect.height < 10) return;
+        out.push({
+          date: dateAttr,
+          isDateCell: dateAttr !== null,
+          boxRect: { x: Math.round(boxRect.x), y: Math.round(boxRect.y), w: Math.round(boxRect.width), h: Math.round(boxRect.height) },
+          dateRowH: dateRow ? Math.round(dateRow.getBoundingClientRect().height) : null,
+          eventsScrollH: events ? events.scrollHeight : null,
+          contentScrollH: content.scrollHeight,
+          contentTop: getComputedStyle(content).top,
+          wrapperClasses: (box.className || "").toString().split(/\s+/).filter((c) => c.indexOf("-mangoMirrorScroll") === 0),
+        });
+      });
+      return out;
+    });
+
+    if (found.length) {
+      console.log("cellScroll probe: " + found.length + " overflowing cell(s)");
+      found.slice(0, 6).forEach((c) => {
+        const box = c.boxRect;
+        const inner = c.eventsScrollH || c.contentScrollH;
+        const visible = c.dateRowH ? box.h - c.dateRowH - 1 : box.h;
+        console.log(
+          "  date=" + c.date + " rect=" + box.w + "x" + box.h + "@" + box.x + "," + box.y +
+            " dateRow=" + c.dateRowH + " visible=" + visible + " inner=" + inner +
+            " top=" + c.contentTop + " wrapper=" + (c.wrapperClasses[0] || "-"),
+        );
+      });
+    }
+    return []; /* detection only - emits nothing */
+  },
+
+  async hide() {},
+};
+
 const cellWeatherHandler = {
   type: "cellWeather",
 
@@ -2618,6 +2686,7 @@ module.exports = {
   extractRegions,
   hideTargets,
   handlers: [
+    cellScrollProbe,
     clockHandler,
     gifHandler,
     weatherIconHandler,

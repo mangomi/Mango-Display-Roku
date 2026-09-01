@@ -1095,12 +1095,13 @@ const CW_WARMUP_MS = 3000;
  * the LONGEST cell's cycle, not the sum - and each cell keeps its own
  * frame count, so a short cell loops quickly and a tall one slowly, just
  * as the portal does. */
-/* At this pace the frame count would run past 500 if it were purely
- * tvMs/CS_PLAY_MS. Cap it: the step is sub-pixel well before then, so the
- * extra frames buy no smoothness and cost filming time and sheet size.
- * 220 frames leaves ~0.4 output px per frame, which antialiasing carries
- * as a smooth crawl rather than visible stepping. */
-const CS_MAX_FRAMES = 220;
+/* Cap on frames per cell. Every frame is a screenshot, so this is the
+ * filming cost; it is also the sheet size. The seamless loop travels only
+ * innerHeight instead of boxHeight+innerHeight, so a given budget now buys
+ * a step roughly half the size it used to - 300 frames leaves well under
+ * half an output pixel per frame on a typical cell, which reads as a crawl
+ * rather than stepping. */
+const CS_MAX_FRAMES = 300;
 /* The marquee is a constant-velocity scroller - speed = (boxHeight +
  * innerHeight) * 35 for Slow, * 19 for Fast - so it always travels
  * 1000/35 = 28.6 px/s or 1000/19 = 52.6 px/s whatever the cell's size.
@@ -1137,11 +1138,17 @@ const CS_PLAY_MS = 110;
  * change, change scrolling speed in the portal, where every display
  * gets it. */
 
+/* Bump when the filmed motion changes meaning, so sheets cached under the
+ * old geometry are not reused: the key is otherwise all inputs, and travel
+ * changed from boxHeight+innerHeight to a seamless innerHeight. */
+const CS_FILM_VERSION = "2-seamless";
+
 function csKey(o, outScale) {
   return crypto
     .createHash("md5")
     .update(
       [
+        CS_FILM_VERSION,
         o.date || "",
         o.widgetId || "",
         Math.round(o.rect.w * outScale),
@@ -1397,6 +1404,8 @@ const cellScrollHandler = {
       delete o.liveCapture;
       delete o._frames;
       delete o._tvMs;
+      delete o._travel;
+      delete o._tvPxPerSec;
       delete o.idx;
       delete o.boxHeight;
       delete o.innerHeight;
@@ -1414,17 +1423,49 @@ const cellScrollHandler = {
     /* frames per cell = its own cycle at the shared step */
     const need = live.filter((o, i) => !hits[i]);
     need.forEach((o) => {
-      /* the television's own cycle, sampled at the playback rate */
-      o._tvMs = o.durationMs * CS_TV_PACE;
+      /* Seamless loop. The portal's marquee travels boxHeight + innerHeight:
+       * it starts wholly below the window and ends wholly above it, so the
+       * cell is empty at both ends of the cycle and the reader waits through
+       * a dead stretch before the events come round again (Dave, 2026-09-02:
+       * "unnecessary space before the scrolling starts again"). A second copy
+       * of the content, appended below the first, turns that into a ticker:
+       * travel is innerHeight, and as the last event leaves the top the copy
+       * is already arriving at the bottom, so the window is never empty.
+       *
+       * Same px/s as before - the pace is unchanged - but over a shorter
+       * distance, so the loop is quicker AND the same frame budget buys a
+       * finer step. That is most of the answer to the jerkiness too. */
+      const pxPerSec = ((o.boxHeight + o.innerHeight) / o.durationMs) * 1000;
+      o._tvPxPerSec = pxPerSec / CS_TV_PACE;
+      o._travel = o.innerHeight;
+      o._tvMs = (o._travel / o._tvPxPerSec) * 1000;
       o._frames = Math.max(2, Math.min(CS_MAX_FRAMES, Math.round(o._tvMs / CS_PLAY_MS)));
     });
     const steps = Math.max(...need.map((o) => o._frames));
 
     /* let the marquees move, and stop the portal animating them itself */
-    await frame.evaluate(() => {
+    await frame.evaluate((idxs) => {
       const park = document.getElementById("mm-scroll-park");
       if (park) park.disabled = true;
       const list = window.mmScrollCells || [];
+      /* Append a second copy of each filmed cell's events. They flow
+       * straight after the originals, so the copy sits exactly innerHeight
+       * lower with no positioning of our own - the standard ticker trick.
+       * cloneNode, so Angular never sees them as anything but inert nodes;
+       * they are stripped again once filming ends. */
+      idxs.forEach((i) => {
+        const c = list[i];
+        if (!c || !c.content || !c.content.parentElement) return;
+        const par = c.content.parentElement;
+        if (par.querySelector("[data-mm-loop]")) return;
+        [...par.querySelectorAll(".-m-scroll-c")].forEach((el) => {
+          const twin = el.cloneNode(true);
+          twin.setAttribute("data-mm-loop", "1");
+          twin.removeAttribute("id");
+          twin.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
+          par.appendChild(twin);
+        });
+      });
       list.forEach((c) => {
         if (!c.content) return;
         if (window.jQuery) {
@@ -1439,127 +1480,134 @@ const cellScrollHandler = {
           el.style.opacity = "";
         });
       });
-    });
+    }, need.map((o) => o.idx));
 
-    const shots = [];
+    /* From here the page carries our twin copies and a paused marquee.
+     * Anything that throws in between must not leave either behind, so the
+     * restore below is a finally, not a next statement. */
     const t0 = Date.now();
-    for (let k = 0; k < steps; k++) {
-      await frame.evaluate(
-        (args) => {
-          const list = window.mmScrollCells || [];
-          args.cells.forEach((cell) => {
-            const c = list[cell.idx];
-            if (!c || !c.content) return;
-            /* the portal's own path: +boxHeight -> -innerHeight, linear */
-            const t = Math.min(1, args.k / cell.frames);
-            const top = cell.boxHeight - t * (cell.boxHeight + cell.innerHeight);
-            const par = c.content.parentElement;
-            const all = par ? par.querySelectorAll(".-m-scroll-c") : [c.content];
-            (all.length ? all : [c.content]).forEach((el) => (el.style.top = top + "px"));
-          });
-          return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-        },
-        { k, cells: need.map((o) => ({ idx: o.idx, frames: o._frames, boxHeight: o.boxHeight, innerHeight: o.innerHeight })) },
-      );
-      shots.push(await page.screenshot({ type: "png" }));
-    }
-
-    const shotMeta = await sharp(shots[0]).metadata();
-    for (const o of need) {
-      try {
-        const dr = {
-          left: Math.round(o.rect.x * ctx.outScale),
-          top: Math.round(o.rect.y * ctx.outScale),
-          width: Math.max(1, Math.round(o.rect.w * ctx.outScale)),
-          height: Math.max(1, Math.round(o.rect.h * ctx.outScale)),
-        };
-        dr.left = Math.min(Math.max(0, dr.left), shotMeta.width - 1);
-        dr.top = Math.min(Math.max(0, dr.top), shotMeta.height - 1);
-        dr.width = Math.min(dr.width, shotMeta.width - dr.left);
-        dr.height = Math.min(dr.height, shotMeta.height - dr.top);
-
-        const capacity =
-          Math.max(1, Math.floor(2048 / dr.width)) * Math.max(1, Math.floor(2048 / dr.height));
-        const stride = Math.max(1, Math.ceil(o._frames / capacity));
-        const picked = [];
-        for (let i = 0; i < o._frames; i += stride) picked.push(i);
-
-        const frames = [];
-        for (const idx of picked) frames.push(await sharp(shots[idx]).extract(dr).png().toBuffer());
-        const cols = Math.max(1, Math.min(Math.floor(2048 / dr.width), frames.length));
-        const rows = Math.ceil(frames.length / cols);
-        const sheetBuf = await sharp({
-          create: { width: cols * dr.width, height: rows * dr.height, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
-        })
-          .composite(frames.map((f, i) => ({ input: f, left: (i % cols) * dr.width, top: Math.floor(i / cols) * dr.height })))
-          .png()
-          .toBuffer();
-        /* key first: it must be computed from the rect the cache lookup in
-         * process() saw, not the snapped one below, or write and read
-         * disagree and every render re-films. */
-        const key = csKey(o, ctx.outScale);
-        /* The crop is whole output pixels; the rect it is drawn at must be
-         * the same region or the two disagree by a fraction of a pixel and
-         * the background shows through at the edge. */
-        o.rect = {
-          x: dr.left / ctx.outScale,
-          y: dr.top / ctx.outScale,
-          w: dr.width / ctx.outScale,
-          h: dr.height / ctx.outScale,
-        };
-        const tag = crypto.createHash("md5").update(sheetBuf).digest("hex").slice(0, 8);
-        const fileName = "overlay_cs_" + key + "_" + tag + ".png";
-        fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, fileName), sheetBuf);
-        const meta = {
-          stripFile: fileName,
-          rect: { ...o.rect },
-          frameCount: frames.length,
-          cols,
-          rows,
-          frameMs: Math.max(40, Math.round(o._tvMs / frames.length)),
-        };
-        fsHandlers.writeFileSync(
-          pathHandlers.join(ctx.outDir, fileName.replace(/\.png$/, ".json")),
-          JSON.stringify(meta),
+    try {
+      const shots = [];
+      for (let k = 0; k < steps; k++) {
+        await frame.evaluate(
+          (args) => {
+            const list = window.mmScrollCells || [];
+            args.cells.forEach((cell) => {
+              const c = list[cell.idx];
+              if (!c || !c.content) return;
+              /* 0 -> -innerHeight, linear; the twin appended below carries
+               * the wrap, so there is no empty lead-in or run-out */
+              const t = Math.min(1, args.k / cell.frames);
+              const top = -t * cell.innerHeight;
+              const par = c.content.parentElement;
+              const all = par ? par.querySelectorAll(".-m-scroll-c") : [c.content];
+              (all.length ? all : [c.content]).forEach((el) => (el.style.top = top + "px"));
+            });
+            return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+          },
+          { k, cells: need.map((o) => ({ idx: o.idx, frames: o._frames, innerHeight: o.innerHeight })) },
         );
-        console.log(
-          "cellScroll sheet: " + o.date + " " + frames.length + "f @" + meta.frameMs + "ms (" +
-            o.speed + ", portal " + Math.round(o.durationMs / 100) / 10 + "s -> tv " +
-            Math.round(o._tvMs / 100) / 10 + "s, " +
-            Math.round((10 * (o.boxHeight + o.innerHeight)) / (o._tvMs / 1000)) / 10 + " px/s, " +
-            Math.round((100 * (o.boxHeight + o.innerHeight)) / frames.length) / 100 + "px/frame)",
-        );
-        fill(o, meta);
-      } catch (e) {
-        console.error("cell scroll film failed (" + o.date + "):", e.message);
-        o.skip = true;
+        shots.push(await page.screenshot({ type: "png" }));
       }
-    }
 
-    /* park them again and re-hide the ones we now cover */
-    await frame.evaluate((idxs) => {
-      const park = document.getElementById("mm-scroll-park");
-      if (park) park.disabled = false;
-      const list = window.mmScrollCells || [];
-      list.forEach((c) => {
-        if (c && c.content) {
-          const par = c.content.parentElement;
-          const all = par ? [...par.querySelectorAll(".-m-scroll-c")] : [c.content];
-          (all.length ? all : [c.content]).forEach((el) => (el.style.top = ""));
+      const shotMeta = await sharp(shots[0]).metadata();
+      for (const o of need) {
+        try {
+          const dr = {
+            left: Math.round(o.rect.x * ctx.outScale),
+            top: Math.round(o.rect.y * ctx.outScale),
+            width: Math.max(1, Math.round(o.rect.w * ctx.outScale)),
+            height: Math.max(1, Math.round(o.rect.h * ctx.outScale)),
+          };
+          dr.left = Math.min(Math.max(0, dr.left), shotMeta.width - 1);
+          dr.top = Math.min(Math.max(0, dr.top), shotMeta.height - 1);
+          dr.width = Math.min(dr.width, shotMeta.width - dr.left);
+          dr.height = Math.min(dr.height, shotMeta.height - dr.top);
+
+          const capacity =
+            Math.max(1, Math.floor(2048 / dr.width)) * Math.max(1, Math.floor(2048 / dr.height));
+          const stride = Math.max(1, Math.ceil(o._frames / capacity));
+          const picked = [];
+          for (let i = 0; i < o._frames; i += stride) picked.push(i);
+
+          const frames = [];
+          for (const idx of picked) frames.push(await sharp(shots[idx]).extract(dr).png().toBuffer());
+          const cols = Math.max(1, Math.min(Math.floor(2048 / dr.width), frames.length));
+          const rows = Math.ceil(frames.length / cols);
+          const sheetBuf = await sharp({
+            create: { width: cols * dr.width, height: rows * dr.height, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+          })
+            .composite(frames.map((f, i) => ({ input: f, left: (i % cols) * dr.width, top: Math.floor(i / cols) * dr.height })))
+            .png()
+            .toBuffer();
+          /* key first: it must be computed from the rect the cache lookup in
+           * process() saw, not the snapped one below, or write and read
+           * disagree and every render re-films. */
+          const key = csKey(o, ctx.outScale);
+          /* The crop is whole output pixels; the rect it is drawn at must be
+           * the same region or the two disagree by a fraction of a pixel and
+           * the background shows through at the edge. */
+          o.rect = {
+            x: dr.left / ctx.outScale,
+            y: dr.top / ctx.outScale,
+            w: dr.width / ctx.outScale,
+            h: dr.height / ctx.outScale,
+          };
+          const tag = crypto.createHash("md5").update(sheetBuf).digest("hex").slice(0, 8);
+          const fileName = "overlay_cs_" + key + "_" + tag + ".png";
+          fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, fileName), sheetBuf);
+          const meta = {
+            stripFile: fileName,
+            rect: { ...o.rect },
+            frameCount: frames.length,
+            cols,
+            rows,
+            frameMs: Math.max(40, Math.round(o._tvMs / frames.length)),
+          };
+          fsHandlers.writeFileSync(
+            pathHandlers.join(ctx.outDir, fileName.replace(/\.png$/, ".json")),
+            JSON.stringify(meta),
+          );
+          console.log(
+            "cellScroll sheet: " + o.date + " " + frames.length + "f @" + meta.frameMs + "ms (" +
+              o.speed + ", loop " + Math.round(o._tvMs / 100) / 10 + "s seamless, " +
+              Math.round(o._tvPxPerSec * 10) / 10 + " px/s, " +
+              Math.round((100 * o._travel) / frames.length) / 100 + "px/frame)",
+          );
+          fill(o, meta);
+        } catch (e) {
+          console.error("cell scroll film failed (" + o.date + "):", e.message);
+          o.skip = true;
         }
-      });
-      idxs.forEach((i) => {
-        const c = list[i];
-        if (c && c.content) {
-          const par = c.content.parentElement;
-          const all = par ? [...par.querySelectorAll(".-m-scroll-c")] : [c.content];
-          (all.length ? all : [c.content]).forEach((el) => {
-            el.style.setProperty("visibility", "hidden", "important");
-            el.style.setProperty("opacity", "0", "important");
-          });
-        }
-      });
-    }, need.filter((o) => !o.skip).map((o) => o.idx));
+      }
+
+    } finally {
+      /* park them again and re-hide the ones we now cover */
+      await frame.evaluate((idxs) => {
+        const park = document.getElementById("mm-scroll-park");
+        if (park) park.disabled = false;
+        document.querySelectorAll("[data-mm-loop]").forEach((n) => n.remove());
+        const list = window.mmScrollCells || [];
+        list.forEach((c) => {
+          if (c && c.content) {
+            const par = c.content.parentElement;
+            const all = par ? [...par.querySelectorAll(".-m-scroll-c")] : [c.content];
+            (all.length ? all : [c.content]).forEach((el) => (el.style.top = ""));
+          }
+        });
+        idxs.forEach((i) => {
+          const c = list[i];
+          if (c && c.content) {
+            const par = c.content.parentElement;
+            const all = par ? [...par.querySelectorAll(".-m-scroll-c")] : [c.content];
+            (all.length ? all : [c.content]).forEach((el) => {
+              el.style.setProperty("visibility", "hidden", "important");
+              el.style.setProperty("opacity", "0", "important");
+            });
+          }
+        });
+      }, need.filter((o) => !o.skip).map((o) => o.idx));
+    }
 
     live.forEach((o, i) => {
       if (hits[i]) fill(o, hits[i]);

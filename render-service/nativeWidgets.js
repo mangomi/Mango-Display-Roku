@@ -1097,11 +1097,16 @@ const CW_WARMUP_MS = 3000;
  * as the portal does. */
 const CS_STEP_MS = 70;
 const CS_MAX_FRAMES = 160;
-/* The portal's own pace reads as too fast on a television (Dave,
- * 2026-09-02): what is comfortable on a tablet at arm's length is not
- * comfortable at three metres. The frames are the portal's, played
- * slower - so the motion is identical, just calmer. */
-const CS_SLOWDOWN = 1.6;
+/* Playback is 1:1 with the portal and must stay that way. The marquee is
+ * a constant-velocity scroller - speed = (boxHeight + innerHeight) * 35
+ * for Slow, * 19 for Fast - so it always travels 1000/35 = 28.6 px/s or
+ * 1000/19 = 52.6 px/s whatever the cell's size. Filming durationMs over
+ * frameCount frames and playing them at durationMs/frameCount reproduces
+ * exactly that. A "looks fast on a TV" fudge factor lived here briefly
+ * (2026-09-02) and was wrong: it desynchronised the sprite from the
+ * portal it is supposed to be a photograph of. If the pace needs to
+ * change, change scrolling speed in the portal, where every display
+ * gets it. */
 
 function csKey(o, outScale) {
   return crypto
@@ -1373,7 +1378,7 @@ const cellScrollHandler = {
           frameCount: frames.length,
           cols,
           rows,
-          frameMs: Math.max(40, Math.round((o.durationMs * CS_SLOWDOWN) / frames.length)),
+          frameMs: Math.max(40, Math.round(o.durationMs / frames.length)),
         };
         fsHandlers.writeFileSync(
           pathHandlers.join(ctx.outDir, fileName.replace(/\.png$/, ".json")),
@@ -1381,8 +1386,8 @@ const cellScrollHandler = {
         );
         console.log(
           "cellScroll sheet: " + o.date + " " + frames.length + "f @" + meta.frameMs + "ms (" +
-            o.speed + ", portal " + Math.round(o.durationMs / 100) / 10 + "s -> tv " +
-            Math.round((o.durationMs * CS_SLOWDOWN) / 100) / 10 + "s)",
+            o.speed + ", cycle " + Math.round(o.durationMs / 100) / 10 + "s, " +
+            Math.round((10 * (o.boxHeight + o.innerHeight)) / (o.durationMs / 1000)) / 10 + " px/s)",
         );
         fill(o, meta);
       } catch (e) {

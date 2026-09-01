@@ -1141,7 +1141,7 @@ const CS_PLAY_MS = 110;
 /* Bump when the filmed motion changes meaning, so sheets cached under the
  * old geometry are not reused: the key is otherwise all inputs, and travel
  * changed from boxHeight+innerHeight to a seamless innerHeight. */
-const CS_FILM_VERSION = "2-seamless";
+const CS_FILM_VERSION = "3-alpha";
 
 function csKey(o, outScale) {
   return crypto
@@ -1456,6 +1456,25 @@ const cellScrollHandler = {
        * lower with no positioning of our own - the standard ticker trick.
        * cloneNode, so Angular never sees them as anything but inert nodes;
        * they are stripped again once filming ends. */
+      /* Film on alpha. A sprite is drawn back over the page, and on a
+       * display with an image or slideshow background that page is a
+       * transparent layer over a native picture - so anything the frame
+       * bakes in behind the events is a rectangle that does not match
+       * (Dave, 2026-09-02: "we can't just put a black box"). The other
+       * sprite handlers already film with transparent backgrounds; this
+       * one did not. Every ancestor from the cell up to body loses its
+       * background for the duration, so a semi-transparent widget panel
+       * is not drawn twice either. Originals are restored in the finally. */
+      window.__mmCsBg = window.__mmCsBg || [];
+      idxs.forEach((i) => {
+        const c = list[i];
+        if (!c || !c.content) return;
+        for (let n = c.content.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+          if (window.__mmCsBg.some((e) => e.el === n)) continue;
+          window.__mmCsBg.push({ el: n, bg: n.style.getPropertyValue("background"), pri: n.style.getPropertyPriority("background") });
+          n.style.setProperty("background", "transparent", "important");
+        }
+      });
       idxs.forEach((i) => {
         const c = list[i];
         if (!c || !c.content || !c.content.parentElement) return;
@@ -1485,6 +1504,8 @@ const cellScrollHandler = {
     /* From here the page carries our twin copies and a paused marquee.
      * Anything that throws in between must not leave either behind, so the
      * restore below is a finally, not a next statement. */
+    await frame.addStyleTag({ content: "/*mm-film*/html,body,#main{background:transparent !important}" });
+    await page.addStyleTag({ content: "/*mm-film*/html,body{background:transparent !important}" });
     const t0 = Date.now();
     try {
       const shots = [];
@@ -1507,7 +1528,7 @@ const cellScrollHandler = {
           },
           { k, cells: need.map((o) => ({ idx: o.idx, frames: o._frames, innerHeight: o.innerHeight })) },
         );
-        shots.push(await page.screenshot({ type: "png" }));
+        shots.push(await page.screenshot({ type: "png", omitBackground: true }));
       }
 
       const shotMeta = await sharp(shots[0]).metadata();
@@ -1587,6 +1608,14 @@ const cellScrollHandler = {
         const park = document.getElementById("mm-scroll-park");
         if (park) park.disabled = false;
         document.querySelectorAll("[data-mm-loop]").forEach((n) => n.remove());
+        (window.__mmCsBg || []).forEach((e) => {
+          if (e.bg) e.el.style.setProperty("background", e.bg, e.pri || "");
+          else e.el.style.removeProperty("background");
+        });
+        window.__mmCsBg = [];
+        document.querySelectorAll("style").forEach((n) => {
+          if ((n.textContent || "").includes("mm-film")) n.remove();
+        });
         const list = window.mmScrollCells || [];
         list.forEach((c) => {
           if (c && c.content) {
@@ -1604,6 +1633,12 @@ const cellScrollHandler = {
           }
         });
       }, need.filter((o) => !o.skip).map((o) => o.idx));
+      /* the outer page carried a film style of its own */
+      await page.evaluate(() => {
+        document.querySelectorAll("style").forEach((n) => {
+          if ((n.textContent || "").includes("mm-film")) n.remove();
+        });
+      }).catch(() => {});
     }
 
     live.forEach((o, i) => {

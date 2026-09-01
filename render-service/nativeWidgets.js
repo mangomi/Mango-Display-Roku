@@ -1132,6 +1132,33 @@ const cellWeatherHandler = {
       if (!hits[i] && !need.has(sizeKey(o))) need.set(sizeKey(o), o);
     });
 
+    /* Publish first, film after. A new cell geometry (switching a
+     * calendar to Monthly, say) invalidates every sheet, and filming
+     * them is tens of seconds - 436 frames / 38s on 2026-09-01 - with
+     * the user watching a spinner the whole time. On the first pass we
+     * ship the cells whose sheets are already cached and DROP the rest:
+     * their strip gradient, icon and temperatures are baked into the
+     * page image, so those cells simply do not animate yet. The caller
+     * sees filmPending and re-captures immediately with filming
+     * allowed, so the animation arrives a few seconds later with
+     * nobody waiting on it. */
+    if (ctx.deferFilming) {
+      ctx.filmPending = true;
+      const ready = [];
+      live.forEach((o, i) => {
+        if (hits[i]) {
+          fill(o, hits[i]);
+          ready.push(o);
+        }
+      });
+      console.log(
+        "cw: " + need.size + " sheet(s) need filming - publishing " + ready.length +
+          " cached strip(s) now, filming on the follow-up",
+      );
+      /* keep every non-cellWeather item; keep only the filled cells */
+      return items.filter((o) => !o.liveCapture || !o.cellWeather || ready.includes(o));
+    }
+
     await ctx.reenableAnimations();
     await frame.evaluate(() => {
       // the icon film may have left its background-stripping styles up

@@ -589,6 +589,14 @@ async function capturePage(page, opts) {
     outDir,
     layered,
     outScale: outWidth / width,
+    /* Filming sprite sheets for a NEW cell geometry costs tens of
+     * seconds (436 frames when a calendar switched to Monthly view,
+     * 2026-09-01) and the user waits on a spinner for all of it. When
+     * this is set, handlers publish what is already cached and set
+     * filmPending instead; the caller re-captures straight after, and
+     * the animations arrive a few seconds behind the page. */
+    deferFilming: opts.deferFilming === true,
+    filmPending: false,
     reenableAnimations: async () => {
       /* painted mode: the portal froze its own animations, so filming the
        * weather icons means lifting THAT style, not ours */
@@ -674,6 +682,9 @@ async function capturePage(page, opts) {
     outPath,
     outWidth + "x" + outHeight + " (canvas " + width + "x" + height + ")" + (layered ? " [layered]" : ""),
   );
+  /* set after the file is written, so it never lands on disk: a signal
+   * to the caller that sheets still need filming for this page */
+  if (captureCtx.filmPending) manifest.filmPending = true;
   return manifest;
 }
 

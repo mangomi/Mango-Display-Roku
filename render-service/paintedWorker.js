@@ -448,8 +448,8 @@ class PaintedWorker extends DisplayWorker {
 
   /* ---- capturing ------------------------------------------------------ */
 
-  async capturePageIndex(index) {
-    return capturePage(this.portal.page, {
+  async capturePageIndex(index, deferFilming) {
+    const manifest = await capturePage(this.portal.page, {
       out: this.pageFile(index),
       url: this.portal.url(),
       width: this.display.canvasW,
@@ -459,7 +459,10 @@ class PaintedWorker extends DisplayWorker {
       state: { noAnimStyle: null },
       apiBase: this.env.apiBase,
       pageIndex: index,
+      deferFilming: deferFilming === true,
     });
+    if (manifest && manifest.filmPending) this.filmPages.add(index);
+    return manifest;
   }
 
   async renderPages(indexes, reason, priorityPage) {
@@ -468,6 +471,9 @@ class PaintedWorker extends DisplayWorker {
     this.renderRank = this.reasonRank(reason);
     this.abortRender = false;
     let aborted = false;
+    /* pages whose sprite sheets still need filming; capturePageIndex
+     * fills this when it defers */
+    this.filmPages = new Set();
     /* The spinner means "the change YOU made is being applied", so it
      * belongs to user-initiated work only: a gesture on the TV, or an
      * edit someone just made in the webapp. Data arriving on its own -
@@ -497,7 +503,7 @@ class PaintedWorker extends DisplayWorker {
           await this.portal.gotoPage(priorityPage);
           this.portalPage = priorityPage;
         }
-        await this.capturePageIndex(priorityPage);
+        await this.capturePageIndex(priorityPage, true);
         /* the jump instruction must outlive however long this render
          * queued and however long the rest takes: slide its window at
          * every publish instead of trusting the arm-time clock */
@@ -520,7 +526,7 @@ class PaintedWorker extends DisplayWorker {
           await this.portal.gotoPage(index);
           this.portalPage = index;
         }
-        await this.capturePageIndex(index);
+        await this.capturePageIndex(index, true);
       }
       if (aborted) {
         /* no publish: the preempting render follows in milliseconds and
@@ -530,6 +536,23 @@ class PaintedWorker extends DisplayWorker {
         if (typeof this.pendingShowPage === "number") this.showPageUntil = Date.now() + 15000;
         await this.publishFromDisk(reason);
         this.log("captured page(s) " + indexes.join(",") + " in " + (Date.now() - t0) + "ms (" + reason + ")");
+
+        /* The page is on screen; now pay for the animations. Filming a
+         * fresh cell geometry is tens of seconds, which is why it did
+         * not block the publish above - nobody is waiting on this. */
+        const toFilm = [...this.filmPages];
+        this.filmPages.clear();
+        for (const index of toFilm) {
+          if (this.abortRender) break;
+          const f0 = Date.now();
+          if (index !== this.portalPage) {
+            await this.portal.gotoPage(index);
+            this.portalPage = index;
+          }
+          await this.capturePageIndex(index, false);
+          await this.publishFromDisk("sprite film");
+          this.log("filmed sprites for page " + index + " in " + (Date.now() - f0) + "ms");
+        }
       }
     } catch (e) {
       this.log("capture FAILED:", e.message);

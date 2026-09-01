@@ -1317,6 +1317,19 @@ const cellScrollHandler = {
         c && c.date === w.date && String(c.widgetId) === String(w.widgetSettingId);
       let hidden = 0;
       const stuck = [];
+      /* One cell's marquee is not one element: the directive's scrollTarget
+       * is a jQuery COLLECTION - one .-m-scroll-c per event - and .css()/
+       * .animate() drive every one of them, while mmPaintedScroll publishes
+       * only scrollTarget[0]. Acting on that alone hid and moved the first
+       * event and left its siblings behind, which is the scrap that stayed
+       * baked under the sprite (Dave, 2026-09-02). Take the whole group. */
+      const grp = (c) => {
+        if (!c || !c.content) return [];
+        const par = c.content.parentElement;
+        const all = par ? [...par.querySelectorAll(".-m-scroll-c")] : [];
+        return all.length ? all : [c.content];
+      };
+
       wanted.forEach((w) => {
         let c = list[w.idx];
         if (!(w.date != null ? same(c, w) : c)) {
@@ -1335,8 +1348,10 @@ const cellScrollHandler = {
            * animation, and the portal's animation stylesheets touch both
            * of these. In the cascade an !important inline declaration
            * outranks an animation, a normal inline one does not. */
-          c.content.style.setProperty("visibility", "hidden", "important");
-          c.content.style.setProperty("opacity", "0", "important");
+          grp(c).forEach((el) => {
+            el.style.setProperty("visibility", "hidden", "important");
+            el.style.setProperty("opacity", "0", "important");
+          });
           hidden++;
           const cs = getComputedStyle(c.content);
           const b = c.content.getBoundingClientRect();
@@ -1417,8 +1432,12 @@ const cellScrollHandler = {
             window.jQuery(c.content).stop(true, false);
           } catch (e) {}
         }
-        c.content.style.visibility = "";
-        c.content.style.opacity = "";
+        const par0 = c.content.parentElement;
+        const all0 = par0 ? [...par0.querySelectorAll(".-m-scroll-c")] : [c.content];
+        (all0.length ? all0 : [c.content]).forEach((el) => {
+          el.style.visibility = "";
+          el.style.opacity = "";
+        });
       });
     });
 
@@ -1434,7 +1453,9 @@ const cellScrollHandler = {
             /* the portal's own path: +boxHeight -> -innerHeight, linear */
             const t = Math.min(1, args.k / cell.frames);
             const top = cell.boxHeight - t * (cell.boxHeight + cell.innerHeight);
-            c.content.style.top = top + "px";
+            const par = c.content.parentElement;
+            const all = par ? par.querySelectorAll(".-m-scroll-c") : [c.content];
+            (all.length ? all : [c.content]).forEach((el) => (el.style.top = top + "px"));
           });
           return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         },
@@ -1521,13 +1542,21 @@ const cellScrollHandler = {
       if (park) park.disabled = false;
       const list = window.mmScrollCells || [];
       list.forEach((c) => {
-        if (c && c.content) c.content.style.top = "";
+        if (c && c.content) {
+          const par = c.content.parentElement;
+          const all = par ? [...par.querySelectorAll(".-m-scroll-c")] : [c.content];
+          (all.length ? all : [c.content]).forEach((el) => (el.style.top = ""));
+        }
       });
       idxs.forEach((i) => {
         const c = list[i];
         if (c && c.content) {
-          c.content.style.visibility = "hidden";
-          c.content.style.opacity = "0";
+          const par = c.content.parentElement;
+          const all = par ? [...par.querySelectorAll(".-m-scroll-c")] : [c.content];
+          (all.length ? all : [c.content]).forEach((el) => {
+            el.style.setProperty("visibility", "hidden", "important");
+            el.style.setProperty("opacity", "0", "important");
+          });
         }
       });
     }, need.filter((o) => !o.skip).map((o) => o.idx));

@@ -1324,18 +1324,27 @@ const cellScrollHandler = {
           c.content.style.setProperty("opacity", "0", "important");
           hidden++;
           const cs = getComputedStyle(c.content);
-          if (cs.opacity !== "0") stuck.push(c.date + ":op=" + cs.opacity + ",vis=" + cs.visibility);
+          const b = c.content.getBoundingClientRect();
+          stuck.push(
+            c.date + " op=" + cs.opacity + " vis=" + cs.visibility +
+              " at " + Math.round(b.x) + "," + Math.round(b.y) + " " +
+              Math.round(b.width) + "x" + Math.round(b.height),
+          );
         }
       });
-      return { hidden, stuck, listLen: list.length, inDom: document.querySelectorAll(".-m-scroll-c").length };
+      /* how many copies of the scrolling content exist, and where they are:
+       * if the page keeps a second copy for transitions we may be hiding
+       * one and photographing the other */
+      const all = [...document.querySelectorAll(".-m-scroll-c")].map((el) => {
+        const b = el.getBoundingClientRect();
+        return Math.round(b.x) + "," + Math.round(b.y) + " op=" + getComputedStyle(el).opacity;
+      });
+      return { hidden, stuck, listLen: list.length, all };
     }, overlays.map((o) => ({ idx: o.idx, date: o.date, widgetSettingId: o.widgetSettingId })));
-    if (n.hidden < overlays.length || n.stuck.length) {
-      console.log(
-        "cellScroll: hid " + n.hidden + " of " + overlays.length + " cell(s)" +
-          (n.stuck.length ? " - refused to go transparent: " + n.stuck.join(" ") : "") +
-          " (list " + n.listLen + ", .-m-scroll-c in dom " + n.inDom + ")",
-      );
-    }
+    console.log(
+      "cellScroll hide: " + n.hidden + "/" + overlays.length + " [" + n.stuck.join(" | ") + "]" +
+        " list=" + n.listLen + " dom(" + n.all.length + ")=" + n.all.join(" | "),
+    );
   },
 
   async captureAfter(page, frame, items, ctx) {

@@ -1101,7 +1101,12 @@ const CW_WARMUP_MS = 3000;
  * smaller step - 300 frames leaves well under
  * half an output pixel per frame on a typical cell, which reads as a crawl
  * rather than stepping. */
-const CS_MAX_FRAMES = 300;
+/* Raised 300 -> 700 with the move to 30fps: a typical cell's loop is ~22s
+ * = 660 frames; a longer one hits the cap and plays a little slower per
+ * frame, which the stride logic below already handles. The cold-start
+ * filming cost roughly doubles (~4 minutes for a cell group) - deferred
+ * and cached, so paid once per deploy, not per render. */
+const CS_MAX_FRAMES = 700;
 /* The marquee is a constant-velocity scroller - speed = (boxHeight +
  * innerHeight) * 35 for Slow, * 19 for Fast - so it always travels
  * 1000/35 = 28.6 px/s or 1000/19 = 52.6 px/s whatever the cell's size.
@@ -1128,11 +1133,15 @@ const CS_MAX_FRAMES = 300;
  * too slow (Dave, 2026-09-02: "needs to be double the current speed").
  * A typical month cell - ~105px of travel - comes round in ~22s on Slow.
  *
- * CS_PLAY_MS is the frame hold the count is derived from; 70ms is what
- * the weather sheets already play at on the device, and at this pace it
- * keeps the step near a third of an output pixel. */
+ * CS_PLAY_MS is the frame hold the count is derived from. 33ms is the
+ * device's floor (GifOverlay clamps there - two refreshes at 60Hz). Rain
+ * is smooth at 70ms because a drop moves several pixels a frame; slowly
+ * scrolling TEXT is the hardest case for a frame stepper, because the eye
+ * tracks the letters and sees every update, so it gets the full 30fps
+ * with a step around a tenth of an output pixel (Dave, 2026-09-02: "the
+ * rain is nice and smooth, but this still looks a bit jerky"). */
 const CS_TV_PACE = 6;
-const CS_PLAY_MS = 70;
+const CS_PLAY_MS = 33;
 /* The old 1:1 note, kept because the arithmetic still matters: the marquee is
  * a constant-velocity scroller - speed = (boxHeight + innerHeight) * 35
  * for Slow, * 19 for Fast - so it always travels 1000/35 = 28.6 px/s or
@@ -1147,7 +1156,7 @@ const CS_PLAY_MS = 70;
 /* Bump when the filmed motion changes meaning, so sheets cached under the
  * old geometry are not reused: the key is otherwise all inputs, and travel
  * changed from boxHeight+innerHeight to a seamless innerHeight. */
-const CS_FILM_VERSION = "5-pace6";
+const CS_FILM_VERSION = "6-30fps";
 
 function csKey(o, outScale) {
   return crypto

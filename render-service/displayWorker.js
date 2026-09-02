@@ -155,6 +155,12 @@ class DisplayWorker {
      * prune art left behind by earlier processes (best effort) */
     const seeded = await this.publisher.seedFromRemote().catch(() => 0);
     if (seeded) this.log("assets: " + seeded + " existing object(s) known for reaping");
+    /* cached sheets and strips come back from the bucket, so a deploy no
+     * longer means minutes of refilming while the display sits static */
+    const restored = await this.publisher
+      .restoreCache(this.dir, /^(overlay_.*\.(png|json)|effect_.*\.png)$/)
+      .catch(() => 0);
+    if (restored) this.log("assets: restored " + restored + " cached file(s) from the bucket");
     try {
       const prev = parseInt(fs.readFileSync(this.versionFile(), "utf8").trim(), 10);
       // A SMALL counter, persisted. It must stay small: BrightScript's
@@ -163,6 +169,17 @@ class DisplayWorker {
       // to the SAME value on the device and it goes deaf.
       if (prev > 0 && prev < 1000000) this.version = prev + 1;
     } catch (e) {}
+    /* The local file dies with the container, so every deploy restarted
+     * the counter at 1 while the device still held, say, 28. The device
+     * re-fetches on ANY difference, so it did not go deaf - but two tasks
+     * overlap during a rollout, each counting from 1, and the device
+     * flip-flopped between their manifests for minutes (2026-09-02).
+     * The manifest in the bucket carries the last announced version:
+     * continue from whichever is higher, so the new task starts ABOVE
+     * everything the device has seen. */
+    const remote = await this.publisher.getJson("display.json").catch(() => null);
+    const rv = remote && parseInt(remote.version, 10);
+    if (rv > 0 && rv < 1000000 && rv + 1 > this.version) this.version = rv + 1;
 
     this.log(
       "worker start (major " + this.display.major + " minor " + this.display.minor + ")",
@@ -787,6 +804,9 @@ class DisplayWorker {
           schema: man0.schema || 1,
           canvas: { width: this.display.canvasW, height: this.display.canvasH },
           rotation: this.display.rotation || 0,
+          /* the version this manifest is announced as (announce() bumps
+           * after the upload lands); a restarting task continues from it */
+          version: this.version + 1,
           updateReason,
           imageOnly,
           showPage,
@@ -860,6 +880,10 @@ class DisplayWorker {
   }
 
   async uploadOnce(reason, complete) {
+    /* A task being drained by a rollout must not publish over the new
+     * task's manifests: the two counted independently and the device
+     * flip-flopped between them. Held polls are still answered by stop(). */
+    if (this.stopped) return;
     try {
       const t0 = Date.now();
       const r = await this.publisher.publish(this.dir, this.publishableFiles(), {

@@ -29,7 +29,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command, GetObjectCommand } = require("@aws-sdk/client-s3");
 
 // 2026-08-27: publishing moved to native S3 + CloudFront (bucket
 // mango-roku-assets, flat-rate CloudFront plans made egress a non-issue
@@ -145,6 +145,46 @@ class AssetPublisher {
       return 0;
     }
     return this.remote.size;
+  }
+
+  /* One object of this display's, parsed as JSON; null when absent or
+   * unreachable. Used at start to continue the version counter from the
+   * manifest the bucket already serves. */
+  async getJson(name) {
+    if (!enabled()) return null;
+    try {
+      const r = await s3().send(new GetObjectCommand({ Bucket: BUCKET, Key: rootedKey(this.prefix + "/" + name) }));
+      return JSON.parse(await r.Body.transformToString());
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* Bring the display's cached art back from the bucket after a restart.
+   * Sprite sheets and scroll strips are cached in the working directory
+   * by name (overlay_<kind>_<key>_<hash>.png + .json); the directory is
+   * ephemeral, so every deploy used to refilm everything - minutes of a
+   * static display per deploy, and the weather sheets alone took over
+   * five minutes cold (2026-09-02). The bucket still has the last
+   * published set, so pull back whatever matches and is not on disk.
+   * Best effort: a failure only means we film. Returns the file count. */
+  async restoreCache(dir, pattern) {
+    if (!enabled()) return 0;
+    if (!this.remote.size) await this.seedFromRemote();
+    let n = 0;
+    for (const name of this.remote) {
+      if (!pattern.test(name)) continue;
+      const local = path.join(dir, name);
+      if (fs.existsSync(local)) continue;
+      try {
+        const r = await s3().send(new GetObjectCommand({ Bucket: BUCKET, Key: rootedKey(this.prefix + "/" + name) }));
+        fs.writeFileSync(local, await r.Body.transformToByteArray());
+        n++;
+      } catch (e) {
+        /* skip this one; a missing sheet is refilmed, not fatal */
+      }
+    }
+    return n;
   }
 
   // The base a device fetches from. Handed out over the control channel

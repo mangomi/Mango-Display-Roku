@@ -119,6 +119,12 @@ recaptures every page.
 
 ## NO client impact (noted so nobody re-checks)
 
+- Version counter now continues across deploys (`display.json` carries
+  `version`; a restarting task seeds from it) and a draining task stops
+  publishing. Still a small integer; "differs from what I hold" semantics
+  unchanged. Cached sheets/strips are restored from the bucket at start,
+  so a deploy no longer refilms - server-side only.
+
 - Assets moved R2 → S3+CloudFront (`81d5eb3`, `2a8769a`): clients
   follow `assetBase` from display.json; r2.dev URLs are gone, Roku
   needed no change and neither does tvOS. Page images now carry

@@ -42,6 +42,11 @@ sub onConfig()
     end while
     holder = m.top.createChild("Group")
     holder.translation = [cfg.rect.x, cfg.rect.y]
+    ' The box clips, as the portal's does: a raindrop's travel starts
+    ' above the strip and the strip has overflow hidden, so without this
+    ' the drops appeared above the cell (Dave, 2026-09-02). Icons are
+    ' unaffected - their SVG already draws inside its own box.
+    holder.clippingRect = [0, 0, cfg.rect.w, cfg.rect.h]
     n = 0
     for each layer in cfg.layers
         ' outer chain levels first, each a group nested in the previous

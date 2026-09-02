@@ -581,7 +581,7 @@ function wxCachedSheet(o, outDir, outScale) {
  * the whole icon box with only that element painted. */
 const WXM_SUPER = 2;
 const WXM_MAX_PX = 512;
-const WXM_VERSION = "1";
+const WXM_VERSION = "2";
 
 function wxMotionFeasible(svgText) {
   if (!/<animate/i.test(svgText)) return false;
@@ -747,6 +747,25 @@ async function wxDecompose(page, o, ctx) {
         });
         idx++;
       }
+      /* Paint order. SVG paints in document order, so the static parts
+       * are not one layer: a cloud drawn AFTER the sun must cover the
+       * sun's rays. Every rendered element outside an animated subtree
+       * is tagged with the number of animated layers that precede it in
+       * document order; static segment s is then drawn between animated
+       * layer s-1 and animated layer s (Dave, 2026-09-02: rays over the
+       * cloud on partly-cloudy). */
+      let seen = 0;
+      const walk = (node) => {
+        if (node.nodeType !== 1) return;
+        if (node.tagName.toLowerCase() === "defs") return;
+        if (node.hasAttribute("data-mm-layer")) {
+          seen++;
+          return; /* its subtree belongs to that layer */
+        }
+        node.setAttribute("data-mm-seg", String(seen));
+        for (const c of node.children) walk(c);
+      };
+      for (const c of svg.children) walk(c);
       return { layers: out };
     });
     if (!plan || plan.error) throw new Error("decompose: " + ((plan && plan.error) || "no plan"));
@@ -778,10 +797,20 @@ async function wxDecompose(page, o, ctx) {
       fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, name), png);
       return name;
     };
-    /* layer 0: everything that does not move */
     const layers = [];
-    const staticBuf = await shoot("#host svg [data-mm-layer], #host svg [data-mm-layer] * { visibility: hidden !important }");
-    layers.push({ file: await writeLayer(staticBuf, "s"), tracks: [] });
+    /* one static segment: only elements tagged with it paint (an
+     * element inside an animated subtree carries no tag); dropped when
+     * it paints nothing */
+    const pushStatic = async (seg) => {
+      const buf = await shoot(
+        "#host svg * { visibility: hidden !important } " +
+          '#host svg [data-mm-seg="' + seg + '"] { visibility: visible !important }',
+      );
+      const st = await sharp(buf).stats();
+      const alpha = st.channels[3];
+      if (!alpha || alpha.max === 0) return;
+      layers.push({ file: await writeLayer(buf, "s" + seg), tracks: [] });
+    };
     const convert = (rawTracks, ctm) => {
       const [a, b, c, d, e, f] = ctm;
       const tracks = [];
@@ -825,6 +854,7 @@ async function wxDecompose(page, o, ctx) {
       return tracks;
     };
     for (let i = 0; i < plan.layers.length; i++) {
+      await pushStatic(i);
       const L = plan.layers[i];
       const buf = await shoot(
         "#host svg * { visibility: hidden !important } " +
@@ -838,6 +868,7 @@ async function wxDecompose(page, o, ctx) {
       if (L.chain && L.chain.length) layer.chain = L.chain.map((lvl) => ({ tracks: convert(lvl.tracks, lvl.ctm) }));
       layers.push(layer);
     }
+    await pushStatic(plan.layers.length);
     const meta = { layers };
     fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, "overlay_wxm_" + key + ".json"), JSON.stringify(meta));
     return meta;
@@ -2260,7 +2291,7 @@ const cellScrollHandler = {
  * with the strip's CSS float on the <img> folded in as a chain level. */
 const CWM_MIN_SAMPLES = 12;
 const CWM_MAX_SAMPLES = 48;
-const CWM_VERSION = "1";
+const CWM_VERSION = "2";
 
 function cwmSampleCount(cycleMs) {
   return Math.max(CWM_MIN_SAMPLES, Math.min(CWM_MAX_SAMPLES, Math.round(cycleMs / 40)));

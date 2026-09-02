@@ -1638,9 +1638,19 @@ function csCachedStrip(o, outDir, outScale) {
 
 /* the television's loop for this cell, from the live geometry: same px/s
  * the sheet path uses, over +window -> -innerHeight */
-function csTvDuration(o) {
+/* CS_TV_PACE was tuned by eye (Dave, then the tester) on a 1920-wide
+ * canvas. A canvas laid out at the device's own resolution (2026-09-02)
+ * has fewer pixels across the same screen, so the same px/s would cross
+ * it faster: scale by the canvas's long side over 1920 to keep the
+ * approved motion - the same fraction of the screen per second on every
+ * device. */
+function csPaceScale(ctx) {
+  const w = ctx ? Math.max(ctx.canvasW || 0, ctx.canvasH || 0) : 0;
+  return w > 0 ? w / 1920 : 1;
+}
+function csTvDuration(o, ctx) {
   const pxPerSec = ((o.boxHeight + o.innerHeight) / o.durationMs) * 1000;
-  const tvPxPerSec = pxPerSec / CS_TV_PACE;
+  const tvPxPerSec = (pxPerSec / CS_TV_PACE) * csPaceScale(ctx);
   const travel = o.rect.h + o.innerHeight;
   return { ms: (travel / tvPxPerSec) * 1000, pxPerSec: tvPxPerSec };
 }
@@ -1651,7 +1661,7 @@ async function csCaptureStrips(page, frame, items, ctx) {
   const sharp = require("sharp");
 
   const fill = (o, meta) => {
-    const tv = csTvDuration(o); /* before durationMs is overwritten below */
+    const tv = csTvDuration(o, ctx); /* before durationMs is overwritten below */
     o.type = "scroll";
     if (meta.rect) o.rect = { ...meta.rect };
     o.segments = meta.segments.map((s) => ({ ...s }));
@@ -1949,7 +1959,7 @@ async function csCaptureStrips(page, frame, items, ctx) {
           pathHandlers.join(ctx.outDir, "overlay_ss_" + key + "_" + tag + ".json"),
           JSON.stringify(meta),
         );
-        const tv = csTvDuration(o);
+        const tv = csTvDuration(o, ctx);
         console.log(
           "cellScroll strip: " + o.date + " " + (one ? "one shot" : o._slices + " slice(s)") + ", " + stripH + "px, loop " +
             Math.round(tv.ms / 100) / 10 + "s, " + Math.round(tv.pxPerSec * 10) / 10 + " px/s (native)",
@@ -2269,7 +2279,7 @@ const cellScrollHandler = {
        * changed the motion Dave had approved, and its frames came out
        * incoherent. */
       const pxPerSec = ((o.boxHeight + o.innerHeight) / o.durationMs) * 1000;
-      o._tvPxPerSec = pxPerSec / CS_TV_PACE;
+      o._tvPxPerSec = (pxPerSec / CS_TV_PACE) * csPaceScale(ctx);
       o._travel = o.rect.h + o.innerHeight;
       o._tvMs = (o._travel / o._tvPxPerSec) * 1000;
       o._frames = Math.max(2, Math.min(CS_MAX_FRAMES, Math.round(o._tvMs / CS_PLAY_MS)));
@@ -2827,9 +2837,11 @@ const cellWeatherHandler = {
     /* Natively drawn strips: the overlay's static layer is a copy of the
      * strip's own drawing (the cloud), so the still must not keep one
      * too - two copies half a pixel apart read as a blur (Dave,
-     * 2026-09-02, the 7th). The date and temperatures live in a sibling
-     * (.mm-weather-header-meta) and stay baked. Sheet-era displays keep
-     * the icon-only hide: their sheet covers the strip pixel-for-pixel. */
+     * 2026-09-02, the 7th). The strip's BACKGROUND (the condition's
+     * tint) is not in the overlay and stays baked, as do the date and
+     * temperatures in the sibling .mm-weather-header-meta. Sheet-era
+     * displays keep the icon-only hide: their sheet covers the strip
+     * pixel-for-pixel. */
     const wholeStrip = !!(ctx && ctx.nativeWeather);
     await frame.evaluate(
       (args) => {
@@ -2840,12 +2852,25 @@ const cellWeatherHandler = {
           window.__mmCwHidden.push(el);
         });
         if (!args.wholeStrip) return;
+        /* Blank what the strip DRAWS - its children and pseudo-elements -
+         * but keep the strip's own background: the sun's yellow, the
+         * rain's grey (Dave, 2026-09-02: "we do want to see it"). The
+         * native overlay is filmed with background:none, so the tint
+         * lives in the still alone and nothing is drawn twice. */
+        let st = document.getElementById("mm-cw-still");
+        if (!st) {
+          st = document.createElement("style");
+          st.id = "mm-cw-still";
+          st.textContent =
+            ".mm-cw-still > *, .mm-cw-still::before, .mm-cw-still::after { visibility: hidden !important }";
+          document.head.appendChild(st);
+        }
         document.querySelectorAll(".mm-weather-header-strip").forEach((el) => {
           if (getComputedStyle(el).visibility === "hidden") return;
           const r = el.getBoundingClientRect();
           const mine = args.rects.some((q) => Math.abs(q.x - r.x) < 3 && Math.abs(q.y - r.y) < 3);
           if (!mine) return;
-          el.style.opacity = "0";
+          el.classList.add("mm-cw-still");
           window.__mmCwHidden.push(el);
         });
       },
@@ -2935,7 +2960,10 @@ const cellWeatherHandler = {
         });
         const settle = document.getElementById("mm-weather-settle");
         if (settle) settle.disabled = true;
-        (window.__mmCwHidden || []).forEach((el) => (el.style.opacity = ""));
+        (window.__mmCwHidden || []).forEach((el) => {
+          el.style.opacity = "";
+          el.classList.remove("mm-cw-still");
+        });
         window.__mmCwHidden = [];
         /* remember each icon's file: after svgSwapIn the <img> is gone */
         document.querySelectorAll("img.mm-weather-header-icon").forEach((el) => el.setAttribute("data-mm-src", el.src));
@@ -3038,7 +3066,10 @@ const cellWeatherHandler = {
       // wake the weather and restore the icons for their close-up
       const settle = document.getElementById("mm-weather-settle");
       if (settle) settle.disabled = true;
-      (window.__mmCwHidden || []).forEach((el) => (el.style.opacity = ""));
+      (window.__mmCwHidden || []).forEach((el) => {
+          el.style.opacity = "";
+          el.classList.remove("mm-cw-still");
+        });
       window.__mmCwHidden = [];
     });
     // Isolation differs from the icon film: these particles are drawn
@@ -3634,9 +3665,9 @@ async function spriteAspect(url) {
 // and played by the existing GifOverlay, so the blink survives.
 const STRINGLIGHT_HEIGHT = 50;
 
-async function buildStringLightEffects(outDir) {
+async function buildStringLightEffects(outDir, cw, ch) {
   const sharp = require("sharp");
-  const file = "effect_stringlights.png";
+  const file = "effect_stringlights_" + cw + ".png";
   const filePath = pathHandlers.join(outDir, file);
   const metaPath = filePath.replace(/\.png$/, ".json");
   let meta;
@@ -3651,7 +3682,7 @@ async function buildStringLightEffects(outDir) {
     const pages = src.pages || 1;
     const frameH = src.pageHeight || src.height;
     const tileW = Math.max(1, Math.round((src.width / frameH) * STRINGLIGHT_HEIGHT));
-    const cols = Math.ceil(1920 / tileW) + 1;
+    const cols = Math.ceil(cw / tileW) + 1;
     // 2048px sheet ceiling: subsample long animations
     const maxFrames = Math.max(1, Math.floor(2048 / STRINGLIGHT_HEIGHT));
     const step = Math.max(1, Math.ceil(pages / maxFrames));
@@ -3669,7 +3700,7 @@ async function buildStringLightEffects(outDir) {
       strips.push(
         await sharp({
           create: {
-            width: 1920,
+            width: cw,
             height: STRINGLIGHT_HEIGHT,
             channels: 4,
             background: { r: 0, g: 0, b: 0, alpha: 0 },
@@ -3683,7 +3714,7 @@ async function buildStringLightEffects(outDir) {
 
     await sharp({
       create: {
-        width: 1920,
+        width: cw,
         height: STRINGLIGHT_HEIGHT * strips.length,
         channels: 4,
         background: { r: 0, g: 0, b: 0, alpha: 0 },
@@ -3705,10 +3736,10 @@ async function buildStringLightEffects(outDir) {
     console.log("generated string light sheet:", strips.length, "frames");
   }
 
-  const base = { type: "spritesheet", stripFile: file, frameW: 1920, frameH: STRINGLIGHT_HEIGHT, ...meta };
+  const base = { type: "spritesheet", stripFile: file, frameW: cw, frameH: STRINGLIGHT_HEIGHT, ...meta };
   return [
-    { ...base, rect: { x: 0, y: 0, w: 1920, h: STRINGLIGHT_HEIGHT } },
-    { ...base, rect: { x: 0, y: 1080 - STRINGLIGHT_HEIGHT, w: 1920, h: STRINGLIGHT_HEIGHT } },
+    { ...base, rect: { x: 0, y: 0, w: cw, h: STRINGLIGHT_HEIGHT } },
+    { ...base, rect: { x: 0, y: ch - STRINGLIGHT_HEIGHT, w: cw, h: STRINGLIGHT_HEIGHT } },
   ];
 }
 
@@ -3923,6 +3954,9 @@ async function extractEffects(frame, ctx) {
     (key) => enabled[key] === true || enabled[key] === "true",
   );
   const outDir = (ctx && ctx.outDir) || ".";
+  /* effects spawn against the canvas: the display's own resolution */
+  const cw = (ctx && ctx.canvasW) || 1920;
+  const ch = (ctx && ctx.canvasH) || 1080;
   const toGenerate = active.flatMap((key) => EFFECTS[key].generate || []);
   if (toGenerate.length) await generateEffectSprites(toGenerate, outDir);
 
@@ -3966,7 +4000,7 @@ async function extractEffects(frame, ctx) {
         type: "spritemover",
         ...witch,
         startX: 0,
-        startY: 1080 - 200,
+        startY: ch - 200,
         startDirX: 1,
         startDirY: -1,
         speedX: 150,
@@ -3985,7 +4019,7 @@ async function extractEffects(frame, ctx) {
         type: "spritemover",
         ...spider,
         startX: 30,
-        startY: 1080 - 200,
+        startY: ch - 200,
         startDirX: 1,
         startDirY: -1,
         speedX: 60,
@@ -4006,9 +4040,9 @@ async function extractEffects(frame, ctx) {
       out.push({
         type: "dropper",
         ...dropper,
-        count: Math.max(1, Math.floor(1920 / 200)),
+        count: Math.max(1, Math.floor(cw / 200)),
         speed: 36,
-        maxY: 1080 - 120,
+        maxY: ch - 120,
         swayAmplitude: 22.5,
         swayPeriodMs: 3770,
         threadColor: "0xC8C8C8CC",
@@ -4023,8 +4057,8 @@ async function extractEffects(frame, ctx) {
       out.push({
         type: "spritemover",
         ...spider3,
-        startX: 1920 - 150,
-        startY: 1080 - 150,
+        startX: cw - 150,
+        startY: ch - 150,
         startDirX: -1,
         startDirY: -1,
         speedX: 60,
@@ -4080,7 +4114,7 @@ async function extractEffects(frame, ctx) {
   // string lights are a fixed pair of animated strips, not particles
   if (enabled.stringLight === true || enabled.stringLight === "true") {
     try {
-      out.push(...(await buildStringLightEffects(outDir)));
+      out.push(...(await buildStringLightEffects(outDir, cw, ch)));
     } catch (e) {
       console.error("string lights failed:", e.message);
     }

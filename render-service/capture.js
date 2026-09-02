@@ -553,6 +553,8 @@ async function capturePage(page, opts) {
   const handlerCtx = {
     outDir,
     outScale: outWidth / width,
+    canvasW: width,
+    canvasH: height,
     deferFilming: opts.deferFilming === true,
     filmState,
     nativeScroll: wantsNativeScroll(opts.deviceId),
@@ -584,7 +586,7 @@ async function capturePage(page, opts) {
   let effects = [];
   if (portalFrame) {
     try {
-      effects = await nativeWidgets.extractEffects(portalFrame, { outDir });
+      effects = await nativeWidgets.extractEffects(portalFrame, { outDir, canvasW: width, canvasH: height });
       await nativeWidgets.hideEffects(portalFrame);
       if (effects.length) {
         await page.waitForTimeout(80);
@@ -692,6 +694,8 @@ async function capturePage(page, opts) {
     outDir,
     layered,
     outScale: outWidth / width,
+    canvasW: width,
+    canvasH: height,
     nativeScroll: wantsNativeScroll(opts.deviceId),
     nativeWeather: wantsNativeWeather(opts.deviceId),
     /* Filming sprite sheets for a NEW cell geometry costs tens of

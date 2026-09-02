@@ -21,21 +21,28 @@ it already has rather than guess: a stale screen beats a wrong one.
 
 ## Coordinate space
 
-Every rect, in every part of the manifest, is in **canvas coordinates**:
-1920×1080, origin top-left. That is the portal's layout space, not the
-device's. The portal has no responsive reflow, so it is always rendered
-at 1920×1080 and the *image* is scaled to the device's resolution; the
-geometry stays in canvas units so a client can scale it however it likes.
+Every rect, in every part of the manifest, is in **canvas coordinates**,
+origin top-left. The canvas is the portal's layout space, and since
+2026-09-02 that is the display's **own resolution**: 1280×720 for an HD
+Roku, 1920×1080 for an FHD one. The page image is exactly canvas-sized,
+so it lands 1:1 on the device's plane and text is rasterised on whole
+pixels. The geometry stays in canvas units so a client can scale it
+however it likes - the Roku channel scales its whole stage from the
+canvas to its FHD scene once, in `applyCanvas` (MainScene.brs).
 
-A Roku running FHD happens to map 1:1. Nothing else should assume that.
+A display may still be served the legacy 1920×1080 canvas with a scaled
+image (`LEGACY_CANVAS_IDS` in displayWorker.js) while its channel
+predates the stage scaling. Clients must read `canvas` and never assume
+1920×1080.
 
 ## display.json
 
 ```
 schema        contract version (see above)
-canvas        { width, height } - the coordinate space above. Landscape
-              displays are 1920x1080. A ROTATED display is 1080x1920:
-              the page was rendered unrotated at that size (see rotation).
+canvas        { width, height } - the coordinate space above: the
+              display's own resolution (e.g. 1280x720, 1920x1080). A
+              ROTATED display has the two swapped (e.g. 720x1280): the
+              page was rendered unrotated at that size (see rotation).
 rotation      0 | 90 | 270 - degrees CLOCKWISE, as the viewer sees it,
               that the client must turn the WHOLE canvas to show it
               upright on this screen. Non-zero always comes with a

@@ -20,6 +20,17 @@ const { InteractionSession } = require("./session");
 const { RenderPool } = require("./renderPool");
 const { AssetPublisher, derivePrefix, enabled: r2Enabled } = require("./assets");
 
+/* The layout space is the device's own resolution (Dave, 2026-09-02): the
+ * portal is opened at exactly the pixels the TV shows, so text is
+ * rasterised on whole pixels and the display's record carries that size -
+ * a 720p Roku is a 1280x720 display, like any 720p browser. The channel
+ * scales its stage from the canvas to its FHD scene (MainScene.brs
+ * applyCanvas). A device still on a channel WITHOUT that scaling would
+ * draw a small canvas at 2/3 size in a corner, so it keeps the old
+ * 1920x1080 layout (screenshot scaled to the TV) until its channel is
+ * updated. Remove an id here the day its new zip goes on. */
+const LEGACY_CANVAS_IDS = ["RK482285597"];
+
 const DEBOUNCE_MS = 2500;
 const KEEPALIVE_MS = 60000;
 const RECONNECT_MS = 10000;
@@ -49,7 +60,7 @@ class DisplayWorker {
    * a CSS-rotated iframe, which every extractor here sees as an empty
    * document (2026-09-02: one page, zero overlays, "everything frozen").
    * So a rotated display is rendered UNROTATED - the plain landscape page
-   * at a portrait canvas, 1080x1920 - and the manifest asks the device for
+   * at a portrait canvas (the device's dims swapped) - and the manifest asks the device for
    * ONE rotation of everything: page image, overlays, effects, pointer.
    * Every handler keeps working in the portal's own coordinates; nothing
    * is per widget.
@@ -68,8 +79,9 @@ class DisplayWorker {
     const short = Math.min(dev.w, dev.h);
     const next = {
       rotation,
-      canvasW: portrait ? 1080 : 1920,
-      canvasH: portrait ? 1920 : 1080,
+      /* the layout space: the device's own pixels, or the legacy 1920x1080 */
+      canvasW: this.nativeCanvas ? (portrait ? short : long) : portrait ? 1080 : 1920,
+      canvasH: this.nativeCanvas ? (portrait ? long : short) : portrait ? 1920 : 1080,
       outW: portrait ? short : long,
       outH: portrait ? long : short,
     };
@@ -85,8 +97,6 @@ class DisplayWorker {
       major: opts.major,
       minor: opts.minor,
       deviceId: opts.deviceId,
-      canvasW: 1920, // layout coordinate space - portal has no responsive reflow
-      canvasH: 1080,
       outW: opts.outW || 1920,
       outH: opts.outH || 1080,
       rotation: 0,
@@ -94,6 +104,8 @@ class DisplayWorker {
     /* the device reports its own resolution in landscape; rotation swaps
      * the working geometry but this stays as reported */
     this.deviceOut = { w: this.display.outW, h: this.display.outH };
+    /* canvasW/H (the layout space) are set by applyOrientation */
+    this.nativeCanvas = !LEGACY_CANVAS_IDS.includes(String(opts.deviceId));
     this.applyOrientation(opts.orientation || 0);
     this.dir = opts.dir;
     this.env = opts.env;
@@ -183,7 +195,7 @@ class DisplayWorker {
 
     this.log(
       "worker start (major " + this.display.major + " minor " + this.display.minor + ")",
-      this.display.outW + "x" + this.display.outH,
+      this.display.outW + "x" + this.display.outH + (this.nativeCanvas ? "" : " (legacy 1920x1080 layout)"),
       this.legacy ? "legacy-env" : "on-demand",
     );
     this.log("assets", this.publisher.publicBase() || "(served locally)");

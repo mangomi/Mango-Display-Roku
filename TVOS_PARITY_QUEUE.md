@@ -143,6 +143,35 @@ recaptures every page.
   that clipping (scroll strips, sprite windows) survives the container
   rotation on your renderer - on Roku it is the one thing to watch.
 
+## TODO — canvas at the device's own resolution (Roku channel + service, 2026-09-02)
+
+**Manifest:** `canvas` is now the display's **own resolution** - 1280x720
+for an HD Roku, 1920x1080 for FHD, swapped when rotated (720x1280). It
+was always 1920x1080 / 1080x1920 before. The page image is exactly
+canvas-sized. See MANIFEST.md "Coordinate space".
+
+**What the server does:** opens the portal at the device's reported
+resolution with a device scale factor of 1 (Dave, 2026-09-02: "set the
+size to the same thing as the Roku user"). Text is rasterised on whole
+pixels - the uneven letter spacing of a 1920 layout drawn at 2/3 is
+gone - and the display's backend record becomes that size, so the
+webapp designer and the layout geometry follow it like any browser
+display. Native-scroll pace and effect spawn bounds follow the canvas
+(`csPaceScale`, `extractEffects` canvasW/H). A display listed in
+`LEGACY_CANVAS_IDS` (displayWorker.js) keeps the old 1920x1080 canvas
+with a scaled image while its channel predates the client change.
+
+**What the client must do (Roku reference: MainScene `applyCanvas`):**
+- Read `canvas` from display.json; never assume 1920x1080.
+- Apply ONE uniform scale to the stage container (page slots, overlays,
+  effects, pointer, celebrations): `s = sceneLong / max(canvas.w,
+  canvas.h)`; for a rotated canvas, scale about the same centre the
+  rotation uses, so the canvas centre stays on the screen centre.
+- Size the page image layer to the canvas (the image is canvas-sized;
+  no resampling on the client beyond the stage scale).
+- An Apple TV reports 1920x1080, so on tvOS the scale is 1 today; the
+  code path still has to exist for a 720p output.
+
 ## DONE by the tvOS session already (listed for the record)
 
 - [x] Calendar cell-weather overlays (`overlay_cw_*` gif entries,

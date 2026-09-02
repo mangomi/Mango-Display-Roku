@@ -244,7 +244,7 @@ picked it, every extractor found nothing, and the display went to one
 page with zero overlays ("everything frozen").
 
 So a rotated display is rendered UNROTATED: `displayWorker.applyOrientation`
-swaps the geometry (canvas 1080x1920, output = device dims swapped),
+swaps the geometry (canvas and output = the device's dims swapped),
 `LivePortal.url()` adds `&embed=true` - the portal's own "render the
 landscape page directly, never the rotation host" switch, the same flag
 its iframe passes - and the manifest carries `rotation` 90/270 (MANIFEST.md).

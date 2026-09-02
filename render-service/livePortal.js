@@ -25,11 +25,14 @@
  *    using fetch/XHR, stylesheet rules, and parser-created elements all
  *    bypass any property hook).
  *
- *  - RESOLUTION. The portal has no responsive reflow, so it must always
- *    lay out at 1920x1080. Rather than the old iframe-and-CSS-transform
- *    harness, the page renders at that size with a device scale factor of
- *    outW/1920, so the screenshot comes out at the TV's real resolution
- *    with text rasterised natively - same result, no harness.
+ *  - RESOLUTION. The page is laid out at the display's canvas - normally
+ *    the device's own resolution (2026-09-02), so the screenshot is 1:1
+ *    with what the TV shows, text is rasterised on whole pixels, and the
+ *    backend (which the portal tells its window size) scales the layout
+ *    to it like it does for any browser display. The device scale factor
+ *    outW/canvasW is 1 then; it only differs for a display kept on the
+ *    legacy 1920x1080 layout (displayWorker.js LEGACY_CANVAS_IDS), whose
+ *    screenshot is scaled to the TV.
  */
 const { chromium } = require("playwright");
 const fs = require("fs");
@@ -430,8 +433,8 @@ class LivePortal {
    * backend's socket reply to work out when the result arrived. Dispatch
    * the gesture, then wait for the portal to say it has redrawn.
    *
-   * Coordinates arrive in canvas space (1920x1080), which is also this
-   * page's CSS viewport, so they need no scaling.
+   * Coordinates arrive in canvas space, which is also this page's CSS
+   * viewport, so they need no scaling.
    * ------------------------------------------------------------------ */
 
   async tap(x, y, id) {

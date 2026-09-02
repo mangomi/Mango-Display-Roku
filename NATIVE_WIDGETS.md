@@ -30,8 +30,9 @@ Each render produces two artifacts (same folder, same version):
 }
 ```
 
-Coordinates are in canvas space (1920×1080), which is also the Roku
-scene's FHD design space — they map 1:1, at every output resolution.
+Coordinates are in canvas space — the display's own resolution (see
+MANIFEST.md). The Roku scene is FHD; `applyCanvas` scales the stage from
+the canvas to it, so a 1920×1080 canvas maps 1:1 and a 1280×720 one by 1.5.
 
 Adding a native widget type touches exactly two registries:
 

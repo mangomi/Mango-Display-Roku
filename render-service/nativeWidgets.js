@@ -586,13 +586,17 @@ function wxCachedSheet(o, outDir, outScale) {
  * the sprite sheet - the feasibility test below decides per icon.
  *
  * Geometry: the SVG is laid out in a scratch page at WXM_SUPER times the
- * on-screen size, <use> references are inlined so every animated element
- * is actually rendered, and each element's screen matrix maps its local
- * rotation centre / translation vector into icon pixels. Layer PNGs are
- * the whole icon box with only that element painted. */
+ * on-screen size and at the BOX'S OWN ASPECT - an SVG in a 60x32 badge
+ * is fitted (preserveAspectRatio meet) exactly as the portal's <img>
+ * fits it; a square scratch cropped to the box kept only the top of a
+ * wide box (the calendar's cloud lost its bottom half, Dave 2026-09-02).
+ * <use> references are inlined so every animated element is actually
+ * rendered, and each element's screen matrix maps its local rotation
+ * centre / translation vector into icon pixels. Layer PNGs are the whole
+ * icon box with only that element painted. */
 const WXM_SUPER = 2;
 const WXM_MAX_PX = 512;
-const WXM_VERSION = "2";
+const WXM_VERSION = "3"; /* 3: scratch at the box's aspect */
 
 function wxMotionFeasible(svgText) {
   if (!/<animate/i.test(svgText)) return false;
@@ -659,11 +663,15 @@ async function wxDecompose(page, o, ctx) {
   const outW = Math.max(1, Math.round(o.rect.w * ctx.outScale));
   const outH = Math.max(1, Math.round(o.rect.h * ctx.outScale));
   const S = Math.min(WXM_MAX_PX, Math.max(64, Math.round(Math.max(outW, outH) * WXM_SUPER)));
-  const scratch = await page.context().browser().newPage({ viewport: { width: S, height: S }, deviceScaleFactor: 1 });
+  /* scratch px per output px, then the scratch box at the icon's aspect */
+  const k = S / Math.max(outW, outH);
+  const W = Math.max(1, Math.round(outW * k));
+  const H = Math.max(1, Math.round(outH * k));
+  const scratch = await page.context().browser().newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
   try {
     await scratch.setContent(
       '<!doctype html><html><head><style>html,body{margin:0;background:transparent;overflow:hidden}' +
-        "#host{width:" + S + "px;height:" + S + "px}#host svg{width:" + S + "px;height:" + S + "px;display:block}</style></head>" +
+        "#host{width:" + W + "px;height:" + H + "px}#host svg{width:" + W + "px;height:" + H + "px;display:block}</style></head>" +
         '<body><div id="host">' + o.svgText + "</div></body></html>",
     );
     const plan = await scratch.evaluate(() => {
@@ -782,7 +790,7 @@ async function wxDecompose(page, o, ctx) {
     if (!plan || plan.error) throw new Error("decompose: " + ((plan && plan.error) || "no plan"));
     if (!plan.layers.length) throw new Error("decompose: nothing animates");
 
-    const toIcon = o.rect.w / S; /* scratch px -> canvas px */
+    const toIcon = o.rect.w / W; /* scratch px -> canvas px */
     const key = wxMotionKey(o, ctx.outScale);
     const files = [];
     const shoot = async (css) => {
@@ -795,14 +803,12 @@ async function wxDecompose(page, o, ctx) {
         }
         st.textContent = css;
       }, css);
-      return await scratch.screenshot({ type: "png", omitBackground: true, clip: { x: 0, y: 0, width: S, height: S } });
+      return await scratch.screenshot({ type: "png", omitBackground: true, clip: { x: 0, y: 0, width: W, height: H } });
     };
     const writeLayer = async (buf, idx) => {
-      /* the box is rect.w x rect.h; the scratch is square S: keep the
-       * icon's own aspect by cropping to the drawn extent of the box */
-      const w = Math.max(1, Math.round((o.rect.w / o.rect.w) * S));
-      const h = Math.max(1, Math.round((o.rect.h / o.rect.w) * S));
-      const png = await sharp(buf).extract({ left: 0, top: 0, width: Math.min(w, S), height: Math.min(h, S) }).png().toBuffer();
+      /* the scratch IS the box, at the icon's aspect: the layer is the
+       * whole shot */
+      const png = await sharp(buf).extract({ left: 0, top: 0, width: W, height: H }).png().toBuffer();
       const tag = crypto.createHash("md5").update(png).digest("hex").slice(0, 8);
       const name = "overlay_wxm_" + key + "_" + idx + "_" + tag + ".png";
       fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, name), png);

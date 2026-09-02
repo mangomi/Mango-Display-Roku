@@ -179,13 +179,15 @@ function allItems() as object
     return out
 end function
 
-' hold any strip the pointer is over, so its boxes stand still
-sub pauseStripsUnderPointer(active as boolean)
+' Hold a strip only while the pointer is ON one of its checkboxes - the
+' box stands still to be ticked - and let it run again the moment the
+' pointer leaves that box, not when the pointer hides (Dave, 2026-09-02:
+' "as soon as that line is not in focus, it should stop holding it").
+sub pauseStripsFor(hit as object)
     ovs = m.top.stripOverlays
     if ovs = invalid then return
     for each ov in ovs
-        r = ov.config.rect
-        over = active and m.px >= r.x and m.px <= r.x + r.w and m.py >= r.y and m.py <= r.y + r.h
+        over = hit <> invalid and hit.strip <> invalid and hit.overlay.isSameNode(ov)
         if ov.paused <> over then ov.paused = over
     end for
 end sub
@@ -241,7 +243,7 @@ sub onIdle()
     m.highlight.visible = false
     m.warmSent = false
     stopHold()
-    pauseStripsUnderPointer(false)
+    pauseStripsFor(invalid)
 end sub
 
 sub placePointer()
@@ -461,13 +463,13 @@ sub updateHighlight()
         m.highlight.visible = false
         return
     end if
-    pauseStripsUnderPointer(true)
+    it = itemUnderPointer()
+    pauseStripsFor(it)
     r = invalid
     reg = regionUnderPointer()
     if reg <> invalid
         r = reg.rect
     else
-        it = itemUnderPointer()
         if it <> invalid
             pad = 10
             ir = itemRect(it)

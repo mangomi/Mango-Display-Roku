@@ -46,7 +46,7 @@ sub init()
 
     ' native-widget registry: manifest overlay type -> SceneGraph component
     ' (add future types here AND in render-service/nativeWidgets.js)
-    m.overlayRegistry = { clock: "ClockOverlay", gif: "GifOverlay", slideshow: "SlideshowOverlay", countdown: "CountdownOverlay", background: "SlideshowOverlay" }
+    m.overlayRegistry = { clock: "ClockOverlay", gif: "GifOverlay", scroll: "ScrollOverlay", slideshow: "SlideshowOverlay", countdown: "CountdownOverlay", background: "SlideshowOverlay" }
     ' these render BELOW the page image (layered pages)
     m.underTypes = { background: true }
 

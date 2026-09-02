@@ -1096,9 +1096,9 @@ const CW_WARMUP_MS = 3000;
  * frame count, so a short cell loops quickly and a tall one slowly, just
  * as the portal does. */
 /* Cap on frames per cell. Every frame is a screenshot, so this is the
- * filming cost; it is also the sheet size. The seamless loop travels only
- * innerHeight instead of boxHeight+innerHeight, so a given budget now buys
- * a step roughly half the size it used to - 300 frames leaves well under
+ * filming cost; it is also the sheet size. Starting at the window's edge
+ * rather than the cell's drops the dead lead-in, so a given budget buys a
+ * smaller step - 300 frames leaves well under
  * half an output pixel per frame on a typical cell, which reads as a crawl
  * rather than stepping. */
 const CS_MAX_FRAMES = 300;
@@ -1141,7 +1141,7 @@ const CS_PLAY_MS = 110;
 /* Bump when the filmed motion changes meaning, so sheets cached under the
  * old geometry are not reused: the key is otherwise all inputs, and travel
  * changed from boxHeight+innerHeight to a seamless innerHeight. */
-const CS_FILM_VERSION = "3-alpha";
+const CS_FILM_VERSION = "4-window";
 
 function csKey(o, outScale) {
   return crypto
@@ -1426,21 +1426,22 @@ const cellScrollHandler = {
     /* frames per cell = its own cycle at the shared step */
     const need = live.filter((o, i) => !hits[i]);
     need.forEach((o) => {
-      /* Seamless loop. The portal's marquee travels boxHeight + innerHeight:
-       * it starts wholly below the window and ends wholly above it, so the
-       * cell is empty at both ends of the cycle and the reader waits through
-       * a dead stretch before the events come round again (Dave, 2026-09-02:
-       * "unnecessary space before the scrolling starts again"). A second copy
-       * of the content, appended below the first, turns that into a ticker:
-       * travel is innerHeight, and as the last event leaves the top the copy
-       * is already arriving at the bottom, so the window is never empty.
+      /* The portal's own motion, minus its dead lead-in. Its marquee starts
+       * at top = boxHeight, the FULL cell height including the date row, so
+       * the content sits (boxHeight - window) below the window's bottom edge
+       * before a pixel of it shows - ~22px, nine seconds at this pace, of a
+       * cell doing nothing (Dave, 2026-09-02: "unnecessary space before the
+       * scrolling starts again"). Start at the window's own edge instead:
+       * the first event begins entering at once, and the wrap stays an
+       * empty-to-empty cut the eye cannot see. Everything else - path,
+       * px/s, run-out - is the portal's.
        *
-       * Same px/s as before - the pace is unchanged - but over a shorter
-       * distance, so the loop is quicker AND the same frame budget buys a
-       * finer step. That is most of the answer to the jerkiness too. */
+       * A ticker with a cloned second copy was tried here and reverted: it
+       * changed the motion Dave had approved, and its frames came out
+       * incoherent. */
       const pxPerSec = ((o.boxHeight + o.innerHeight) / o.durationMs) * 1000;
       o._tvPxPerSec = pxPerSec / CS_TV_PACE;
-      o._travel = o.innerHeight;
+      o._travel = o.rect.h + o.innerHeight;
       o._tvMs = (o._travel / o._tvPxPerSec) * 1000;
       o._frames = Math.max(2, Math.min(CS_MAX_FRAMES, Math.round(o._tvMs / CS_PLAY_MS)));
     });
@@ -1451,11 +1452,6 @@ const cellScrollHandler = {
       const park = document.getElementById("mm-scroll-park");
       if (park) park.disabled = true;
       const list = window.mmScrollCells || [];
-      /* Append a second copy of each filmed cell's events. They flow
-       * straight after the originals, so the copy sits exactly innerHeight
-       * lower with no positioning of our own - the standard ticker trick.
-       * cloneNode, so Angular never sees them as anything but inert nodes;
-       * they are stripped again once filming ends. */
       /* Film on alpha. A sprite is drawn back over the page, and on a
        * display with an image or slideshow background that page is a
        * transparent layer over a native picture - so anything the frame
@@ -1475,24 +1471,20 @@ const cellScrollHandler = {
           n.style.setProperty("background", "transparent", "important");
         }
       });
-      idxs.forEach((i) => {
-        const c = list[i];
-        if (!c || !c.content || !c.content.parentElement) return;
-        const par = c.content.parentElement;
-        if (par.querySelector("[data-mm-loop]")) return;
-        [...par.querySelectorAll(".-m-scroll-c")].forEach((el) => {
-          const twin = el.cloneNode(true);
-          twin.setAttribute("data-mm-loop", "1");
-          twin.removeAttribute("id");
-          twin.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
-          par.appendChild(twin);
-        });
-      });
       list.forEach((c) => {
         if (!c.content) return;
+        /* Stop the portal's OWN animation on EVERY element of the marquee.
+         * jQuery animates each element of scrollTarget on its own fx queue,
+         * so stopping c.content alone left its siblings scrolling at real
+         * speed underneath virtual-time filming - two clocks fighting over
+         * the same `top`, which is what came out as smeared, doubled frames
+         * (Dave, 2026-09-02). stop(true,false): clear the queue, do not
+         * jump to the end, so the complete-callback never re-arms it. */
         if (window.jQuery) {
           try {
-            window.jQuery(c.content).stop(true, false);
+            const par = c.content.parentElement;
+            const all = par ? par.querySelectorAll(".-m-scroll-c") : [c.content];
+            window.jQuery(all.length ? all : [c.content]).stop(true, false);
           } catch (e) {}
         }
         const b0 = c.content.parentElement || c.content;
@@ -1516,17 +1508,17 @@ const cellScrollHandler = {
             args.cells.forEach((cell) => {
               const c = list[cell.idx];
               if (!c || !c.content) return;
-              /* 0 -> -innerHeight, linear; the twin appended below carries
-               * the wrap, so there is no empty lead-in or run-out */
+              /* +window -> -innerHeight, linear: the portal's path with the
+               * dead lead-in above the window removed */
               const t = Math.min(1, args.k / cell.frames);
-              const top = -t * cell.innerHeight;
+              const top = cell.winH - t * (cell.winH + cell.innerHeight);
               const par = c.content.parentElement;
               const all = par ? par.querySelectorAll(".-m-scroll-c") : [c.content];
               (all.length ? all : [c.content]).forEach((el) => (el.style.top = top + "px"));
             });
             return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
           },
-          { k, cells: need.map((o) => ({ idx: o.idx, frames: o._frames, innerHeight: o.innerHeight })) },
+          { k, cells: need.map((o) => ({ idx: o.idx, frames: o._frames, winH: o.rect.h, innerHeight: o.innerHeight })) },
         );
         shots.push(await page.screenshot({ type: "png", omitBackground: true }));
       }
@@ -1591,7 +1583,7 @@ const cellScrollHandler = {
           );
           console.log(
             "cellScroll sheet: " + o.date + " " + frames.length + "f @" + meta.frameMs + "ms (" +
-              o.speed + ", loop " + Math.round(o._tvMs / 100) / 10 + "s seamless, " +
+              o.speed + ", loop " + Math.round(o._tvMs / 100) / 10 + "s, " +
               Math.round(o._tvPxPerSec * 10) / 10 + " px/s, " +
               Math.round((100 * o._travel) / frames.length) / 100 + "px/frame)",
           );
@@ -1607,7 +1599,6 @@ const cellScrollHandler = {
       await frame.evaluate((idxs) => {
         const park = document.getElementById("mm-scroll-park");
         if (park) park.disabled = false;
-        document.querySelectorAll("[data-mm-loop]").forEach((n) => n.remove());
         (window.__mmCsBg || []).forEach((e) => {
           if (e.bg) e.el.style.setProperty("background", e.bg, e.pri || "");
           else e.el.style.removeProperty("background");

@@ -2291,7 +2291,7 @@ const cellScrollHandler = {
  * with the strip's CSS float on the <img> folded in as a chain level. */
 const CWM_MIN_SAMPLES = 12;
 const CWM_MAX_SAMPLES = 48;
-const CWM_VERSION = "2";
+const CWM_VERSION = "3";
 
 function cwmSampleCount(cycleMs) {
   return Math.max(CWM_MIN_SAMPLES, Math.min(CWM_MAX_SAMPLES, Math.round(cycleMs / 40)));
@@ -2402,7 +2402,14 @@ async function cwmBuild(page, frame, o, key, ctx) {
     [...strip.querySelectorAll("*")].forEach((el) => consider(el, "particle"));
     let icon = null;
     if (iconEl) {
+      /* the box at its BASE pose: the strip floats the icon with a CSS
+       * animation (translate + scale), and a live rect measured mid-cycle
+       * is shifted and scaled - which put the rotation centre off and
+       * made the rays wobble (Dave, 2026-09-02) */
+      const prevAnim = iconEl.style.animation;
+      iconEl.style.animation = "none";
       const r = iconEl.getBoundingClientRect();
+      iconEl.style.animation = prevAnim;
       const float = consider(iconEl, "icon");
       icon = { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, src: iconEl.getAttribute("data-mm-src") || iconEl.currentSrc || iconEl.src || "", float: float ? float.idx : null };
     }

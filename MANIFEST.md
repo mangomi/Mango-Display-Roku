@@ -94,6 +94,24 @@ redraws it live.
   URL. A client that can decode a GIF or animate an SVG should prefer
   this and ignore the sheet entirely.
 
+**`scroll` overlays** — natively scrolled content (calendar cells, lists;
+Roku `ScrollOverlay`). The render service photographs the cell's content
+once as a tall transparent strip and the device does the motion.
+
+- `rect` — the window, canvas px; clip to it.
+- `segments` — `[{ file, h }]` strip pieces top-to-bottom, each PNG kept
+  ≤ 2048px tall for the GPU. `stripFile` is the first piece, for tooling.
+- `stripW`, `stripH` — the strip's size in canvas px (the PNGs are at
+  output scale; draw them scaled to this).
+- `fromY`, `toY` — the strip's translation relative to the window's top at
+  the start and end of one loop: `+rect.h` → `-stripH`, so it enters from
+  the bottom edge and leaves past the top.
+- `durationMs` — one loop, linear; `loop` — repeat (default true).
+
+Emitted only to devices whose client understands it
+(`NATIVE_SCROLL_PREFIXES` in `render-service/capture.js`); every other
+device receives the same cell as a `gif` sprite sheet.
+
 Do not delete `source` when generating a sheet. An earlier version did,
 which quietly made the manifest Roku-only.
 

@@ -1201,6 +1201,265 @@ function csCachedSheet(o, outDir, outScale) {
   return null;
 }
 
+
+/* ---- native scroll: one strip per cell, the device does the motion ----
+ *
+ * Instead of filming every frame of the marquee (up to CS_MAX_FRAMES
+ * screenshots a cell) the content is photographed ONCE as a tall
+ * transparent strip - ceil(innerHeight / window) screenshots, each showing
+ * the next window-height of it - and the manifest tells the device where
+ * the window is and how far to slide the strip: +window -> -stripH, the
+ * portal's own path minus its dead lead-in. The Roku's ScrollOverlay
+ * animates that every refresh, sub-pixel. The pace is durationMs, computed
+ * at fill time from CS_TV_PACE and the live geometry, so a pace change
+ * needs no refilm. Emitted only where capture.js says the device's client
+ * understands "scroll" (ctx.nativeScroll); everyone else keeps the sheets.
+ * The blanking, alpha and ancestor-background handling are the sheet
+ * path's, repeated so the two stay independent until the sheets can go. */
+const CS_STRIP_SALT = "strip-1";
+const CS_SEG_MAX = 2048; /* Roku texture cap, output px */
+
+function csStripKey(o, outScale) {
+  return crypto
+    .createHash("md5")
+    .update(
+      [
+        CS_STRIP_SALT,
+        o.date || "",
+        o.widgetSettingId || "",
+        Math.round(o.rect.w * outScale),
+        Math.round(o.rect.h * outScale),
+        Math.round(o.innerHeight),
+      ].join("|"),
+    )
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function csCachedStrip(o, outDir, outScale) {
+  const key = csStripKey(o, outScale);
+  let metas;
+  try {
+    metas = fsHandlers
+      .readdirSync(outDir)
+      .filter((f) => f.startsWith("overlay_ss_" + key + "_") && f.endsWith(".json"));
+  } catch (e) {
+    return null;
+  }
+  for (const m of metas) {
+    try {
+      const c = JSON.parse(fsHandlers.readFileSync(pathHandlers.join(outDir, m), "utf8"));
+      if (
+        c.segments &&
+        c.segments.length &&
+        c.segments.every((s) => fsHandlers.existsSync(pathHandlers.join(outDir, s.file)))
+      )
+        return c;
+    } catch (e) {}
+  }
+  return null;
+}
+
+/* the television's loop for this cell, from the live geometry: same px/s
+ * the sheet path uses, over +window -> -innerHeight */
+function csTvDuration(o) {
+  const pxPerSec = ((o.boxHeight + o.innerHeight) / o.durationMs) * 1000;
+  const tvPxPerSec = pxPerSec / CS_TV_PACE;
+  const travel = o.rect.h + o.innerHeight;
+  return { ms: (travel / tvPxPerSec) * 1000, pxPerSec: tvPxPerSec };
+}
+
+async function csCaptureStrips(page, frame, items, ctx) {
+  const live = items.filter((i) => i.liveCapture);
+  if (!live.length) return items;
+  const sharp = require("sharp");
+
+  const fill = (o, meta) => {
+    const tv = csTvDuration(o); /* before durationMs is overwritten below */
+    o.type = "scroll";
+    if (meta.rect) o.rect = { ...meta.rect };
+    o.segments = meta.segments.map((s) => ({ ...s }));
+    o.stripFile = meta.segments[0].file; /* first piece, for tooling that lists by stripFile */
+    o.stripW = meta.stripW;
+    o.stripH = meta.stripH;
+    o.fromY = o.rect.h;
+    o.toY = -meta.stripH;
+    o.durationMs = Math.round(tv.ms);
+    o.loop = true;
+    delete o.liveCapture;
+    delete o.idx;
+    delete o.boxHeight;
+    delete o.innerHeight;
+    delete o.speed;
+    delete o._slices;
+  };
+
+  const hits = live.map((o) => csCachedStrip(o, ctx.outDir, ctx.outScale));
+  if (hits.every(Boolean)) {
+    live.forEach((o, i) => fill(o, hits[i]));
+    console.log("cellScroll: " + live.length + " cell(s) from cached strips");
+    return items;
+  }
+  const need = live.filter((o, i) => !hits[i]);
+  need.forEach((o) => {
+    o._slices = Math.max(1, Math.ceil(o.innerHeight / Math.max(1, o.rect.h)));
+  });
+  const steps = Math.max(...need.map((o) => o._slices));
+
+  await frame.evaluate((idxs) => {
+    const park = document.getElementById("mm-scroll-park");
+    if (park) park.disabled = true;
+    const list = window.mmScrollCells || [];
+    window.__mmCsBg = window.__mmCsBg || [];
+    idxs.forEach((i) => {
+      const c = list[i];
+      if (!c || !c.content) return;
+      for (let n = c.content.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+        if (window.__mmCsBg.some((e) => e.el === n)) continue;
+        window.__mmCsBg.push({ el: n, bg: n.style.getPropertyValue("background"), pri: n.style.getPropertyPriority("background") });
+        n.style.setProperty("background", "transparent", "important");
+      }
+    });
+    list.forEach((c) => {
+      if (!c.content) return;
+      if (window.jQuery) {
+        try {
+          const par = c.content.parentElement;
+          const all = par ? par.querySelectorAll(".-m-scroll-c") : [c.content];
+          window.jQuery(all.length ? all : [c.content]).stop(true, false);
+        } catch (e) {}
+      }
+      const b0 = c.content.parentElement || c.content;
+      b0.style.visibility = "";
+      b0.style.opacity = "";
+    });
+  }, need.map((o) => o.idx));
+  await frame.addStyleTag({ content: "/*mm-film*/html,body,#main{background:transparent !important}" });
+  await page.addStyleTag({ content: "/*mm-film*/html,body{background:transparent !important}" });
+  const t0 = Date.now();
+  try {
+    const shots = [];
+    for (let k = 0; k < steps; k++) {
+      await frame.evaluate(
+        (args) => {
+          const list = window.mmScrollCells || [];
+          args.cells.forEach((cell) => {
+            const c = list[cell.idx];
+            if (!c || !c.content) return;
+            /* slice k: the window shows content rows [k*winH, (k+1)*winH) */
+            const top = -args.k * cell.winH;
+            const par = c.content.parentElement;
+            const all = par ? par.querySelectorAll(".-m-scroll-c") : [c.content];
+            (all.length ? all : [c.content]).forEach((el) => (el.style.top = top + "px"));
+          });
+          return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        },
+        { k, cells: need.map((o) => ({ idx: o.idx, winH: o.rect.h })) },
+      );
+      shots.push(await page.screenshot({ type: "png", omitBackground: true }));
+    }
+    const shotMeta = await sharp(shots[0]).metadata();
+    for (const o of need) {
+      try {
+        const dr = {
+          left: Math.round(o.rect.x * ctx.outScale),
+          top: Math.round(o.rect.y * ctx.outScale),
+          width: Math.max(1, Math.round(o.rect.w * ctx.outScale)),
+          height: Math.max(1, Math.round(o.rect.h * ctx.outScale)),
+        };
+        dr.left = Math.min(Math.max(0, dr.left), shotMeta.width - 1);
+        dr.top = Math.min(Math.max(0, dr.top), shotMeta.height - 1);
+        dr.width = Math.min(dr.width, shotMeta.width - dr.left);
+        dr.height = Math.min(dr.height, shotMeta.height - dr.top);
+        const stripH = Math.max(1, Math.min(Math.round(o.innerHeight * ctx.outScale), o._slices * dr.height));
+        const pieces = [];
+        for (let k = 0; k < o._slices; k++) {
+          pieces.push(await sharp(shots[Math.min(k, shots.length - 1)]).extract(dr).png().toBuffer());
+        }
+        const stripBuf = await sharp({
+          create: { width: dr.width, height: o._slices * dr.height, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+        })
+          .composite(pieces.map((p, i) => ({ input: p, left: 0, top: i * dr.height })))
+          .png()
+          .toBuffer();
+        /* key from the rect process() saw, before it is snapped */
+        const key = csStripKey(o, ctx.outScale);
+        o.rect = {
+          x: dr.left / ctx.outScale,
+          y: dr.top / ctx.outScale,
+          w: dr.width / ctx.outScale,
+          h: dr.height / ctx.outScale,
+        };
+        const tag = crypto.createHash("md5").update(stripBuf).digest("hex").slice(0, 8);
+        const segments = [];
+        for (let y = 0, i = 0; y < stripH; i++) {
+          const h = Math.min(CS_SEG_MAX, stripH - y);
+          const buf = await sharp(stripBuf).extract({ left: 0, top: y, width: dr.width, height: h }).png().toBuffer();
+          const file = "overlay_ss_" + key + "_" + tag + "_" + i + ".png";
+          fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, file), buf);
+          segments.push({ file, h: h / ctx.outScale });
+          y += h;
+        }
+        const meta = { rect: { ...o.rect }, segments, stripW: dr.width / ctx.outScale, stripH: stripH / ctx.outScale };
+        fsHandlers.writeFileSync(
+          pathHandlers.join(ctx.outDir, "overlay_ss_" + key + "_" + tag + ".json"),
+          JSON.stringify(meta),
+        );
+        const tv = csTvDuration(o);
+        console.log(
+          "cellScroll strip: " + o.date + " " + o._slices + " shot(s), " + stripH + "px, loop " +
+            Math.round(tv.ms / 100) / 10 + "s, " + Math.round(tv.pxPerSec * 10) / 10 + " px/s (native)",
+        );
+        fill(o, meta);
+      } catch (e) {
+        console.error("cell scroll strip failed (" + o.date + "):", e.message);
+        o.skip = true;
+      }
+    }
+  } finally {
+    await frame.evaluate((idxs) => {
+      const park = document.getElementById("mm-scroll-park");
+      if (park) park.disabled = false;
+      (window.__mmCsBg || []).forEach((e) => {
+        if (e.bg) e.el.style.setProperty("background", e.bg, e.pri || "");
+        else e.el.style.removeProperty("background");
+      });
+      window.__mmCsBg = [];
+      document.querySelectorAll("style").forEach((n) => {
+        if ((n.textContent || "").includes("mm-film")) n.remove();
+      });
+      const list = window.mmScrollCells || [];
+      list.forEach((c) => {
+        if (c && c.content) {
+          const par = c.content.parentElement;
+          const all = par ? [...par.querySelectorAll(".-m-scroll-c")] : [c.content];
+          (all.length ? all : [c.content]).forEach((el) => (el.style.top = ""));
+        }
+      });
+      idxs.forEach((i) => {
+        const c = list[i];
+        if (c && c.content) {
+          const b = c.content.parentElement || c.content;
+          b.style.setProperty("visibility", "hidden", "important");
+          b.style.setProperty("opacity", "0", "important");
+        }
+      });
+    }, need.filter((o) => !o.skip).map((o) => o.idx));
+    await page
+      .evaluate(() => {
+        document.querySelectorAll("style").forEach((n) => {
+          if ((n.textContent || "").includes("mm-film")) n.remove();
+        });
+      })
+      .catch(() => {});
+  }
+  live.forEach((o, i) => {
+    if (hits[i]) fill(o, hits[i]);
+  });
+  console.log("cellScroll: captured " + need.filter((o) => !o.skip).length + " strip(s) in " + (Date.now() - t0) + "ms");
+  return items.filter((o) => !o.skip);
+}
+
 const cellScrollHandler = {
   type: "cellScroll",
 
@@ -1317,7 +1576,7 @@ const cellScrollHandler = {
     if (!ctx || !ctx.deferFilming) return overlays;
     const pending = [];
     const keep = overlays.filter((o) => {
-      if (csCachedSheet(o, ctx.outDir, ctx.outScale)) return true;
+      if ((ctx.nativeScroll ? csCachedStrip : csCachedSheet)(o, ctx.outDir, ctx.outScale)) return true;
       pending.push(o);
       return false;
     });
@@ -1407,6 +1666,9 @@ const cellScrollHandler = {
     const live = items.filter((i) => i.liveCapture);
     if (!live.length) return items;
     const sharp = require("sharp");
+
+    /* a client that scrolls natively gets one strip, not a filmed sheet */
+    if (ctx && ctx.nativeScroll) return await csCaptureStrips(page, frame, items, ctx);
 
     const fill = (o, meta) => {
       o.stripFile = meta.stripFile;

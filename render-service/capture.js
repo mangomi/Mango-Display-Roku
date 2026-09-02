@@ -418,6 +418,18 @@ async function applyCalendarOverride(page, stateDir) {
   }
 }
 
+/* Which displays get natively scrolled cells - "scroll" overlays: one
+ * strip per cell, the device animates it - instead of filmed sprite
+ * sheets. The client must understand the type first, so this is a prefix
+ * list per platform: Roku's channel does (ScrollOverlay, 2026-09-02); tvOS
+ * is queued in TVOS_PARITY_QUEUE.md and joins here once its app has it.
+ * Anything not listed keeps receiving the sheets. */
+const NATIVE_SCROLL_PREFIXES = ["RK"];
+function wantsNativeScroll(deviceId) {
+  const id = String(deviceId || "");
+  return NATIVE_SCROLL_PREFIXES.some((p) => id.startsWith(p));
+}
+
 async function capturePage(page, opts) {
   const { out, url, width, height, outWidth, outHeight, apiBase } = opts;
   // stage timings: "make it fast" needs measurements, not guesses
@@ -491,6 +503,7 @@ async function capturePage(page, opts) {
     outScale: outWidth / width,
     deferFilming: opts.deferFilming === true,
     filmState,
+    nativeScroll: wantsNativeScroll(opts.deviceId),
   };
   if (portalFrame) {
     for (const handler of nativeWidgets.handlers) {
@@ -616,6 +629,7 @@ async function capturePage(page, opts) {
     outDir,
     layered,
     outScale: outWidth / width,
+    nativeScroll: wantsNativeScroll(opts.deviceId),
     /* Filming sprite sheets for a NEW cell geometry costs tens of
      * seconds (436 frames when a calendar switched to Monthly view,
      * 2026-09-01) and the user waits on a spinner for all of it. When

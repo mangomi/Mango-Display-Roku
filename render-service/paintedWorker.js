@@ -451,6 +451,7 @@ class PaintedWorker extends DisplayWorker {
   async capturePageIndex(index, deferFilming) {
     const manifest = await capturePage(this.portal.page, {
       out: this.pageFile(index),
+      deviceId: this.display.deviceId,
       url: this.portal.url(),
       width: this.display.canvasW,
       height: this.display.canvasH,

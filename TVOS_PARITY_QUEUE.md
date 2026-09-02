@@ -11,6 +11,22 @@ off there, not deleted here.
 
 ## REQUIRED — new client behavior
 
+- [ ] **`scroll` overlay type — natively scrolled calendar cells / lists**
+  (Roku `ScrollOverlay`, commit `37f3826`). For Roku the server no longer
+  films scrolling cell content into a `gif` sprite sheet; it captures it
+  ONCE as a tall transparent strip and the device animates it. Fields:
+  `rect` (window, canvas px — clip to it), `segments` (`[{file,h}]`
+  pieces top-to-bottom, each PNG ≤ 2048px tall; `stripFile` = first
+  piece), `stripW`/`stripH` (canvas px; PNGs are at output scale),
+  `fromY`/`toY` (strip translation relative to the window top at loop
+  start/end: `+rect.h` → `-stripH`), `durationMs` (one loop), `loop`
+  (default true). Linear, repeating, sub-pixel — a `CABasicAnimation`
+  on the strip layer's position does it. The server emits `scroll` ONLY
+  to device ids in `NATIVE_SCROLL_PREFIXES` (`render-service/capture.js`,
+  currently `["RK"]`); tvOS keeps receiving `gif` sheets until `"ATV"` is
+  added there — ship the client first, then flip the list. Reference:
+  `components/overlays/ScrollOverlay.brs`; schema in MANIFEST.md.
+
 - [ ] **`manifest.showPage` — jump to the page being edited**
   (Roku commits `b0c3f90`, `29daa64`). A layout edit in the webapp now
   navigates the portal to the edited page, and the published

@@ -40,7 +40,8 @@ off there, not deleted here.
   `components/MainScene.brs` `maybeApplyPages`.
 
 - [ ] **`motion` overlay type — natively animated weather icons**
-  (Roku `MotionOverlay`, 2026-09-02). For platforms in
+  (Roku `MotionOverlay`; server `3665bd4` widget icons, `9272ebe` calendar
+  strips; deployed to test 2026-09-02). For platforms in
   `NATIVE_WEATHER_PREFIXES` (`render-service/capture.js`, currently `RK`)
   the server no longer films an animated weather-widget icon into a `gif`
   sheet when its SVG decomposes: it ships one transparent PNG per moving

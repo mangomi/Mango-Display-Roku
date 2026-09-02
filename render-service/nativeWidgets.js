@@ -1124,14 +1124,15 @@ const CS_MAX_FRAMES = 700;
  * already folded Fast vs Slow into that (speed = travel * 19 for Fast,
  * * 35 for Slow), so one number covers both modes and keeps their ratio:
  *
- *   Slow  28.6 px/s / 6 = 4.8 px/s
- *   Fast  52.6 px/s / 6 = 8.8 px/s
+ *   Slow  28.6 px/s / 4 = 7.2 px/s
+ *   Fast  52.6 px/s / 4 = 13.2 px/s
  *
  * History: 3 was too quick across a room; 12 was approved while a filming
  * bug (siblings still animating at portal speed) was adding motion that
  * was not the sprite's own - once that was fixed the true 2.4 px/s read as
- * too slow (Dave, 2026-09-02: "needs to be double the current speed").
- * A typical month cell - ~105px of travel - comes round in ~22s on Slow.
+ * too slow (Dave, 2026-09-02: "needs to be double the current speed"),
+ * and 6 - 4.8 px/s, verified on the device - still read slow to him, so
+ * 4. A typical month cell - ~105px of travel - comes round in ~15s.
  *
  * CS_PLAY_MS is the frame hold the count is derived from. 33ms is the
  * device's floor (GifOverlay clamps there - two refreshes at 60Hz). Rain
@@ -1140,7 +1141,7 @@ const CS_MAX_FRAMES = 700;
  * tracks the letters and sees every update, so it gets the full 30fps
  * with a step around a tenth of an output pixel (Dave, 2026-09-02: "the
  * rain is nice and smooth, but this still looks a bit jerky"). */
-const CS_TV_PACE = 6;
+const CS_TV_PACE = 4;
 const CS_PLAY_MS = 33;
 /* The old 1:1 note, kept because the arithmetic still matters: the marquee is
  * a constant-velocity scroller - speed = (boxHeight + innerHeight) * 35
@@ -1156,7 +1157,7 @@ const CS_PLAY_MS = 33;
 /* Bump when the filmed motion changes meaning, so sheets cached under the
  * old geometry are not reused: the key is otherwise all inputs, and travel
  * changed from boxHeight+innerHeight to a seamless innerHeight. */
-const CS_FILM_VERSION = "6-30fps";
+const CS_FILM_VERSION = "7-pace4";
 
 function csKey(o, outScale) {
   return crypto

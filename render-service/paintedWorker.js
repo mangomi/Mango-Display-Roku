@@ -388,6 +388,20 @@ class PaintedWorker extends DisplayWorker {
       /* a relayout may carry a changed display timezone (no-op during
        * boot: the portal is not ready yet and openPortal reconciles) */
       this.checkPortalTimezone().catch(() => {});
+      /* A self-reload is also how an orientation change arrives: the
+       * portal reloads into (or out of) its rotation host BEFORE its
+       * "orientation" signal can be delivered, so that signal is never
+       * seen (2026-09-02: the record said rotated, the worker still
+       * rendered landscape, the display froze). Re-read the record on
+       * every reload after boot; refreshOrientation reopens the portal
+       * only if the geometry actually changed, then captures. */
+      if (!launchBoot && reason !== "startup") {
+        this.refreshOrientation(reason).catch((e) => {
+          this.log("orientation check failed:", e.message);
+          this.queueCapture(null, reason);
+        });
+        return;
+      }
       this.log("change: full reload - capturing every page (" + reason + ")");
       this.queueCapture(null, reason);
       return;

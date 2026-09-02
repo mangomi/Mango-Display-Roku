@@ -80,6 +80,18 @@ Cached as `overlay_wxm_<key>.json` + layer PNGs, restored from the bucket
 like every other sheet. `module.exports.__wx` exposes the decomposer for
 standalone checks.
 
+The calendar 10-day strips are CSS-driven, so `cwmBuild` does not parse
+keyframes: with the page in the film pose (settle lifted, isolation CSS,
+animations paused) each animated element is seeked through one cycle and
+its computed transform matrix + opacity read back and decomposed into
+translate / rotate / scale / opacity tracks; its base image is shot in
+isolation with `animation: none`. The strip's icon goes through
+`wxDecompose`, with the `<img>`'s own CSS float folded in as a chain
+level. One exemplar per (condition, size), like the sheets; cached as
+`overlay_cwm_<key>.json`. Emits two overlays per cell (particles at the
+strip, icon at its box). `background-position` drifts are not
+reproduced (static); nothing else in the strips uses them.
+
 ## Pages & transitions
 
 Every page renders as its own image + overlay set; `display.json` is the

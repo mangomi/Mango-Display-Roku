@@ -142,10 +142,15 @@ only for icons that decompose; everything else stays a `gif` sheet.
   inside a group that falls).
 - `tracks[]` — `{ prop, cycleMs, delayMs, keys[], values[], center }`.
   `prop` is `rotation` (degrees, clockwise as the viewer sees it, about
-  `center` = [x, y] px within the box), `translation` (`[[dx, dy]]` px) or
-  `opacity`. `keys` are 0..1 positions within one `cycleMs` loop and pair
+  `center` = [x, y] px within the box), `translation` (`[[dx, dy]]` px),
+  `scale` (`[[sx, sy]]` about `center`) or `opacity`. `keys` are 0..1 positions within one `cycleMs` loop and pair
   with `values`; interpolate linearly, hold the last value to the end of
   the cycle, repeat forever, and wait `delayMs` before the first loop.
+- Calendar 10-day strips arrive as TWO `motion` overlays per cell: the
+  strip's particles (rain, snow, hail, wind, fog, bolt) at the strip's
+  rect, and the condition icon at its own smaller box. Their tracks are
+  sampled from the portal's CSS animations (up to 48 keys per cycle), so
+  easing is already baked into the keys.
 
 ### targets
 

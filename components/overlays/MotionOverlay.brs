@@ -19,7 +19,8 @@
 '   track    { prop, cycleMs, delayMs, keys, values, center }
 '     prop     "rotation" (values in degrees, clockwise as the viewer
 '              sees it; center = [x, y] px within the box),
-'              "translation" (values [[dx, dy]] px), or "opacity"
+'              "translation" (values [[dx, dy]] px), "scale" (values
+'              [[sx, sy]] about center), or "opacity"
 '     keys     0..1 positions within one cycle; values pair with them
 '     cycleMs  one loop, held at the last value through any gap
 '     delayMs  phase: wait this long before the first loop
@@ -107,6 +108,13 @@ function buildInterp(g as object, t as object) as object
         i.key = t.keys
         i.keyValue = t.values
         i.fieldToInterp = g.id + ".translation"
+        return i
+    else if t.prop = "scale"
+        if t.center <> invalid then g.scaleRotateCenter = [t.center[0], t.center[1]]
+        i = CreateObject("roSGNode", "Vector2DFieldInterpolator")
+        i.key = t.keys
+        i.keyValue = t.values
+        i.fieldToInterp = g.id + ".scale"
         return i
     else if t.prop = "opacity"
         i = CreateObject("roSGNode", "FloatFieldInterpolator")

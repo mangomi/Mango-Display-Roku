@@ -49,9 +49,12 @@ off there, not deleted here.
   animate each with its tracks (Core Animation keyframe animations map
   1:1: `transform.rotation` about `center`, `position`, `opacity`; linear
   timing, `repeatCount` infinite, `beginTime` = delay), nest `chain`
-  levels as parent layers. Add `ATV` to the prefix list once done; until
-  then tvOS keeps receiving sheets. Reference: `components/overlays/
-  MotionOverlay.brs`.
+  levels as parent layers. `scale` tracks (`[[sx, sy]]` about `center`)
+  exist too. The calendar 10-day strips use the same type: two overlays
+  per cell (particles at the strip rect, icon at its box), tracks sampled
+  from the portal's CSS keyframes. Add `ATV` to the prefix list once done;
+  until then tvOS keeps receiving sheets. Reference:
+  `components/overlays/MotionOverlay.brs`.
 
 ## VERIFY — server behavior changed; client likely fine as built
 

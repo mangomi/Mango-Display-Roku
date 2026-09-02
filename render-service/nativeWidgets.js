@@ -2245,6 +2245,316 @@ const cellScrollHandler = {
   },
 };
 
+/* ---- Native motion for the calendar strips (CSS-driven) ------------------
+ *
+ * The 10-day strip is pure CSS animation: raindrops, flakes, pellets,
+ * wind and fog lines, a storm bolt, plus the condition icon (the same SVG
+ * set as the widget). Instead of parsing @keyframes - vars, calc(), %
+ * units, easing, negative delays - each animated element is SAMPLED: its
+ * animation is paused and seeked through one cycle while the computed
+ * transform matrix and opacity are read back, and every matrix is
+ * decomposed into translate / rotate / scale. That is exact for any
+ * keyframe the browser can compute, and the device interpolates
+ * linearly between samples. One layer PNG per element, shot in isolation
+ * at its base pose (animation: none). The icon goes through wxDecompose,
+ * with the strip's CSS float on the <img> folded in as a chain level. */
+const CWM_MIN_SAMPLES = 12;
+const CWM_MAX_SAMPLES = 48;
+const CWM_VERSION = "1";
+
+function cwmSampleCount(cycleMs) {
+  return Math.max(CWM_MIN_SAMPLES, Math.min(CWM_MAX_SAMPLES, Math.round(cycleMs / 40)));
+}
+
+/* matrix(a,b,c,d,e,f) -> { tx, ty, rot (deg, screen clockwise), sx, sy } */
+function cwmDecomposeMatrix(str) {
+  const m = String(str || "").match(/matrix\(([^)]+)\)/);
+  if (!m) return { tx: 0, ty: 0, rot: 0, sx: 1, sy: 1 };
+  const [a, b, c, d, e, f] = m[1].split(",").map(Number);
+  const sx = Math.hypot(a, b) || 1;
+  const rot = (Math.atan2(b, a) * 180) / Math.PI;
+  /* remove the rotation from the second column to read the y scale */
+  const cosr = Math.cos((rot * Math.PI) / 180);
+  const sinr = Math.sin((rot * Math.PI) / 180);
+  const sy = -c * sinr + d * cosr || 1;
+  return { tx: e, ty: f, rot, sx, sy };
+}
+
+/* samples[k] = { tx, ty, rot, sx, sy, op } at k/N of the cycle */
+function cwmTracksFromSamples(samples, cycleMs, delayMs, center) {
+  const n = samples.length;
+  const keys = samples.map((_, k) => Math.round((k / n) * 1000) / 1000);
+  keys.push(1);
+  const wrap = (arr) => arr.concat([arr[0]]);
+  const r2 = (v) => Math.round(v * 100) / 100;
+  const varies = (get, eps) => samples.some((s) => Math.abs(get(s) - get(samples[0])) > eps);
+  const tracks = [];
+  if (varies((s) => s.tx, 0.05) || varies((s) => s.ty, 0.05) || Math.abs(samples[0].tx) > 0.05 || Math.abs(samples[0].ty) > 0.05) {
+    tracks.push({ prop: "translation", cycleMs, delayMs, keys, values: wrap(samples.map((s) => [r2(s.tx), r2(s.ty)])) });
+  }
+  if (varies((s) => s.rot, 0.1) || Math.abs(samples[0].rot) > 0.1) {
+    /* unwrap so a spin does not snap back through 0 */
+    let acc = 0;
+    let prev = samples[0].rot;
+    const unwrapped = samples.map((s, i) => {
+      if (i) {
+        let d = s.rot - prev;
+        if (d > 180) d -= 360;
+        if (d < -180) d += 360;
+        acc += d;
+        prev = s.rot;
+        return r2(samples[0].rot + acc);
+      }
+      return r2(s.rot);
+    });
+    tracks.push({ prop: "rotation", cycleMs, delayMs, keys, values: unwrapped.concat([r2(unwrapped[0] + (unwrapped[n - 1] - unwrapped[0]) * (n / (n - 1)))]), center });
+  }
+  if (varies((s) => s.sx, 0.01) || varies((s) => s.sy, 0.01) || Math.abs(samples[0].sx - 1) > 0.01 || Math.abs(samples[0].sy - 1) > 0.01) {
+    tracks.push({ prop: "scale", cycleMs, delayMs, keys, values: wrap(samples.map((s) => [r2(s.sx), r2(s.sy)])), center });
+  }
+  if (varies((s) => s.op, 0.01)) {
+    tracks.push({ prop: "opacity", cycleMs, delayMs, keys, values: wrap(samples.map((s) => r2(s.op))) });
+  }
+  return tracks;
+}
+
+function cwmCached(key, outDir) {
+  try {
+    const meta = JSON.parse(fsHandlers.readFileSync(pathHandlers.join(outDir, "overlay_cwm_" + key + ".json"), "utf8"));
+    if (!meta || !Array.isArray(meta.layers)) return null;
+    for (const L of meta.layers) if (!fsHandlers.existsSync(pathHandlers.join(outDir, L.file))) return null;
+    if (meta.icon) for (const L of meta.icon.layers) if (!fsHandlers.existsSync(pathHandlers.join(outDir, L.file))) return null;
+    return meta;
+  } catch (e) {
+    return null;
+  }
+}
+
+/* Build the motion meta for one strip exemplar. The page is expected in
+ * the film pose already: settle lifted, icons restored, isolation CSS
+ * up, SVG icons inlined, every animation paused. */
+async function cwmBuild(page, frame, o, key, ctx) {
+  const sharp = require("sharp");
+  const t0 = Date.now();
+  /* 1. what animates in this strip, with base boxes and timings */
+  const plan = await frame.evaluate((rect) => {
+    const strips = [...document.querySelectorAll(".mm-weather-header-strip")];
+    const strip = strips.find((el) => {
+      const r = el.getBoundingClientRect();
+      return Math.abs(r.x - rect.x) < 2 && Math.abs(r.y - rect.y) < 2;
+    });
+    if (!strip) return { error: "strip not found" };
+    const meta = strip.parentElement ? strip.parentElement.querySelector(".mm-weather-header-meta") : null;
+    const iconEl = meta ? meta.querySelector(".mm-weather-header-icon") : null;
+    const parts = [];
+    let idx = 0;
+    const consider = (el, kind) => {
+      const anims = el.getAnimations ? el.getAnimations() : [];
+      const css = anims.filter((a) => a.effect && a.effect.getTiming);
+      if (!css.length) return null;
+      const timing = css[0].effect.getTiming();
+      const dur = Number(timing.duration) || 0;
+      if (!(dur > 0)) return null;
+      el.setAttribute("data-mm-cwl", String(idx));
+      const rec = {
+        idx,
+        kind,
+        delayMs: Number(timing.delay) || 0,
+        cycleMs: dur,
+        iterations: timing.iterations,
+        direction: timing.direction || "normal",
+      };
+      idx++;
+      parts.push(rec);
+      return rec;
+    };
+    [...strip.querySelectorAll("*")].forEach((el) => consider(el, "particle"));
+    let icon = null;
+    if (iconEl) {
+      const r = iconEl.getBoundingClientRect();
+      const float = consider(iconEl, "icon");
+      icon = { rect: { x: r.x, y: r.y, w: r.width, h: r.height }, src: iconEl.getAttribute("data-mm-src") || iconEl.currentSrc || iconEl.src || "", float: float ? float.idx : null };
+    }
+    return { parts, icon, stripRect: (() => { const r = strip.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; })() };
+  }, o.rect);
+  if (plan.error) throw new Error(plan.error);
+
+  const dr = {
+    left: Math.round(o.rect.x * ctx.outScale),
+    top: Math.round(o.rect.y * ctx.outScale),
+    width: Math.max(1, Math.round(o.rect.w * ctx.outScale)),
+    height: Math.max(1, Math.round(o.rect.h * ctx.outScale)),
+  };
+  const iso = (extra) =>
+    frame.evaluate((css) => {
+      let st = document.getElementById("mm-cwm-iso");
+      if (!st) {
+        st = document.createElement("style");
+        st.id = "mm-cwm-iso";
+        document.head.appendChild(st);
+      }
+      st.textContent = css;
+      return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    }, extra);
+  const shootStrip = async () => {
+    const buf = await page.screenshot({ type: "png", omitBackground: true });
+    const m = await sharp(buf).metadata();
+    const clip = {
+      left: Math.min(Math.max(0, dr.left), m.width - 1),
+      top: Math.min(Math.max(0, dr.top), m.height - 1),
+    };
+    clip.width = Math.min(dr.width, m.width - clip.left);
+    clip.height = Math.min(dr.height, m.height - clip.top);
+    return await sharp(buf).extract(clip).png().toBuffer();
+  };
+  const save = (png, tag) => {
+    const h = crypto.createHash("md5").update(png).digest("hex").slice(0, 8);
+    const name = "overlay_cwm_" + key + "_" + tag + "_" + h + ".png";
+    fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, name), png);
+    return name;
+  };
+
+  const particles = plan.parts.filter((p) => p.kind === "particle");
+  const layers = [];
+  /* 2. the strip's static content (everything the settle hides that does
+   * not animate) - shot with animated elements out of the way */
+  await iso("/*mm-film*/ .mm-weather-header-strip [data-mm-cwl], .mm-weather-header-meta, .mm-weather-header-meta * { visibility: hidden !important }");
+  layers.push({ file: save(await shootStrip(), "s"), tracks: [] });
+
+  /* 3. each particle: base image + sampled motion */
+  for (const part of particles) {
+    const sel = '.mm-weather-header-strip [data-mm-cwl="' + part.idx + '"]';
+    await iso(
+      "/*mm-film*/ .mm-weather-header-strip [data-mm-cwl], .mm-weather-header-meta, .mm-weather-header-meta * { visibility: hidden !important } " +
+        sel + " { visibility: visible !important; animation: none !important; opacity: 1 !important }",
+    );
+    const box = await frame.evaluate((sel) => {
+      const el = document.querySelector(sel);
+      const r = el.getBoundingClientRect();
+      return { x: r.x, y: r.y, w: r.width, h: r.height, baseOpacity: parseFloat(getComputedStyle(el).opacity) };
+    }, sel);
+    const png = await shootStrip();
+    /* sampling: animation back on (paused), seek through one cycle */
+    await iso("/*mm-film*/ .mm-weather-header-strip [data-mm-cwl], .mm-weather-header-meta, .mm-weather-header-meta * { visibility: hidden !important }");
+    const n = cwmSampleCount(part.cycleMs);
+    const samples = await frame.evaluate(
+      ({ sel, n, delayMs, cycleMs, direction }) => {
+        const el = document.querySelector(sel);
+        const anim = el.getAnimations()[0];
+        const out = [];
+        /* effective cycle: alternate directions double it */
+        const alt = direction === "alternate" || direction === "alternate-reverse";
+        const total = alt ? cycleMs * 2 : cycleMs;
+        for (let k = 0; k < n; k++) {
+          anim.currentTime = delayMs + ((k / n) * total) % total + (delayMs < 0 ? 0 : 0);
+          const cs = getComputedStyle(el);
+          out.push({ t: cs.transform, op: parseFloat(cs.opacity) });
+        }
+        return { out, total };
+      },
+      { sel, n, delayMs: part.delayMs, cycleMs: part.cycleMs, direction: part.direction },
+    );
+    const decoded = samples.out.map((sm) => Object.assign(cwmDecomposeMatrix(sm.t), { op: sm.op }));
+    /* CSS transform-origin defaults to the box centre; the layer PNG is
+     * the whole strip, so the centre is the box centre within the strip */
+    const center = [Math.round((box.x + box.w / 2 - o.rect.x) * 100) / 100, Math.round((box.y + box.h / 2 - o.rect.y) * 100) / 100];
+    /* a negative delay is a phase: the element is already mid-cycle at
+     * t=0. Rotating the samples makes key 0 that phase; a positive delay
+     * is a real wait. */
+    let delayMs = 0;
+    let ordered = decoded;
+    if (part.delayMs < 0) {
+      const phase = (((-part.delayMs) % samples.total) + samples.total) % samples.total;
+      const shift = Math.round((phase / samples.total) * n) % n;
+      ordered = decoded.slice(shift).concat(decoded.slice(0, shift));
+    } else {
+      delayMs = Math.round(part.delayMs);
+    }
+    const tracks = cwmTracksFromSamples(ordered, Math.round(samples.total), delayMs, center);
+    const op = tracks.find((t) => t.prop === "opacity");
+    layers.push({ file: save(png, String(part.idx)), tracks, opacity: op ? op.values[0] : box.baseOpacity });
+  }
+  await iso("");
+
+  /* 4. the icon: the widget decomposer at the icon's own box, plus the
+   * strip's CSS float on the <img> as a chain level on every layer */
+  let icon = null;
+  if (plan.icon && plan.icon.src) {
+    try {
+      const svgText = await (await fetch(plan.icon.src)).text();
+      if (wxMotionFeasible(svgText)) {
+        const io = { src: plan.icon.src, rect: plan.icon.rect, svgText };
+        let meta = wxMotionCached(io, ctx.outDir, ctx.outScale);
+        if (!meta) meta = await wxDecompose(page, io, ctx);
+        let chain = null;
+        if (plan.icon.float !== null) {
+          const fp = plan.parts.find((p) => p.idx === plan.icon.float);
+          const sel = '.mm-weather-header-meta [data-mm-cwl="' + fp.idx + '"]';
+          const n = cwmSampleCount(fp.cycleMs);
+          const sm = await frame.evaluate(
+            ({ sel, n, delayMs, cycleMs, direction }) => {
+              const el = document.querySelector(sel);
+              const anim = el.getAnimations()[0];
+              const alt = direction === "alternate" || direction === "alternate-reverse";
+              const total = alt ? cycleMs * 2 : cycleMs;
+              const out = [];
+              for (let k = 0; k < n; k++) {
+                anim.currentTime = delayMs + ((k / n) * total) % total;
+                const cs = getComputedStyle(el);
+                out.push({ t: cs.transform, op: parseFloat(cs.opacity) });
+              }
+              return { out, total };
+            },
+            { sel, n, delayMs: fp.delayMs, cycleMs: fp.cycleMs, direction: fp.direction },
+          );
+          const dec = sm.out.map((x) => Object.assign(cwmDecomposeMatrix(x.t), { op: x.op }));
+          const c = [plan.icon.rect.w / 2, plan.icon.rect.h / 2];
+          const tr = cwmTracksFromSamples(dec, Math.round(sm.total), Math.max(0, Math.round(fp.delayMs)), c);
+          if (tr.length) chain = [{ tracks: tr }];
+        }
+        icon = {
+          rect: { x: plan.icon.rect.x - o.rect.x, y: plan.icon.rect.y - o.rect.y, w: plan.icon.rect.w, h: plan.icon.rect.h },
+          layers: meta.layers.map((L) => {
+            const out = { file: L.file, tracks: L.tracks || [] };
+            if (L.opacity !== undefined && L.opacity !== null) out.opacity = L.opacity;
+            const ch = (L.chain || []).concat(chain || []);
+            if (ch.length) out.chain = ch;
+            return out;
+          }),
+        };
+      }
+    } catch (e) {
+      console.error("cwm icon (" + String(plan.icon.src).split("/").pop() + "):", e.message);
+    }
+  }
+  const meta = { layers, icon, w: o.rect.w, h: o.rect.h };
+  fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, "overlay_cwm_" + key + ".json"), JSON.stringify(meta));
+  console.log(
+    "cwm: " + o.cellWeather + " -> " + layers.length + " strip layer(s)" + (icon ? " + icon " + icon.layers.length + " layer(s)" : "") +
+      " in " + (Date.now() - t0) + "ms",
+  );
+  await frame.evaluate(() => document.querySelectorAll("[data-mm-cwl]").forEach((el) => el.removeAttribute("data-mm-cwl"))).catch(() => {});
+  return meta;
+}
+
+/* one motion overlay for the strip's particles at the strip rect, plus
+ * one for the icon at its own box (a separate overlay, so the icon's
+ * layers keep their crisp 2x images) */
+function cwmFill(o, meta, extras) {
+  o.type = "motion";
+  o.layers = meta.layers;
+  if (meta.icon) {
+    extras.push({
+      type: "motion",
+      page: o.page,
+      rect: { x: o.rect.x + meta.icon.rect.x, y: o.rect.y + meta.icon.rect.y, w: meta.icon.rect.w, h: meta.icon.rect.h },
+      layers: meta.icon.layers,
+    });
+  }
+  delete o.liveCapture;
+  delete o.cellWeather;
+}
+
 const cellWeatherHandler = {
   type: "cellWeather",
 
@@ -2334,6 +2644,93 @@ const cellWeatherHandler = {
       delete o.liveCapture;
       delete o.cellWeather;
     };
+
+    /* ---- native motion (Roku MotionOverlay): the same exemplar-per-
+     * (condition, size) sharing as the sheets, but the exemplar is a set
+     * of layers with sampled tracks, built once, never filmed. ---- */
+    if (ctx.nativeWeather) {
+      const mkey = (o) => crypto.createHash("md5").update(CWM_VERSION + "|" + sizeKey(o)).digest("hex").slice(0, 16);
+      const mhits = live.map((o) => cwmCached(mkey(o), ctx.outDir));
+      const extras = [];
+      if (mhits.every(Boolean)) {
+        live.forEach((o, i) => cwmFill(o, mhits[i], extras));
+        console.log("cwm: " + live.length + " strip(s) from cached motion");
+        return items.concat(extras);
+      }
+      const mneed = new Map();
+      live.forEach((o, i) => {
+        if (!mhits[i] && !mneed.has(mkey(o))) mneed.set(mkey(o), o);
+      });
+      if (ctx.deferFilming) {
+        ctx.filmPending = true;
+        const ready = [];
+        live.forEach((o, i) => {
+          if (mhits[i]) {
+            cwmFill(o, mhits[i], extras);
+            ready.push(o);
+          }
+        });
+        console.log("cwm: " + mneed.size + " strip motion(s) to build - publishing " + ready.length + " cached now, building on the follow-up");
+        return items.filter((o) => !o.liveCapture || !o.cellWeather || ready.includes(o)).concat(extras);
+      }
+      /* same page pose as the film path below */
+      await ctx.reenableAnimations();
+      await frame.evaluate(() => {
+        document.querySelectorAll("style").forEach((n) => {
+          if ((n.textContent || "").includes("mm-film")) n.remove();
+        });
+        const settle = document.getElementById("mm-weather-settle");
+        if (settle) settle.disabled = true;
+        (window.__mmCwHidden || []).forEach((el) => (el.style.opacity = ""));
+        window.__mmCwHidden = [];
+        /* remember each icon's file: after svgSwapIn the <img> is gone */
+        document.querySelectorAll("img.mm-weather-header-icon").forEach((el) => el.setAttribute("data-mm-src", el.src));
+      });
+      await frame.addStyleTag({
+        content:
+          "/*mm-film*/" +
+          "body *{visibility:hidden !important}" +
+          ".mm-weather-overlay,.mm-weather-overlay *,.mm-weather-header-meta,.mm-weather-header-meta *{visibility:visible !important}" +
+          ".mm-weather-header-strip{background:none !important;box-shadow:none !important}" +
+          ".mm-weather-date-temp,.mm-weather-date-temp *{visibility:hidden !important}",
+      });
+      await page.addStyleTag({ content: "/*mm-film*/html,body{background:transparent !important}" });
+      await page.waitForTimeout(200);
+      await pauseAllAnimations(frame);
+      const built = new Map();
+      try {
+        for (const [k, o] of mneed) {
+          try {
+            built.set(k, await cwmBuild(page, frame, o, k, ctx));
+          } catch (e) {
+            console.error("cwm build failed (" + o.cellWeather + "):", e.message);
+          }
+        }
+      } finally {
+        await frame.evaluate(() => {
+          const st = document.getElementById("mm-cwm-iso");
+          if (st) st.remove();
+          document.querySelectorAll("style").forEach((n) => {
+            if ((n.textContent || "").includes("mm-film")) n.remove();
+          });
+        }).catch(() => {});
+        await page.evaluate(() => document.querySelectorAll("style").forEach((n) => { if ((n.textContent || "").includes("mm-film")) n.remove(); })).catch(() => {});
+        await resumeAllAnimations(frame);
+        await frame.evaluate(() => {
+          const settle = document.getElementById("mm-weather-settle");
+          if (settle) settle.disabled = false;
+        }).catch(() => {});
+      }
+      for (const o of live) {
+        const c = built.get(mkey(o)) || cwmCached(mkey(o), ctx.outDir);
+        if (!c) {
+          o.skip = true;
+          continue;
+        }
+        cwmFill(o, c, extras);
+      }
+      return items.filter((o) => !o.skip).concat(extras);
+    }
 
     const hits = live.map(cachedFor);
     if (hits.every(Boolean)) {

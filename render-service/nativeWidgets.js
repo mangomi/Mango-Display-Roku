@@ -1499,8 +1499,8 @@ const CS_MAX_FRAMES = 700;
  * already folded Fast vs Slow into that (speed = travel * 19 for Fast,
  * * 35 for Slow), so one number covers both modes and keeps their ratio:
  *
- *   Slow  28.6 px/s / 4 = 7.2 px/s
- *   Fast  52.6 px/s / 4 = 13.2 px/s
+ *   Slow  28.6 px/s / 2.67 = 10.7 px/s
+ *   Fast  52.6 px/s / 2.67 = 19.7 px/s
  *
  * History: 3 was too quick across a room; 12 was approved while a filming
  * bug (siblings still animating at portal speed) was adding motion that
@@ -1516,7 +1516,7 @@ const CS_MAX_FRAMES = 700;
  * tracks the letters and sees every update, so it gets the full 30fps
  * with a step around a tenth of an output pixel (Dave, 2026-09-02: "the
  * rain is nice and smooth, but this still looks a bit jerky"). */
-const CS_TV_PACE = 4;
+const CS_TV_PACE = 4 / 1.5; /* 2026-09-02: tester wanted both speeds 50% faster */
 const CS_PLAY_MS = 33;
 /* The old 1:1 note, kept because the arithmetic still matters: the marquee is
  * a constant-velocity scroller - speed = (boxHeight + innerHeight) * 35

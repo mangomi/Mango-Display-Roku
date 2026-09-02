@@ -30,6 +30,45 @@ function portalFrameOf(page) {
   return main && main.url().includes("painted=true") ? main : null;
 }
 
+/* The portal re-applies its theme on EVERY layout push by swapping the
+ * theme <link>; until the new sheet has loaded the page renders with
+ * Bootstrap's defaults - white panels, white calendar cells - and the
+ * readiness signal waits for widgets, not stylesheets. A still taken in
+ * that window baked a white page that flipped back to the theme's black
+ * on the next capture (external tester, 2026-09-02; the portal-side fix
+ * is Mangomirror-Portal PR #71). Wait for the theme sheet(s) to report
+ * loaded before the shutter, for up to 2s, and say what was found so the
+ * next report can be checked in one log line. Never blocks a capture:
+ * on timeout the still is taken as it is. */
+async function waitForThemeStyles(frame) {
+  const deadline = Date.now() + 2000;
+  let state = null;
+  for (;;) {
+    state = await frame
+      .evaluate(() => {
+        const links = [...document.querySelectorAll('link[id^="theme-link"]')];
+        const loaded = links.every((l) => {
+          try {
+            return !!l.sheet;
+          } catch (e) {
+            return true; /* cross-origin sheet: present, just unreadable */
+          }
+        });
+        const main = document.getElementById("main");
+        return {
+          loaded,
+          swapping: links.length > 1,
+          hrefs: links.map((l) => (l.getAttribute("href") || "").split("/").pop().replace(/-bootstrap.*$/, "")),
+          color: main ? getComputedStyle(main).backgroundColor : null,
+        };
+      })
+      .catch(() => null);
+    if (!state) return null;
+    if ((state.loaded && !state.swapping) || Date.now() >= deadline) return state;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 // `groups` lives on the MainCtrl child scope, so walk the scope tree
 // from $rootScope (works even with Angular debug info off)
 async function extractPageMeta(page) {
@@ -581,6 +620,16 @@ async function capturePage(page, opts) {
    * for every painted page cost every OTHER page its background - they
    * published transparent with nothing behind them and went black on the
    * TV. */
+  if (portalFrame) {
+    const theme = await waitForThemeStyles(portalFrame);
+    if (theme) {
+      console.log(
+        "still: theme " + (theme.hrefs.join("+") || "none") +
+          (theme.loaded ? "" : " NOT LOADED") + (theme.swapping ? " (mid-swap)" : "") +
+          ", page " + theme.color,
+      );
+    }
+  }
   const layered = groups.some((g) => g.handler.type === "background" && g.items.length);
   let outPath = out;
   if (layered && portalFrame) {

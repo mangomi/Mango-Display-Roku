@@ -684,6 +684,14 @@ end function
 
 sub startTransition(name as string, slotKey as string, index as integer)
     stopActiveAnim()
+    ' The page's checkboxes are drawn by the interaction layer, which sits
+    ' outside the page slots - so they neither ride the slide nor get
+    ' cleared by it, and stayed on screen over the incoming page until
+    ' finalizeSwap rebuilt them after the animation (Dave, 2026-09-02).
+    ' Clear them the moment the transition starts; the new page's set
+    ' arrives with finalizeSwap exactly as before.
+    m.interaction.targets = {}
+    m.interaction.regions = []
     entry = m.slots[slotKey]
     anim = buildTransition(name, m.frontKey, entry.slot)
     entry.slot.visible = true

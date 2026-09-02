@@ -1119,14 +1119,20 @@ const CS_MAX_FRAMES = 300;
  * already folded Fast vs Slow into that (speed = travel * 19 for Fast,
  * * 35 for Slow), so one number covers both modes and keeps their ratio:
  *
- *   Slow  28.6 px/s / 12 = 2.4 px/s
- *   Fast  52.6 px/s / 12 = 4.4 px/s
+ *   Slow  28.6 px/s / 6 = 4.8 px/s
+ *   Fast  52.6 px/s / 6 = 8.8 px/s
  *
- * 3 was still too quick to read across a room (Dave, 2026-09-02: "make it
- * like a quarter of the current speed"). A typical month cell - 132px of
- * travel - now takes ~55s to come round on Slow. */
-const CS_TV_PACE = 12;
-const CS_PLAY_MS = 110;
+ * History: 3 was too quick across a room; 12 was approved while a filming
+ * bug (siblings still animating at portal speed) was adding motion that
+ * was not the sprite's own - once that was fixed the true 2.4 px/s read as
+ * too slow (Dave, 2026-09-02: "needs to be double the current speed").
+ * A typical month cell - ~105px of travel - comes round in ~22s on Slow.
+ *
+ * CS_PLAY_MS is the frame hold the count is derived from; 70ms is what
+ * the weather sheets already play at on the device, and at this pace it
+ * keeps the step near a third of an output pixel. */
+const CS_TV_PACE = 6;
+const CS_PLAY_MS = 70;
 /* The old 1:1 note, kept because the arithmetic still matters: the marquee is
  * a constant-velocity scroller - speed = (boxHeight + innerHeight) * 35
  * for Slow, * 19 for Fast - so it always travels 1000/35 = 28.6 px/s or
@@ -1141,7 +1147,7 @@ const CS_PLAY_MS = 110;
 /* Bump when the filmed motion changes meaning, so sheets cached under the
  * old geometry are not reused: the key is otherwise all inputs, and travel
  * changed from boxHeight+innerHeight to a seamless innerHeight. */
-const CS_FILM_VERSION = "4-window";
+const CS_FILM_VERSION = "5-pace6";
 
 function csKey(o, outScale) {
   return crypto

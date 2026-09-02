@@ -8,4 +8,4 @@ splash_screen_sd=pkg:/images/logo.png
 splash_screen_hd=pkg:/images/logo.png
 splash_screen_fhd=pkg:/images/logo.png
 splash_color=#000000
-ui_resolutions=fhd
+ui_resolutions=fhd,hd

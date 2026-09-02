@@ -62,11 +62,37 @@ sub init()
     m.interaction.observeField("pageTurn", "onPageTurn")
     m.celebrationLayer = m.top.findNode("celebrationLayer")
     m.interaction.observeField("celebrate", "onCelebrate")
+    ' The scene runs at the device's OWN UI resolution (manifest
+    ' ui_resolutions=fhd,hd): 1280x720 on an HD device, 1920x1080 on FHD.
+    ' The render service lays the display out at that same size, so the
+    ' page image lands on the panel 1:1 - no scaling anywhere. The stage
+    ' scale below is only a safety net for a canvas that does not match.
+    ' (A single fhd declaration had the firmware scale the whole scene
+    ' by 2/3 on HD devices: every letter smeared, 2026-09-02.)
+    res = CreateObject("roDeviceInfo").GetUIResolution()
+    m.sceneW = res.width
+    m.sceneH = res.height
+    print "[Mango] scene "; m.sceneW; "x"; m.sceneH; " ("; res.name; ")"
+    m.top.findNode("bg").width = m.sceneW
+    m.top.findNode("bg").height = m.sceneH
+    ' the pairing screen was laid out for FHD: shrink it as one unit
+    k = m.sceneW / 1920
+    m.pairingGroup.scale = [k, k]
+    m.pairingGroup.translation = [960 * k, 250 * k]
     ' the manifest's coordinate space and how it sits on this screen
     m.stage = m.top.findNode("stage")
-    m.canvasW = 1920
-    m.canvasH = 1080
+    m.canvasW = m.sceneW
+    m.canvasH = m.sceneH
     m.rotation = 0
+    for each key in m.slots
+        p = m.slots[key].poster
+        p.width = m.canvasW
+        p.height = m.canvasH
+        p.loadWidth = m.canvasW
+        p.loadHeight = m.canvasH
+    end for
+    m.interaction.canvasW = m.canvasW
+    m.interaction.canvasH = m.canvasH
 
     m.slots.slotA.poster.observeField("loadStatus", "onPosterLoad")
     m.slots.slotB.poster.observeField("loadStatus", "onPosterLoad")
@@ -219,15 +245,15 @@ end sub
 ' canvas centre lands on the screen centre, then rotated about it.
 '
 ' The canvas is the display's OWN resolution (2026-09-02): 1280x720 on an
-' HD device, 1920x1080 on FHD. This scene is always FHD (manifest
-' ui_resolutions=fhd), so one uniform scale maps canvas px to scene px;
-' the firmware then maps the scene to the panel, and a 1280x720 page
-' image lands 1:1 on a 720p plane. Everything in the stage - slots,
-' overlays, effects, pointer - shares the scale, so no element needs to
-' know. A 1920x1080 canvas scales by 1, as before.
+' HD device, 1920x1080 on FHD - and so is this scene (see init), so the
+' canvas maps 1:1 and the page image is drawn pixel for pixel. Should a
+' manifest ever carry a canvas of a different size (a display still on
+' the legacy 1920x1080 layout, on a 720p device), one uniform scale on
+' the stage maps canvas px to scene px for slots, overlays, effects and
+' pointer together - blurrier, but whole.
 sub applyCanvas(man as object)
-    w = 1920
-    h = 1080
+    w = m.sceneW
+    h = m.sceneH
     rot = 0
     if man.canvas <> invalid and man.canvas.width <> invalid and man.canvas.height <> invalid
         w = Int(man.canvas.width)
@@ -251,12 +277,12 @@ sub applyCanvas(man as object)
     m.interaction.rotation = rot
     ' canvas px -> scene px, by the long side (a portrait canvas is the
     ' landscape one turned, so its long side is still the screen's width)
-    if w > h then s = 1920 / w else s = 1920 / h
+    if w > h then s = m.sceneW / w else s = m.sceneW / h
     print "[Mango] stage scale "; s
     if rot = 90 or rot = 270
         ' scale and rotation share the centre, which sits on the screen centre
         m.stage.scaleRotateCenter = [w / 2, h / 2]
-        m.stage.translation = [(1920 - w) / 2, (1080 - h) / 2]
+        m.stage.translation = [(m.sceneW - w) / 2, (m.sceneH - h) / 2]
         m.stage.scale = [s, s]
         if rot = 90 then m.stage.rotation = -1.5707963 else m.stage.rotation = 1.5707963
     else

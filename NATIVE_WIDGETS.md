@@ -31,8 +31,10 @@ Each render produces two artifacts (same folder, same version):
 ```
 
 Coordinates are in canvas space — the display's own resolution (see
-MANIFEST.md). The Roku scene is FHD; `applyCanvas` scales the stage from
-the canvas to it, so a 1920×1080 canvas maps 1:1 and a 1280×720 one by 1.5.
+MANIFEST.md), which is also the Roku scene's resolution (the manifest
+declares `fhd,hd`; the scene sizes itself from the device), so they map
+1:1 on every device. `applyCanvas` keeps a uniform stage scale only as
+a safety net for a canvas that does not match the scene.
 
 Adding a native widget type touches exactly two registries:
 

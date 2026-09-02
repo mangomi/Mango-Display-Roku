@@ -161,16 +161,18 @@ display. Native-scroll pace and effect spawn bounds follow the canvas
 `LEGACY_CANVAS_IDS` (displayWorker.js) keeps the old 1920x1080 canvas
 with a scaled image while its channel predates the client change.
 
-**What the client must do (Roku reference: MainScene `applyCanvas`):**
+**What the client must do (Roku reference: MainScene `init` + `applyCanvas`):**
 - Read `canvas` from display.json; never assume 1920x1080.
-- Apply ONE uniform scale to the stage container (page slots, overlays,
-  effects, pointer, celebrations): `s = sceneLong / max(canvas.w,
-  canvas.h)`; for a rotated canvas, scale about the same centre the
-  rotation uses, so the canvas centre stays on the screen centre.
-- Size the page image layer to the canvas (the image is canvas-sized;
-  no resampling on the client beyond the stage scale).
-- An Apple TV reports 1920x1080, so on tvOS the scale is 1 today; the
-  code path still has to exist for a 720p output.
+- Run the scene at the device's OWN resolution and draw the page image
+  1:1. On Roku that is manifest `ui_resolutions=fhd,hd` plus sizing
+  the scene, page posters and background from `GetUIResolution()`. A
+  scene the firmware scales (single `fhd` declaration on a 720p device)
+  resamples every texture and smeared all small text (2026-09-02).
+- Keep ONE uniform stage scale as a safety net for a canvas that does
+  not match the scene: `s = sceneLong / max(canvas.w, canvas.h)`; for a
+  rotated canvas, scale about the same centre the rotation uses.
+- An Apple TV reports 1920x1080 and renders at it, so on tvOS this is
+  already the case; the canvas-mismatch path still has to exist.
 
 ## DONE by the tvOS session already (listed for the record)
 

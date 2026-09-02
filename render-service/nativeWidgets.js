@@ -524,12 +524,23 @@ function parseAnimationPeriodSeconds(svgText) {
 /* A filmed weather-icon sheet is identified by icon + rendered size +
  * animation period; the same sun at the same size is byte-identical
  * every time, which is what makes it cacheable across renders. */
+/* Every overlay cache key carries the layout-to-output scale. The keys
+ * are by OUTPUT size, and two layouts can meet at the same output size
+ * (a 115px icon drawn at 2/3 and a 77px icon drawn 1:1 are both 77px)
+ * while everything stored in layout px - rotation centres, strip
+ * heights, track values - differs. Dave, 2026-09-02: after the switch
+ * to the device's own resolution the sun's rays orbited a point below
+ * the sun, on a centre reused from the 1920 layout. */
+function layoutTag(outScale) {
+  return "L" + Number(outScale || 1).toFixed(4);
+}
+
 function wxSheetKey(o, outScale) {
   const w = Math.round(o.rect.w * outScale);
   const h = Math.round(o.rect.h * outScale);
   return crypto
     .createHash("md5")
-    .update([o.src, w, h, o.period || 0].join("|"))
+    .update([o.src, w, h, o.period || 0, layoutTag(outScale)].join("|"))
     .digest("hex")
     .slice(0, 16);
 }
@@ -598,7 +609,7 @@ function wxMotionFeasible(svgText) {
 function wxMotionKey(o, outScale) {
   return crypto
     .createHash("md5")
-    .update([WXM_VERSION, o.src, Math.round(o.rect.w * outScale), Math.round(o.rect.h * outScale)].join("|"))
+    .update([WXM_VERSION, o.src, Math.round(o.rect.w * outScale), Math.round(o.rect.h * outScale), layoutTag(outScale)].join("|"))
     .digest("hex")
     .slice(0, 16);
 }
@@ -1551,6 +1562,7 @@ function csKey(o, outScale) {
         Math.round(o.rect.h * outScale),
         Math.round(o.innerHeight),
         Math.round(o.durationMs),
+        layoutTag(outScale),
       ].join("|"),
     )
     .digest("hex")
@@ -1606,6 +1618,7 @@ function csStripKey(o, outScale) {
         Math.round(o.rect.h * outScale),
         Math.round(o.innerHeight),
         o.boxSig || "",
+        layoutTag(outScale),
       ].join("|"),
     )
     .digest("hex")
@@ -2885,7 +2898,7 @@ const cellWeatherHandler = {
 
     // one shared sheet per condition + strip pixel size
     const sizeKey = (o) =>
-      o.cellWeather + "|" + Math.round(o.rect.w * ctx.outScale) + "x" + Math.round(o.rect.h * ctx.outScale);
+      o.cellWeather + "|" + Math.round(o.rect.w * ctx.outScale) + "x" + Math.round(o.rect.h * ctx.outScale) + "|" + layoutTag(ctx.outScale);
     const cwKey = (o) => crypto.createHash("md5").update(sizeKey(o)).digest("hex").slice(0, 16);
     const cachedFor = (o) => {
       const key = cwKey(o);

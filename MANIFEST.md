@@ -26,9 +26,13 @@ origin top-left. The canvas is the portal's layout space, and since
 2026-09-02 that is the display's **own resolution**: 1280×720 for an HD
 Roku, 1920×1080 for an FHD one. The page image is exactly canvas-sized,
 so it lands 1:1 on the device's plane and text is rasterised on whole
-pixels. The geometry stays in canvas units so a client can scale it
-however it likes - the Roku channel scales its whole stage from the
-canvas to its FHD scene once, in `applyCanvas` (MainScene.brs).
+pixels. The Roku channel runs its scene at that same resolution
+(manifest `ui_resolutions=fhd,hd`, sized from `GetUIResolution`), so
+canvas, image and panel coincide and nothing is resampled; a scene
+scaled by the firmware from a single FHD declaration smeared every
+letter (2026-09-02). The geometry stays in canvas units so a client can
+still scale it - `applyCanvas` (MainScene.brs) keeps a uniform stage
+scale as a safety net for a canvas that does not match its scene.
 
 A display may still be served the legacy 1920×1080 canvas with a scaled
 image (`LEGACY_CANVAS_IDS` in displayWorker.js) while its channel

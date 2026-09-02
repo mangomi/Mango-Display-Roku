@@ -40,12 +40,13 @@ const path = require("path");
  * pipeline films them from this page to build its sprite sheets. */
 const BLOCKED_MEDIA = /\/visualoverlays\/|myimages\.mangodisplay\.com|\/backgrounds\//;
 
-/* TEMPORARY: serve the portal's painted-mode files from disk until
- * Mangomirror-Portal PR #68 is merged. Point PORTAL_PREVIEW_DIR at a
- * checkout of that branch's WebContent. The service refuses to start in
- * painted mode without it rather than silently running the deployed
- * portal, which has no painted mode and would look like everything works
- * while nothing ever signals. Delete this block when #68 lands. */
+/* RETIRED 2026-09-02: Mangomirror-Portal PR #68 is merged and deployed,
+ * and nothing ships with either directory below any more. The two
+ * mechanisms stay as env-gated emergency levers - set PORTAL_PREVIEW_DIR
+ * to stand in for a portal with no painted mode at all (a checkout of a
+ * branch's WebContent), or PORTAL_PATCH_DIR to serve one in-flight file
+ * over a deployed portal. Unset, both are inert. Remember that a pinned
+ * file MASKS the deployed one for as long as the pin is in place. */
 const PREVIEW_DIR = process.env.PORTAL_PREVIEW_DIR || "";
 const PREVIEW_FILES = [
   { match: /\/js\/service\/paintedMode\.js/, file: "js/service/paintedMode.js" },

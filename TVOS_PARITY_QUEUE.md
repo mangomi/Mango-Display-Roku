@@ -73,7 +73,7 @@ off there, not deleted here.
   disqualification at all; a too-strict rule makes gestures feel
   impossible to trigger on a real remote.
 
-## TODO — display rotation (Roku `<commit>` , 2026-09-02)
+## TODO — display rotation (Roku channel `71399e1`, service `5586aa0`, 2026-09-02)
 
 **Manifest:** `canvas` may now be **1080x1920**, and a new top-level
 `rotation` field (0 | 90 | 270, degrees clockwise as the viewer sees it)

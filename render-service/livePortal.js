@@ -184,11 +184,58 @@ class LivePortal {
   }
 
   async installRoutes() {
-    await this.page.route(BLOCKED_MEDIA, (route) =>
+    await this.page.route(BLOCKED_MEDIA, async (route) => {
+      /* Calendar photos live on the blocked host too: the photo-calendar
+       * feature puts a user's picture on a day (an <img> in the event, or
+       * the day cell's inline background), and refusing it baked the
+       * portal's "no access to image" placeholder into every such cell
+       * (tester, 2026-09-02). The distinction is not the link - the image
+       * widget can carry the very same My Files link - but WHERE the
+       * element lives. So ask the page: is this URL referenced from
+       * inside a calendar widget right now (or was it, before a rebuild)?
+       * Only then does it load and get baked, which is what a static
+       * picture in a cell should do. Everything else on the host keeps
+       * the block: slideshows and backgrounds are drawn by the device. */
+      const url = route.request().url();
+      if (/myimages\.mangodisplay\.com/.test(url)) {
+        let inCalendar = false;
+        try {
+          inCalendar = await this.page.evaluate((u) => {
+            const seen = (window.__mmCalendarImg = window.__mmCalendarImg || new Set());
+            if (seen.has(u)) return true;
+            const abs = (v) => {
+              try {
+                return new URL(v, location.href).href;
+              } catch (e) {
+                return v || "";
+              }
+            };
+            for (const root of document.querySelectorAll('[id^="calendar_"]')) {
+              for (const img of root.querySelectorAll("img")) {
+                if (abs(img.currentSrc || img.getAttribute("src")) === u) {
+                  seen.add(u);
+                  return true;
+                }
+              }
+              for (const el of root.querySelectorAll("[style*='url(']")) {
+                const bg = (el.style.backgroundImage || "") + " " + (el.style.background || "");
+                if (bg.includes(u) || bg.includes(u.replace(/^https?:/, ""))) {
+                  seen.add(u);
+                  return true;
+                }
+              }
+            }
+            return false;
+          }, url);
+        } catch (e) {
+          inCalendar = false; /* page mid-navigation: block, as before */
+        }
+        if (inCalendar) return route.continue();
+      }
       /* 204 rather than abort: a blocked prefetch should look answered,
        * not failed, so the portal's own error paths stay quiet */
-      route.fulfill({ status: 204, body: "" }),
-    );
+      return route.fulfill({ status: 204, body: "" });
+    });
     if (!PREVIEW_DIR) return;
     this.log("*** serving painted-mode portal files from " + PREVIEW_DIR + " (pre-merge) ***");
     for (const preview of PREVIEW_FILES) {

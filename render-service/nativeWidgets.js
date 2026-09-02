@@ -561,6 +561,307 @@ function wxCachedSheet(o, outDir, outScale) {
   return null;
 }
 
+/* ---- Native weather motion (Roku MotionOverlay) -------------------------
+ *
+ * The icon set animates with three SMIL primitives - animateTransform
+ * rotate, animateTransform translate, animate opacity - each on one
+ * element, drops chained with begin="0s; c.end+.33s". Every one of those
+ * is a thing the device can do itself, every refresh, with a SceneGraph
+ * Animation. So instead of filming 86 frames of a sun we ship the rays
+ * ONCE as a transparent PNG and say "turn this 45 degrees every 6 seconds
+ * about this point". One image per moving part, no filming, no frame
+ * cadence, and the motion is as smooth as the renderer. Anything else in
+ * an icon (stroke-dashoffset on wind, animateMotion, CSS keyframes) keeps
+ * the sprite sheet - the feasibility test below decides per icon.
+ *
+ * Geometry: the SVG is laid out in a scratch page at WXM_SUPER times the
+ * on-screen size, <use> references are inlined so every animated element
+ * is actually rendered, and each element's screen matrix maps its local
+ * rotation centre / translation vector into icon pixels. Layer PNGs are
+ * the whole icon box with only that element painted. */
+const WXM_SUPER = 2;
+const WXM_MAX_PX = 512;
+const WXM_VERSION = "1";
+
+function wxMotionFeasible(svgText) {
+  if (!/<animate/i.test(svgText)) return false;
+  if (/animateMotion|<set[\s>]|@keyframes|animation\s*:/i.test(svgText)) return false;
+  for (const m of svgText.matchAll(/<animate\s[^>]*>/gi)) {
+    if (!/attributeName=["']opacity["']/.test(m[0])) return false;
+  }
+  for (const m of svgText.matchAll(/<animateTransform\s[^>]*>/gi)) {
+    if (!/type=["'](rotate|translate)["']/.test(m[0])) return false;
+  }
+  return true;
+}
+
+function wxMotionKey(o, outScale) {
+  return crypto
+    .createHash("md5")
+    .update([WXM_VERSION, o.src, Math.round(o.rect.w * outScale), Math.round(o.rect.h * outScale)].join("|"))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function wxMotionCached(o, outDir, outScale) {
+  const metaFile = pathHandlers.join(outDir, "overlay_wxm_" + wxMotionKey(o, outScale) + ".json");
+  try {
+    const meta = JSON.parse(fsHandlers.readFileSync(metaFile, "utf8"));
+    if (!meta || !Array.isArray(meta.layers) || !meta.layers.length) return null;
+    for (const L of meta.layers) {
+      if (!L.file || !fsHandlers.existsSync(pathHandlers.join(outDir, L.file))) return null;
+    }
+    return meta;
+  } catch (e) {
+    return null;
+  }
+}
+
+/* SMIL timing -> device timing. A track plays `dur`, then (with a
+ * "X.end+gap" begin chain) waits `gap` before going again: that whole
+ * span is one device cycle, with the value held through the gap. A
+ * negative or positive first `begin` is a phase: an initial delay. */
+function wxMotionTiming(a) {
+  const secs = (v) => {
+    const m = String(v || "").trim().match(/^(-?[\d.]+)\s*(ms|s)?$/);
+    return m ? parseFloat(m[1]) * (m[2] === "ms" ? 0.001 : 1) : null;
+  };
+  const dur = secs(a.dur) || 1;
+  let gap = 0;
+  let phase = 0;
+  const begins = String(a.begin || "0s").split(";").map((x) => x.trim()).filter(Boolean);
+  if (begins.length) {
+    const first = secs(begins[0]);
+    if (first !== null) phase = first;
+    for (const b of begins) {
+      const m = b.match(/\.end\s*\+\s*(-?[\d.]+)\s*(ms|s)?/);
+      if (m) gap = parseFloat(m[1]) * (m[2] === "ms" ? 0.001 : 1);
+    }
+  }
+  const cycle = dur + Math.max(0, gap);
+  const delay = ((phase % cycle) + cycle) % cycle;
+  return { durS: dur, cycleS: cycle, delayS: delay };
+}
+
+async function wxDecompose(page, o, ctx) {
+  const sharp = require("sharp");
+  const outW = Math.max(1, Math.round(o.rect.w * ctx.outScale));
+  const outH = Math.max(1, Math.round(o.rect.h * ctx.outScale));
+  const S = Math.min(WXM_MAX_PX, Math.max(64, Math.round(Math.max(outW, outH) * WXM_SUPER)));
+  const scratch = await page.context().browser().newPage({ viewport: { width: S, height: S }, deviceScaleFactor: 1 });
+  try {
+    await scratch.setContent(
+      '<!doctype html><html><head><style>html,body{margin:0;background:transparent;overflow:hidden}' +
+        "#host{width:" + S + "px;height:" + S + "px}#host svg{width:" + S + "px;height:" + S + "px;display:block}</style></head>" +
+        '<body><div id="host">' + o.svgText + "</div></body></html>",
+    );
+    const plan = await scratch.evaluate(() => {
+      const svg = document.querySelector("#host svg");
+      if (!svg) return { error: "no svg" };
+      /* Inline every <use> as a nested <svg> carrying the symbol's viewBox,
+       * so the animated elements exist in the RENDERED tree and have a
+       * screen matrix. The originals stay inside <defs> (gradients resolve)
+       * but are never rendered, so they are skipped below. */
+      const uses = [...svg.querySelectorAll("use")];
+      for (const u of uses) {
+        const ref = u.getAttribute("href") || u.getAttributeNS("http://www.w3.org/1999/xlink", "href") || "";
+        const sym = ref.startsWith("#") ? svg.querySelector(ref) : null;
+        if (!sym) continue;
+        const inner = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        for (const attr of ["viewBox", "preserveAspectRatio"]) {
+          if (sym.hasAttribute(attr)) inner.setAttribute(attr, sym.getAttribute(attr));
+        }
+        inner.setAttribute("overflow", "visible");
+        for (const attr of ["width", "height", "x", "y"]) {
+          if (u.hasAttribute(attr)) inner.setAttribute(attr, u.getAttribute(attr));
+        }
+        for (const child of [...sym.childNodes]) inner.appendChild(child.cloneNode(true));
+        const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        if (u.hasAttribute("transform")) g.setAttribute("transform", u.getAttribute("transform"));
+        /* animations that sat on the <use> itself move to the wrapper */
+        for (const a of [...u.children]) g.appendChild(a);
+        g.appendChild(inner);
+        u.parentNode.replaceChild(g, u);
+      }
+      const rendered = (el) => {
+        try {
+          return el.getScreenCTM() !== null && !el.closest("defs");
+        } catch (e) {
+          return false;
+        }
+      };
+      const anims = [...svg.querySelectorAll("animate, animateTransform, animateMotion, set")].filter((a) => rendered(a.parentElement));
+      const layers = [];
+      const byEl = new Map();
+      const list = (v) => String(v || "").split(";").map((x) => x.trim()).filter((x) => x.length);
+      for (const a of anims) {
+        const el = a.parentElement;
+        const tag = a.tagName.toLowerCase();
+        const attr = a.getAttribute("attributeName");
+        const type = a.getAttribute("type");
+        let prop = null;
+        if (tag === "animate" && attr === "opacity") prop = "opacity";
+        else if (tag === "animatetransform" && attr === "transform" && (type === "rotate" || type === "translate")) prop = type;
+        if (!prop) return { error: "unsupported " + tag + " " + (attr || "") + " " + (type || "") };
+        if (!byEl.has(el)) {
+          byEl.set(el, { tracks: [], el });
+          layers.push(byEl.get(el));
+        }
+        let values = list(a.getAttribute("values"));
+        if (!values.length && a.hasAttribute("from") && a.hasAttribute("to")) values = [a.getAttribute("from"), a.getAttribute("to")];
+        byEl.get(el).tracks.push({
+          prop,
+          values,
+          keyTimes: list(a.getAttribute("keyTimes")).map(Number),
+          dur: a.getAttribute("dur"),
+          begin: a.getAttribute("begin"),
+        });
+        a.remove(); /* base pose for the layer image */
+      }
+      /* An animated element inside another animated element (a snow
+       * flake spins and fades on a <path> whose parent <g> falls): the
+       * pixels belong to the INNERMOST one, and the ancestors' motion
+       * applies on top as outer levels of a chain. Emitting the parent
+       * as its own layer would draw the flake twice. */
+      const animatedEls = new Set(layers.map((L) => L.el));
+      const out = [];
+      let idx = 0;
+      for (const L of layers) {
+        const hasAnimatedDescendant = [...L.el.querySelectorAll("*")].some((d) => animatedEls.has(d));
+        if (hasAnimatedDescendant) continue;
+        L.el.setAttribute("data-mm-layer", String(idx));
+        const chain = [];
+        for (let p = L.el.parentElement; p && p !== svg; p = p.parentElement) {
+          if (animatedEls.has(p)) {
+            const pm = p.getScreenCTM();
+            chain.unshift({ tracks: byEl.get(p).tracks, ctm: pm ? [pm.a, pm.b, pm.c, pm.d, pm.e, pm.f] : [1, 0, 0, 1, 0, 0] });
+          }
+        }
+        const m = L.el.getScreenCTM();
+        const cs = getComputedStyle(L.el);
+        out.push({
+          ctm: m ? [m.a, m.b, m.c, m.d, m.e, m.f] : [1, 0, 0, 1, 0, 0],
+          baseOpacity: cs ? parseFloat(cs.opacity) : 1,
+          tracks: L.tracks,
+          chain,
+        });
+        idx++;
+      }
+      return { layers: out };
+    });
+    if (!plan || plan.error) throw new Error("decompose: " + ((plan && plan.error) || "no plan"));
+    if (!plan.layers.length) throw new Error("decompose: nothing animates");
+
+    const toIcon = o.rect.w / S; /* scratch px -> canvas px */
+    const key = wxMotionKey(o, ctx.outScale);
+    const files = [];
+    const shoot = async (css) => {
+      await scratch.evaluate((css) => {
+        let st = document.getElementById("mm-iso");
+        if (!st) {
+          st = document.createElement("style");
+          st.id = "mm-iso";
+          document.head.appendChild(st);
+        }
+        st.textContent = css;
+      }, css);
+      return await scratch.screenshot({ type: "png", omitBackground: true, clip: { x: 0, y: 0, width: S, height: S } });
+    };
+    const writeLayer = async (buf, idx) => {
+      /* the box is rect.w x rect.h; the scratch is square S: keep the
+       * icon's own aspect by cropping to the drawn extent of the box */
+      const w = Math.max(1, Math.round((o.rect.w / o.rect.w) * S));
+      const h = Math.max(1, Math.round((o.rect.h / o.rect.w) * S));
+      const png = await sharp(buf).extract({ left: 0, top: 0, width: Math.min(w, S), height: Math.min(h, S) }).png().toBuffer();
+      const tag = crypto.createHash("md5").update(png).digest("hex").slice(0, 8);
+      const name = "overlay_wxm_" + key + "_" + idx + "_" + tag + ".png";
+      fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, name), png);
+      return name;
+    };
+    /* layer 0: everything that does not move */
+    const layers = [];
+    const staticBuf = await shoot("#host svg [data-mm-layer], #host svg [data-mm-layer] * { visibility: hidden !important }");
+    layers.push({ file: await writeLayer(staticBuf, "s"), tracks: [] });
+    const convert = (rawTracks, ctm) => {
+      const [a, b, c, d, e, f] = ctm;
+      const tracks = [];
+      for (const t of rawTracks) {
+        const timing = wxMotionTiming(t);
+        const n = t.values.length;
+        if (n < 2) continue;
+        let keys = t.keyTimes.length === n ? t.keyTimes.slice() : t.values.map((_, k) => k / (n - 1));
+        const scaleT = timing.durS / timing.cycleS;
+        keys = keys.map((k) => Math.round(k * scaleT * 1000) / 1000);
+        let values;
+        let center;
+        if (t.prop === "rotate") {
+          const parsed = t.values.map((v) => v.split(/[\s,]+/).map(Number));
+          values = parsed.map((p) => p[0]);
+          const cx = parsed[0][1] || 0;
+          const cy = parsed[0][2] || 0;
+          center = [Math.round((a * cx + c * cy + e) * toIcon * 100) / 100, Math.round((b * cx + d * cy + f) * toIcon * 100) / 100];
+        } else if (t.prop === "translate") {
+          values = t.values.map((v) => {
+            const [dx, dy] = v.split(/[\s,]+/).map(Number);
+            return [Math.round((a * dx + c * (dy || 0)) * toIcon * 100) / 100, Math.round((b * dx + d * (dy || 0)) * toIcon * 100) / 100];
+          });
+        } else {
+          values = t.values.map(Number);
+        }
+        if (timing.cycleS > timing.durS + 1e-6) {
+          keys.push(1);
+          values.push(values[values.length - 1]);
+        }
+        const track = {
+          prop: t.prop === "rotate" ? "rotation" : t.prop === "translate" ? "translation" : "opacity",
+          cycleMs: Math.round(timing.cycleS * 1000),
+          delayMs: Math.round(timing.delayS * 1000),
+          keys,
+          values,
+        };
+        if (center) track.center = center;
+        tracks.push(track);
+      }
+      return tracks;
+    };
+    for (let i = 0; i < plan.layers.length; i++) {
+      const L = plan.layers[i];
+      const buf = await shoot(
+        "#host svg * { visibility: hidden !important } " +
+          '#host svg [data-mm-layer="' + i + '"], #host svg [data-mm-layer="' + i + '"] * { visibility: visible !important; opacity: 1 !important }',
+      );
+      const tracks = convert(L.tracks, L.ctm);
+      /* what the layer looks like BEFORE its first loop starts (a delayed
+       * drop must wait invisible, not at full opacity) */
+      const op = tracks.find((t) => t.prop === "opacity");
+      const layer = { file: await writeLayer(buf, i), tracks, opacity: op ? op.values[0] : L.baseOpacity };
+      if (L.chain && L.chain.length) layer.chain = L.chain.map((lvl) => ({ tracks: convert(lvl.tracks, lvl.ctm) }));
+      layers.push(layer);
+    }
+    const meta = { layers };
+    fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, "overlay_wxm_" + key + ".json"), JSON.stringify(meta));
+    return meta;
+  } finally {
+    await scratch.close().catch(() => {});
+  }
+}
+
+function wxMotionFill(o, meta) {
+  o.type = "motion";
+  o.source = o.src;
+  o.layers = meta.layers.map((L) => {
+    const out = { file: L.file, tracks: L.tracks || [] };
+    if (L.opacity !== undefined && L.opacity !== null) out.opacity = L.opacity;
+    if (L.chain && L.chain.length) out.chain = L.chain;
+    return out;
+  });
+  delete o.liveCapture;
+  delete o.period;
+  delete o.src;
+  delete o.svgText;
+  delete o.native;
+}
+
 const weatherIconHandler = {
   type: "weatherIcon",
 
@@ -627,6 +928,9 @@ const weatherIconHandler = {
         const p = bySrc[o.src].period;
         o.period = p ? Math.min(Math.max(p, 1), WX_PERIOD_CAP_S) : null;
         o.svgText = bySrc[o.src].text;
+        /* a device that animates layers itself gets this icon as motion
+         * if its SVG decomposes; otherwise it keeps the sheet */
+        o.native = !!(ctx && ctx.nativeWeather && o.svgText && wxMotionFeasible(o.svgText));
       }
     }
 
@@ -641,7 +945,10 @@ const weatherIconHandler = {
       const pending = [];
       overlays.forEach((o) => {
         if (o.skip) return;
-        if (!wxCachedSheet(o, ctx.outDir, ctx.outScale)) {
+        const cached = o.native
+          ? wxMotionCached(o, ctx.outDir, ctx.outScale)
+          : wxCachedSheet(o, ctx.outDir, ctx.outScale);
+        if (!cached) {
           o.skip = true;
           pending.push(o);
         }
@@ -678,6 +985,26 @@ const weatherIconHandler = {
   },
 
   async captureAfter(page, frame, items, ctx) {
+    /* Motion icons never film: reuse the decomposition or build it in a
+     * scratch page (a second or two), then fall through with the rest. */
+    for (const o of items.filter((i) => i.liveCapture && i.native)) {
+      try {
+        let meta = wxMotionCached(o, ctx.outDir, ctx.outScale);
+        if (!meta) {
+          const t0 = Date.now();
+          meta = await wxDecompose(page, o, ctx);
+          console.log(
+            "wx motion: " + String(o.src).split("/").pop().slice(0, 30) + " -> " + meta.layers.length +
+              " layer(s) in " + (Date.now() - t0) + "ms",
+          );
+        }
+        wxMotionFill(o, meta);
+      } catch (e) {
+        /* decomposition failed: keep this icon on the sheet path */
+        console.error("wx motion failed (" + String(o.src).split("/").pop() + "):", e.message);
+        o.native = false;
+      }
+    }
     const live = items.filter((i) => i.liveCapture);
     if (!live.length) return items;
     const sharp = require("sharp");
@@ -3508,3 +3835,7 @@ module.exports = {
     backgroundHandler,
   ],
 };
+
+/* test hook: the weather-motion decomposer, for the standalone check in
+ * test/ and for poking at an icon without a display */
+module.exports.__wx = { wxDecompose, wxMotionFeasible, wxMotionTiming };

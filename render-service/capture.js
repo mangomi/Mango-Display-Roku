@@ -430,6 +430,19 @@ function wantsNativeScroll(deviceId) {
   return NATIVE_SCROLL_PREFIXES.some((p) => id.startsWith(p));
 }
 
+/* Same shape for the weather icons. An icon whose SVG animates only by
+ * SMIL rotate / translate / opacity is shipped as a "motion" overlay -
+ * one transparent PNG per moving part plus how it moves - and the device
+ * animates it every refresh instead of stepping a filmed sheet (Dave,
+ * 2026-09-02: "rather than trying to rotate it via GIF because it looks
+ * very jerky"). Roku's channel has MotionOverlay; tvOS joins here once
+ * its app has it. Icons the decomposer cannot handle keep the sheets. */
+const NATIVE_WEATHER_PREFIXES = ["RK"];
+function wantsNativeWeather(deviceId) {
+  const id = String(deviceId || "");
+  return NATIVE_WEATHER_PREFIXES.some((p) => id.startsWith(p));
+}
+
 async function capturePage(page, opts) {
   const { out, url, width, height, outWidth, outHeight, apiBase } = opts;
   // stage timings: "make it fast" needs measurements, not guesses
@@ -504,6 +517,7 @@ async function capturePage(page, opts) {
     deferFilming: opts.deferFilming === true,
     filmState,
     nativeScroll: wantsNativeScroll(opts.deviceId),
+    nativeWeather: wantsNativeWeather(opts.deviceId),
   };
   if (portalFrame) {
     for (const handler of nativeWidgets.handlers) {
@@ -630,6 +644,7 @@ async function capturePage(page, opts) {
     layered,
     outScale: outWidth / width,
     nativeScroll: wantsNativeScroll(opts.deviceId),
+    nativeWeather: wantsNativeWeather(opts.deviceId),
     /* Filming sprite sheets for a NEW cell geometry costs tens of
      * seconds (436 frames when a calendar switched to Monthly view,
      * 2026-09-01) and the user waits on a spinner for all of it. When

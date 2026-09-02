@@ -66,6 +66,20 @@ Adding a native widget type touches exactly two registries:
 | Seasonal overlays (snow, hearts, …) | Dropped on Roku v1 | ⬜ decide | Animated by nature; either disable for Roku displays or accept static frame. |
 | Touch/remote interactivity | Not supported on Roku | — | Display-side editing (calendar/todo modals) is off; Roku remote can't do it meaningfully. |
 
+### Weather icons: motion, not sheets (2026-09-02)
+
+For platforms in `NATIVE_WEATHER_PREFIXES` an animated weather-widget
+icon whose SVG uses only SMIL rotate / translate / opacity is shipped as a
+`motion` overlay: `wxDecompose` (nativeWidgets.js) lays the SVG out in a
+scratch page, inlines its `<use>` symbols, isolates each animated element
+into its own transparent PNG, and converts each animation into tracks in
+icon pixels via the element's screen matrix. No filming, no cadence; the
+device (MotionOverlay) animates every refresh. Icons that do not decompose
+(wind's stroke-dash, anything CSS-driven) keep the `gif` sheet path.
+Cached as `overlay_wxm_<key>.json` + layer PNGs, restored from the bucket
+like every other sheet. `module.exports.__wx` exposes the decomposer for
+standalone checks.
+
 ## Pages & transitions
 
 Every page renders as its own image + overlay set; `display.json` is the

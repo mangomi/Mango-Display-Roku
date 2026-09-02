@@ -127,6 +127,26 @@ device receives the same cell as a `gif` sprite sheet.
 Do not delete `source` when generating a sheet. An earlier version did,
 which quietly made the manifest Roku-only.
 
+**`motion`** — a natively animated weather icon (Roku `MotionOverlay`).
+The icon's SVG moves its parts with three primitives and the server ships
+each moving part ONCE as a transparent PNG plus exactly that motion, so
+the device animates it every refresh instead of stepping a filmed sheet.
+Emitted only to platforms in `NATIVE_WEATHER_PREFIXES` (capture.js) and
+only for icons that decompose; everything else stays a `gif` sheet.
+- `rect` — the icon box, canvas px. Every layer PNG is the whole box
+  (rendered at 2x for crispness); draw them all at `rect`, bottom to top.
+- `layers[]` — `{ file, tracks[], opacity, chain[] }`. `opacity` is the
+  layer's value BEFORE its first loop (a delayed raindrop waits invisible).
+  `chain` lists outer motions applied on top of the layer's own, outermost
+  first — nest one transform group per level (a flake spins and fades
+  inside a group that falls).
+- `tracks[]` — `{ prop, cycleMs, delayMs, keys[], values[], center }`.
+  `prop` is `rotation` (degrees, clockwise as the viewer sees it, about
+  `center` = [x, y] px within the box), `translation` (`[[dx, dy]]` px) or
+  `opacity`. `keys` are 0..1 positions within one `cycleMs` loop and pair
+  with `values`; interpolate linearly, hold the last value to the end of
+  the cycle, repeat forever, and wait `delayMs` before the first loop.
+
 ### targets
 
 Controls the client draws itself and can activate — task checkboxes

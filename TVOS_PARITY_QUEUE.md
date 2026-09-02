@@ -39,6 +39,20 @@ off there, not deleted here.
   idempotent (only jump when different). Roku reference:
   `components/MainScene.brs` `maybeApplyPages`.
 
+- [ ] **`motion` overlay type — natively animated weather icons**
+  (Roku `MotionOverlay`, 2026-09-02). For platforms in
+  `NATIVE_WEATHER_PREFIXES` (`render-service/capture.js`, currently `RK`)
+  the server no longer films an animated weather-widget icon into a `gif`
+  sheet when its SVG decomposes: it ships one transparent PNG per moving
+  part with rotate / translate / opacity tracks (SMIL semantics, see
+  MANIFEST.md `motion`). Client: stack the layer images at `rect`,
+  animate each with its tracks (Core Animation keyframe animations map
+  1:1: `transform.rotation` about `center`, `position`, `opacity`; linear
+  timing, `repeatCount` infinite, `beginTime` = delay), nest `chain`
+  levels as parent layers. Add `ATV` to the prefix list once done; until
+  then tvOS keeps receiving sheets. Reference: `components/overlays/
+  MotionOverlay.brs`.
+
 ## VERIFY — server behavior changed; client likely fine as built
 
 - [ ] **Two popup entries can share one sprite sheet** (firework runs

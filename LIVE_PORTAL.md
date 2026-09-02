@@ -42,9 +42,11 @@ Service side:
   impersonation removed. Decides what each signal costs.
 - `render-service/capture.js` — `portalFrameOf()` resolves the portal
   whether it is an iframe (old) or the page itself (painted).
-- `render-service/portal-preview/` — **TEMPORARY** vendored copy of the
-  PR #68 portal files, served by request interception so this runs before
-  that merges. Its README has the three-step removal.
+- ~~`render-service/portal-preview/`~~ — the pre-merge vendored copy of
+  the PR #68 portal files. RETIRED 2026-09-02: #68 is merged and deployed,
+  the directory is deleted, and `PORTAL_PREVIEW_DIR` / `PORTAL_PATCH_DIR`
+  are unset. The env-gated code paths in `livePortal.js` remain as
+  emergency levers only.
 
 ## The signal
 
@@ -165,12 +167,13 @@ only while a TV is watching:
 
 ## Running it
 
-Deployed now: `PAINTED_DISPLAYS=RK569557324` (Dave's Roku Express),
-`PORTAL_PREVIEW_DIR=/app/portal-preview`, `ASSET_ROOT=test`.
+Deployed now: `PAINTED_DISPLAYS=RK,ATV` (prefix entries — every Roku and
+Apple TV), `ASSET_ROOT=test`, no portal shim env vars.
 
 - Roll back to the old pipeline: clear `PAINTED_DISPLAYS`. No code change.
 - Roll forward: add device ids, or `all`.
-- Locally: `PAINTED_DISPLAYS=<id> PORTAL_PREVIEW_DIR=~/Projects/Mangomirror-Portal/WebContent node fleet.js`
+- Locally: `PAINTED_DISPLAYS=<id> node fleet.js` (add `PORTAL_PATCH_DIR=<dir>`
+  only to try one in-flight portal file over the deployed portal)
 - Deploy: zip `buildspec.yml render-service fonts` → S3 → CodeBuild →
   `aws ecs update-service --cluster roku-render --service roku-render --force-new-deployment`
   (the exact exclude list is in INFRA.md)
@@ -233,9 +236,9 @@ Each of these cost real debugging. Do not re-introduce them.
 
 ## Open / next
 
-1. **Merge PR #68**, then delete `portal-preview/`, drop
-   `PORTAL_PREVIEW_DIR`, and remove the `PREVIEW_DIR` block in
-   `livePortal.js`.
+1. ~~Merge PR #68, then delete `portal-preview/`, drop
+   `PORTAL_PREVIEW_DIR`~~ DONE 2026-09-02: merged, deployed, shims deleted,
+   env vars dropped (task-def rev 11). The env-gated code stays as a lever.
 2. ~~Widgets with no signal yet~~ DONE 2026-08-23: news, chores, todo,
    marketwatch, gesture, overlay, orientation hooks added; meal plan was
    already covered (flows through `updateCalendarData` → the calendar

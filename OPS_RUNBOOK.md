@@ -36,10 +36,10 @@ portal. Instead:
    add timers or heuristics on the service or device side to guess
    when a render is done.
 3. **Painted mode must be present in the portal the service loads.**
-   Until portal PR #68 is deployed to a given environment, the service
-   injects vendored copies of two portal files (`PORTAL_PREVIEW_DIR`).
-   That shim must be removed once the portal deploys — while it is
-   live it MASKS later portal changes to `mainController.js`.
+   Test has it (portal PR #68 merged and deployed 2026-09-02; the
+   pre-merge shim is retired). Prod must have it natively before a prod
+   fleet exists. `PORTAL_PREVIEW_DIR` / `PORTAL_PATCH_DIR` are emergency
+   levers only — a pinned file MASKS the deployed one while set.
 
 ---
 
@@ -283,8 +283,8 @@ CodeBuild builds arm64 natively):
 
 1. checkout
 2. CI gates: `node --check` on every JS file; `render-service/test/`
-   suites; fail if `render-service/portal-preview/` still exists once
-   portal PR #68 has shipped
+   suites; fail if `render-service/portal-preview/` or `portal-patch/`
+   reappears (both retired 2026-09-02)
 3. package the deploy zip with the repo's packaging script (same logic
    humans use — do not hand-type the exclusion list)
 4. upload to S3 → `codebuild start-build` tagged with the git SHA →
@@ -594,9 +594,10 @@ manifest — check the CloudFront cache headers (page images are
 `display.json`.
 
 **A portal change didn't reach displays.**
-If `PORTAL_PREVIEW_DIR` is still set, the service is serving its own
-vendored copies of `mainController.js` / `paintedMode.js` and masking
-the deployed portal. Remove the shim (§1, rule 3).
+If `PORTAL_PREVIEW_DIR` or `PORTAL_PATCH_DIR` is set on the task
+definition, the service is serving its own copy of the named file(s) and
+masking the deployed portal. Neither should be set (§1, rule 3); drop it
+with a new task-definition revision.
 
 **`[portal error] 403` lines.**
 Known benign class: display-scoped API calls the portal makes that the

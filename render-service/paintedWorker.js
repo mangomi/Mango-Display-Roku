@@ -144,6 +144,42 @@ class PaintedWorker extends DisplayWorker {
     this.queueCapture(null, reason);
   }
 
+  /* Safety net for marquees that start AFTER the still was taken.
+   *
+   * The scroll directive decides "does this overflow?" from a single
+   * measurement, and the widget's font-size pass, late data or a loading
+   * image can make the content overflow moments later. The directive only
+   * ever writes the running marquees into window.mmScrollCells - it does
+   * not signal painted mode - so a list that began scrolling five seconds
+   * after our capture stayed a static picture on the TV until something
+   * unrelated changed on that page (external tester, 2026-09-02). Portal
+   * PR #71 fixes the measurement itself; this covers any remaining late
+   * start whatever its cause: one look at the running set a moment after
+   * each capture, and a quiet re-capture if it changed. */
+  async armLateMarqueeCheck() {
+    if (!this.portal || !this.portal.ready || !this.portal.page) return;
+    const sig = async () =>
+      this.portal.page.evaluate(() =>
+        (window.mmScrollCells || [])
+          .filter((c) => c && c.el && document.documentElement.contains(c.el))
+          .map((c) => [c.widgetId, c.date, Math.round(c.boxHeight), Math.round(c.innerHeight), c.speed].join(":"))
+          .sort()
+          .join("|"),
+      );
+    const before = await sig().catch(() => null);
+    if (before === null) return;
+    if (this.lateMarqueeTimer) clearTimeout(this.lateMarqueeTimer);
+    this.lateMarqueeTimer = setTimeout(async () => {
+      this.lateMarqueeTimer = null;
+      const after = await sig().catch(() => null);
+      if (after === null || after === before) return;
+      if (after === this.lateMarqueeSig) return; /* already re-captured for this set */
+      this.lateMarqueeSig = after;
+      this.log("change: a marquee started after the capture - capturing every page (late marquee)");
+      this.queueCapture(null, "late marquee");
+    }, 1500);
+  }
+
   reopenPortal(why) {
     this.portalReopen = (this.portalReopen || Promise.resolve())
       .catch(() => {})
@@ -605,6 +641,7 @@ class PaintedWorker extends DisplayWorker {
         if (typeof this.pendingShowPage === "number") this.showPageUntil = Date.now() + 15000;
         await this.publishFromDisk(reason);
         this.log("captured page(s) " + indexes.join(",") + " in " + (Date.now() - t0) + "ms (" + reason + ")");
+        this.armLateMarqueeCheck().catch(() => {});
 
         /* The page is on screen; now pay for the animations. Filming a
          * fresh cell geometry is tens of seconds, which is why it did

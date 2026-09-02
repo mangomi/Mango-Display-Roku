@@ -1591,7 +1591,7 @@ function csCachedSheet(o, outDir, outScale) {
  * understands "scroll" (ctx.nativeScroll); everyone else keeps the sheets.
  * The blanking, alpha and ancestor-background handling are the sheet
  * path's, repeated so the two stay independent until the sheets can go. */
-const CS_STRIP_SALT = "strip-1";
+const CS_STRIP_SALT = "strip-v2-oneshot"; /* bumped 2026-09-02: strips are now shot whole, not sliced */
 const CS_SEG_MAX = 2048; /* Roku texture cap, output px */
 
 function csStripKey(o, outScale) {
@@ -1679,7 +1679,6 @@ async function csCaptureStrips(page, frame, items, ctx) {
   need.forEach((o) => {
     o._slices = Math.max(1, Math.ceil(o.innerHeight / Math.max(1, o.rect.h)));
   });
-  const steps = Math.max(...need.map((o) => o._slices));
 
   await frame.evaluate((idxs) => {
     const park = document.getElementById("mm-scroll-park");
@@ -1712,9 +1711,92 @@ async function csCaptureStrips(page, frame, items, ctx) {
   await frame.addStyleTag({ content: "/*mm-film*/html,body,#main{background:transparent !important}" });
   await page.addStyleTag({ content: "/*mm-film*/html,body{background:transparent !important}" });
   const t0 = Date.now();
+  /* One screenshot per cell, of the WHOLE content - no slices.
+   *
+   * Slicing shifted the content up one window per shot and stitched the
+   * crops. Anything position:sticky inside the content - FullCalendar's
+   * list view pins each day header, with an opaque background - stayed
+   * pinned at the window's top during a shift and painted over the first
+   * rows of that slice, so the stitched strip carried a header stamped
+   * across an event at every boundary where one happened to fall (Dave,
+   * 2026-09-02: "Ganesh Chaturthi" cut in half; to-do and chores too).
+   * Slices also drifted by the fractional window height per boundary.
+   *
+   * Instead the window is let grow to the content's full height for one
+   * shot - sticky only ever engages inside a clipping box, so nothing
+   * pins - with everything but this cell's content hidden, since the
+   * grown box now overlaps whatever sits below it. Playwright's fullPage
+   * clip reaches below the viewport. If a page refuses the clip, that
+   * cell falls back to slicing. */
+  const oneShot = new Map(); /* idx -> { buf, box } */
+  for (const o of need) {
+    try {
+      const box = await frame.evaluate(
+        (args) => {
+          const list = window.mmScrollCells || [];
+          const c = list[args.idx];
+          if (!c || !c.content) throw new Error("cell gone");
+          const par = c.content.parentElement || c.content;
+          const group = par.querySelectorAll(".-m-scroll-c");
+          const saved = [];
+          const set = (el, prop, val) => {
+            saved.push({ el, prop, val: el.style.getPropertyValue(prop), pri: el.style.getPropertyPriority(prop) });
+            el.style.setProperty(prop, val, "important");
+          };
+          /* base pose, whole height, nothing clipping on the way up */
+          (group.length ? group : [c.content]).forEach((el) => {
+            set(el, "top", "0px");
+            el.setAttribute("data-mm-cs", "1");
+          });
+          set(par, "height", args.innerHeight + "px");
+          set(par, "max-height", "none");
+          set(par, "overflow", "visible");
+          for (let n = par.parentElement; n && n !== document.body; n = n.parentElement) {
+            const cs = getComputedStyle(n);
+            if (cs.overflow !== "visible" || cs.overflowY !== "visible") set(n, "overflow", "visible");
+          }
+          const st = document.createElement("style");
+          st.id = "mm-cs-oneshot";
+          st.textContent =
+            "body * { visibility: hidden !important } " +
+            "[data-mm-cs], [data-mm-cs] * { visibility: visible !important }";
+          document.head.appendChild(st);
+          window.__mmCsOneShot = saved;
+          const r = par.getBoundingClientRect();
+          return { x: r.x, y: r.y, w: r.width, h: r.height };
+        },
+        { idx: o.idx, innerHeight: o.innerHeight },
+      );
+      await frame.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      const buf = await page.screenshot({
+        type: "png",
+        omitBackground: true,
+        fullPage: true,
+        clip: { x: box.x, y: box.y, width: Math.max(1, box.w), height: Math.max(1, box.h) },
+      });
+      oneShot.set(o.idx, { buf, box });
+    } catch (e) {
+      console.log("cellScroll strip: one-shot failed for " + o.date + " (" + e.message + ") - slicing it");
+    } finally {
+      await frame
+        .evaluate(() => {
+          const st = document.getElementById("mm-cs-oneshot");
+          if (st) st.remove();
+          document.querySelectorAll("[data-mm-cs]").forEach((el) => el.removeAttribute("data-mm-cs"));
+          (window.__mmCsOneShot || []).forEach((s) => {
+            if (s.val) s.el.style.setProperty(s.prop, s.val, s.pri || "");
+            else s.el.style.removeProperty(s.prop);
+          });
+          window.__mmCsOneShot = [];
+        })
+        .catch(() => {});
+    }
+  }
+  const sliced = need.filter((o) => !oneShot.has(o.idx));
+  const sliceSteps = sliced.length ? Math.max(...sliced.map((o) => o._slices)) : 0;
   try {
     const shots = [];
-    for (let k = 0; k < steps; k++) {
+    for (let k = 0; k < sliceSteps; k++) {
       await frame.evaluate(
         (args) => {
           const list = window.mmScrollCells || [];
@@ -1729,34 +1811,54 @@ async function csCaptureStrips(page, frame, items, ctx) {
           });
           return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         },
-        { k, cells: need.map((o) => ({ idx: o.idx, winH: o.rect.h })) },
+        { k, cells: sliced.map((o) => ({ idx: o.idx, winH: o.rect.h })) },
       );
       shots.push(await page.screenshot({ type: "png", omitBackground: true }));
     }
-    const shotMeta = await sharp(shots[0]).metadata();
+    const shotMeta = shots.length ? await sharp(shots[0]).metadata() : null;
     for (const o of need) {
       try {
+        const one = oneShot.get(o.idx);
         const dr = {
           left: Math.round(o.rect.x * ctx.outScale),
           top: Math.round(o.rect.y * ctx.outScale),
           width: Math.max(1, Math.round(o.rect.w * ctx.outScale)),
           height: Math.max(1, Math.round(o.rect.h * ctx.outScale)),
         };
-        dr.left = Math.min(Math.max(0, dr.left), shotMeta.width - 1);
-        dr.top = Math.min(Math.max(0, dr.top), shotMeta.height - 1);
-        dr.width = Math.min(dr.width, shotMeta.width - dr.left);
-        dr.height = Math.min(dr.height, shotMeta.height - dr.top);
-        const stripH = Math.max(1, Math.min(Math.round(o.innerHeight * ctx.outScale), o._slices * dr.height));
-        const pieces = [];
-        for (let k = 0; k < o._slices; k++) {
-          pieces.push(await sharp(shots[Math.min(k, shots.length - 1)]).extract(dr).png().toBuffer());
+        let stripH;
+        let stripBuf;
+        if (one) {
+          /* the clip came out at output scale already; make it exactly
+           * the strip's width and height */
+          dr.left = Math.round(one.box.x * ctx.outScale);
+          dr.top = Math.round(one.box.y * ctx.outScale);
+          dr.width = Math.max(1, Math.round(one.box.w * ctx.outScale));
+          stripH = Math.max(1, Math.round(one.box.h * ctx.outScale));
+          const m = await sharp(one.buf).metadata();
+          const w0 = Math.min(dr.width, m.width);
+          const h0 = Math.min(stripH, m.height);
+          stripBuf = await sharp(one.buf)
+            .extract({ left: 0, top: 0, width: w0, height: h0 })
+            .extend({ right: dr.width - w0, bottom: stripH - h0, background: { r: 0, g: 0, b: 0, alpha: 0 } })
+            .png()
+            .toBuffer();
+        } else {
+          dr.left = Math.min(Math.max(0, dr.left), shotMeta.width - 1);
+          dr.top = Math.min(Math.max(0, dr.top), shotMeta.height - 1);
+          dr.width = Math.min(dr.width, shotMeta.width - dr.left);
+          dr.height = Math.min(dr.height, shotMeta.height - dr.top);
+          stripH = Math.max(1, Math.min(Math.round(o.innerHeight * ctx.outScale), o._slices * dr.height));
+          const pieces = [];
+          for (let k = 0; k < o._slices; k++) {
+            pieces.push(await sharp(shots[Math.min(k, shots.length - 1)]).extract(dr).png().toBuffer());
+          }
+          stripBuf = await sharp({
+            create: { width: dr.width, height: o._slices * dr.height, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+          })
+            .composite(pieces.map((p, i) => ({ input: p, left: 0, top: i * dr.height })))
+            .png()
+            .toBuffer();
         }
-        const stripBuf = await sharp({
-          create: { width: dr.width, height: o._slices * dr.height, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
-        })
-          .composite(pieces.map((p, i) => ({ input: p, left: 0, top: i * dr.height })))
-          .png()
-          .toBuffer();
         /* key from the rect process() saw, before it is snapped */
         const key = csStripKey(o, ctx.outScale);
         o.rect = {
@@ -1782,7 +1884,7 @@ async function csCaptureStrips(page, frame, items, ctx) {
         );
         const tv = csTvDuration(o);
         console.log(
-          "cellScroll strip: " + o.date + " " + o._slices + " shot(s), " + stripH + "px, loop " +
+          "cellScroll strip: " + o.date + " " + (one ? "one shot" : o._slices + " slice(s)") + ", " + stripH + "px, loop " +
             Math.round(tv.ms / 100) / 10 + "s, " + Math.round(tv.pxPerSec * 10) / 10 + " px/s (native)",
         );
         fill(o, meta);

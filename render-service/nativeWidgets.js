@@ -877,9 +877,26 @@ async function wxDecompose(page, o, ctx) {
   }
 }
 
-function wxMotionFill(o, meta) {
+/* Place an overlay exactly where its pixels were cut. Layer images are
+ * whole output pixels; an element's rect is fractional canvas px. Left
+ * fractional, the device draws the layer up to half a device pixel off
+ * the still it sits on - and where the two show the same thing, that
+ * half-pixel doubles every edge into a smear (Dave, 2026-09-02: the
+ * calendar's cloud). Snap to the output grid and scale back. */
+function snapRect(rect, outScale) {
+  const s = outScale || 1;
+  return {
+    x: Math.round(rect.x * s) / s,
+    y: Math.round(rect.y * s) / s,
+    w: Math.max(1, Math.round(rect.w * s)) / s,
+    h: Math.max(1, Math.round(rect.h * s)) / s,
+  };
+}
+
+function wxMotionFill(o, meta, outScale) {
   o.type = "motion";
   o.source = o.src;
+  o.rect = snapRect(o.rect, outScale);
   o.layers = meta.layers.map((L) => {
     const out = { file: L.file, tracks: L.tracks || [] };
     if (L.opacity !== undefined && L.opacity !== null) out.opacity = L.opacity;
@@ -1029,7 +1046,7 @@ const weatherIconHandler = {
               " layer(s) in " + (Date.now() - t0) + "ms",
           );
         }
-        wxMotionFill(o, meta);
+        wxMotionFill(o, meta, ctx.outScale);
       } catch (e) {
         /* decomposition failed: keep this icon on the sheet path */
         console.error("wx motion failed (" + String(o.src).split("/").pop() + "):", e.message);
@@ -2578,17 +2595,21 @@ async function cwmBuild(page, frame, o, key, ctx) {
 /* one motion overlay for the strip's particles at the strip rect, plus
  * one for the icon at its own box (a separate overlay, so the icon's
  * layers keep their crisp 2x images) */
-function cwmFill(o, meta, extras) {
+function cwmFill(o, meta, extras, outScale) {
   o.type = "motion";
   o.layers = meta.layers;
   if (meta.icon) {
     extras.push({
       type: "motion",
       page: o.page,
-      rect: { x: o.rect.x + meta.icon.rect.x, y: o.rect.y + meta.icon.rect.y, w: meta.icon.rect.w, h: meta.icon.rect.h },
+      rect: snapRect(
+        { x: o.rect.x + meta.icon.rect.x, y: o.rect.y + meta.icon.rect.y, w: meta.icon.rect.w, h: meta.icon.rect.h },
+        outScale,
+      ),
       layers: meta.icon.layers,
     });
   }
+  o.rect = snapRect(o.rect, outScale);
   delete o.liveCapture;
   delete o.cellWeather;
 }
@@ -2625,16 +2646,35 @@ const cellWeatherHandler = {
   // copy goes the way the widget icons' did: the overlay is the only
   // source of icon pixels - a frozen ghost under an animated sheet
   // reads as a smudge.
-  async hide(frame, overlays) {
+  async hide(frame, overlays, ctx) {
     if (!overlays.length) return;
-    await frame.evaluate(() => {
-      window.__mmCwHidden = [];
-      document.querySelectorAll(".mm-weather-header-icon").forEach((el) => {
-        if (getComputedStyle(el).visibility === "hidden") return;
-        el.style.opacity = "0";
-        window.__mmCwHidden.push(el);
-      });
-    });
+    /* Natively drawn strips: the overlay's static layer is a copy of the
+     * strip's own drawing (the cloud), so the still must not keep one
+     * too - two copies half a pixel apart read as a blur (Dave,
+     * 2026-09-02, the 7th). The date and temperatures live in a sibling
+     * (.mm-weather-header-meta) and stay baked. Sheet-era displays keep
+     * the icon-only hide: their sheet covers the strip pixel-for-pixel. */
+    const wholeStrip = !!(ctx && ctx.nativeWeather);
+    await frame.evaluate(
+      (args) => {
+        window.__mmCwHidden = [];
+        document.querySelectorAll(".mm-weather-header-icon").forEach((el) => {
+          if (getComputedStyle(el).visibility === "hidden") return;
+          el.style.opacity = "0";
+          window.__mmCwHidden.push(el);
+        });
+        if (!args.wholeStrip) return;
+        document.querySelectorAll(".mm-weather-header-strip").forEach((el) => {
+          if (getComputedStyle(el).visibility === "hidden") return;
+          const r = el.getBoundingClientRect();
+          const mine = args.rects.some((q) => Math.abs(q.x - r.x) < 3 && Math.abs(q.y - r.y) < 3);
+          if (!mine) return;
+          el.style.opacity = "0";
+          window.__mmCwHidden.push(el);
+        });
+      },
+      { wholeStrip, rects: overlays.map((o) => ({ x: o.rect.x, y: o.rect.y })) },
+    );
   },
 
   async captureAfter(page, frame, items, ctx) {
@@ -2691,7 +2731,7 @@ const cellWeatherHandler = {
       const mhits = live.map((o) => cwmCached(mkey(o), ctx.outDir));
       const extras = [];
       if (mhits.every(Boolean)) {
-        live.forEach((o, i) => cwmFill(o, mhits[i], extras));
+        live.forEach((o, i) => cwmFill(o, mhits[i], extras, ctx.outScale));
         console.log("cwm: " + live.length + " strip(s) from cached motion");
         return items.concat(extras);
       }
@@ -2704,7 +2744,7 @@ const cellWeatherHandler = {
         const ready = [];
         live.forEach((o, i) => {
           if (mhits[i]) {
-            cwmFill(o, mhits[i], extras);
+            cwmFill(o, mhits[i], extras, ctx.outScale);
             ready.push(o);
           }
         });
@@ -2765,7 +2805,7 @@ const cellWeatherHandler = {
           o.skip = true;
           continue;
         }
-        cwmFill(o, c, extras);
+        cwmFill(o, c, extras, ctx.outScale);
       }
       return items.filter((o) => !o.skip).concat(extras);
     }

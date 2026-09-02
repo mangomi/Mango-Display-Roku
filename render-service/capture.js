@@ -530,7 +530,7 @@ async function capturePage(page, opts) {
           found = await handler.process(found, handlerCtx);
         }
         if (found.length) {
-          await handler.hide(portalFrame, found);
+          await handler.hide(portalFrame, found, handlerCtx);
           groups.push({ handler, items: found });
         }
       } catch (e) {
@@ -618,7 +618,7 @@ async function capturePage(page, opts) {
     for (const g of groups) {
       if (!g.handler.hide || !g.items.length) continue;
       try {
-        await g.handler.hide(portalFrame, g.items);
+        await g.handler.hide(portalFrame, g.items, handlerCtx);
       } catch (e) {
         console.error("re-hide '" + g.handler.type + "' failed:", e.message);
       }

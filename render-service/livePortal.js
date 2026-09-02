@@ -99,7 +99,12 @@ class LivePortal {
       "?major=" + this.opts.major +
       "&minor=" + this.opts.minor +
       "&macaddress=" + this.opts.deviceId +
-      "&painted=true"
+      "&painted=true" +
+      /* embed=true is the portal's own "render the landscape page directly,
+       * never the rotation host" switch (parentController.js) - the same
+       * flag its rotated iframe passes. A rotated display is rendered
+       * unrotated at a portrait canvas; the device turns it. */
+      (this.opts.embed ? "&embed=true" : "")
     );
   }
 

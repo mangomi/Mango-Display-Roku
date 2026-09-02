@@ -73,6 +73,42 @@ off there, not deleted here.
   disqualification at all; a too-strict rule makes gestures feel
   impossible to trigger on a real remote.
 
+## TODO — display rotation (Roku `<commit>` , 2026-09-02)
+
+**Manifest:** `canvas` may now be **1080x1920**, and a new top-level
+`rotation` field (0 | 90 | 270, degrees clockwise as the viewer sees it)
+says how to turn it. See MANIFEST.md `rotation`. A landscape display is
+unchanged (1920x1080, rotation absent/0).
+
+**What the server does:** for a display whose backend record has
+`mirrorOrientation` 1 (90° clockwise) or 2 (counter-clockwise) it loads
+the portal's plain landscape page (`&embed=true`) at a 1080x1920
+viewport, outputs images at the device's dimensions swapped (720x1280 /
+1080x1920), and publishes `rotation` 90 / 270. Every overlay rect, sprite,
+strip and effect is in that portrait canvas - nothing is per widget. An
+orientation change re-reads the record, reopens the portal and
+recaptures every page.
+
+**What the client must do (Roku reference: MainScene `applyCanvas`, the
+`stage` group in MainScene.xml):**
+- Size the page image layer to `canvas` (not the screen).
+- Put page image + overlays + effects + pointer/celebration layers in ONE
+  container; place it so the canvas centre sits on the screen centre
+  (`translation = ((screenW - w)/2, (screenH - h)/2)`, rotate about
+  `(w/2, h/2)`); rotate by `rotation` clockwise. Do not touch individual
+  overlays.
+- Effects that spawn against screen bounds must use canvas bounds
+  (ParticleEffect / DropperEffect / PopupEffect / SpriteMover /
+  SlideshowOverlay default rect read `canvasW/H` off their config; the
+  Roku scene injects those into every effect/overlay config).
+- Pointer/arrow navigation: map the viewer's arrows onto canvas axes
+  (90: up->left, down->right, left->down, right->up; 270: the reverse);
+  clamp the pointer to canvas bounds; start it at the canvas centre.
+- Page-slide transitions travel one canvas width/height.
+- Untested on tvOS: nothing here depends on Roku specifics, but check
+  that clipping (scroll strips, sprite windows) survives the container
+  rotation on your renderer - on Roku it is the one thing to watch.
+
 ## DONE by the tvOS session already (listed for the record)
 
 - [x] Calendar cell-weather overlays (`overlay_cw_*` gif entries,

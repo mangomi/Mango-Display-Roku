@@ -699,6 +699,7 @@ async function capturePage(page, opts) {
   const manifest = {
     schema: SCHEMA_VERSION,
     canvas: { width, height },
+    rotation: opts.rotation || 0,
     overlays,
     effects,
     targets,

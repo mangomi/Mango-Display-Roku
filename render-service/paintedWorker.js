@@ -59,6 +59,26 @@ const DISPLAY_WIDE = new Set(["gesture", "overlay", "orientation", "structural"]
 const PORTAL_IDLE_MS = parseInt(process.env.PORTAL_IDLE_MS || "180000", 10);
 const IDLE_SWEEP_MS = 30000;
 
+/* one-shot JSON GET; resolves null on transport failure, like fleet's */
+function getJson(url) {
+  return new Promise((resolve) => {
+    const mod = url.startsWith("https:") ? require("https") : require("http");
+    const req = mod.get(url, { timeout: 10000 }, (res) => {
+      let body = "";
+      res.on("data", (c) => (body += c));
+      res.on("end", () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch (e) {
+          resolve(null);
+        }
+      });
+    });
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", () => resolve(null));
+  });
+}
+
 class PaintedWorker extends DisplayWorker {
   constructor(opts) {
     super(opts);
@@ -98,6 +118,32 @@ class PaintedWorker extends DisplayWorker {
   /* Close the current portal and boot a fresh one. Chained so two
    * reopens cannot interleave, and portalPage is cleared because a new
    * portal starts on page 0. */
+  /* The portal announces that the orientation changed, not what it is;
+   * the backend record has the value. When the geometry actually changes
+   * the live portal must be reopened - its viewport and URL both follow
+   * it - and every page recaptured. Otherwise it is an ordinary
+   * display-wide recapture. */
+  async refreshOrientation(reason) {
+    let orientation = null;
+    try {
+      const r = await getJson(this.env.apiBase + "mirrors/deviceId/" + encodeURIComponent(this.deviceId));
+      const o = r && r.object;
+      if (o) orientation = parseInt(o.mirrorOrientation, 10) || 0;
+    } catch (e) {
+      this.log("orientation lookup failed:", e.message);
+    }
+    if (orientation !== null && this.applyOrientation(orientation)) {
+      const d = this.display;
+      this.log(
+        "orientation -> rotation " + d.rotation + " (canvas " + d.canvasW + "x" + d.canvasH +
+          ", out " + d.outW + "x" + d.outH + ") - reopening the portal",
+      );
+      await this.reopenPortal("orientation change");
+    }
+    this.log("change: " + reason + " - capturing every page");
+    this.queueCapture(null, reason);
+  }
+
   reopenPortal(why) {
     this.portalReopen = (this.portalReopen || Promise.resolve())
       .catch(() => {})
@@ -216,6 +262,7 @@ class PaintedWorker extends DisplayWorker {
         canvasH: this.display.canvasH,
         outW: this.display.outW,
         outH: this.display.outH,
+        embed: this.display.rotation !== 0,
         timezoneId,
         log: (...a) => this.log(...a),
         onChange: (message) => this.onPortalChange(message),
@@ -352,6 +399,12 @@ class PaintedWorker extends DisplayWorker {
       this.queueCapture(null, "midnight");
       return;
     }
+    if (type === "orientation") {
+      this.refreshOrientation("orientation settings").catch((e) =>
+        this.log("orientation refresh failed:", e.message),
+      );
+      return;
+    }
     if (type && DISPLAY_WIDE.has(type)) {
       this.log("change: " + type + " settings - capturing every page");
       this.queueCapture(null, type + " settings");
@@ -455,6 +508,7 @@ class PaintedWorker extends DisplayWorker {
       url: this.portal.url(),
       width: this.display.canvasW,
       height: this.display.canvasH,
+      rotation: this.display.rotation,
       outWidth: this.display.outW,
       outHeight: this.display.outH,
       state: { noAnimStyle: null },

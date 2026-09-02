@@ -33,7 +33,19 @@ A Roku running FHD happens to map 1:1. Nothing else should assume that.
 
 ```
 schema        contract version (see above)
-canvas        { width, height } - the coordinate space above
+canvas        { width, height } - the coordinate space above. Landscape
+              displays are 1920x1080. A ROTATED display is 1080x1920:
+              the page was rendered unrotated at that size (see rotation).
+rotation      0 | 90 | 270 - degrees CLOCKWISE, as the viewer sees it,
+              that the client must turn the WHOLE canvas to show it
+              upright on this screen. Non-zero always comes with a
+              portrait canvas. Turn everything as one unit - page image,
+              overlays, effects, pointer - about the canvas centre placed
+              on the screen centre; do not rotate elements individually.
+              Absent means 0. (Why: the portal implements rotation as a
+              CSS-rotated iframe, which a headless capture cannot see
+              into; rendering the plain page portrait and turning it on
+              the device keeps every rect in the portal's own space.)
 updateReason  "auto" for background refreshes (startup, scheduled,
               midnight, data), "edit" when a user changed something.
               Clients use this to decide whether to show a progress

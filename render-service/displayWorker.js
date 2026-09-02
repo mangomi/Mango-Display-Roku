@@ -45,6 +45,40 @@ class DisplayWorker {
    *   legacy                  - config came from the environment, not a
    *                             request; never evicted
    */
+  /* Rotation. The portal implements a rotated display as a host page with
+   * a CSS-rotated iframe, which every extractor here sees as an empty
+   * document (2026-09-02: one page, zero overlays, "everything frozen").
+   * So a rotated display is rendered UNROTATED - the plain landscape page
+   * at a portrait canvas, 1080x1920 - and the manifest asks the device for
+   * ONE rotation of everything: page image, overlays, effects, pointer.
+   * Every handler keeps working in the portal's own coordinates; nothing
+   * is per widget.
+   *
+   * orientation is the backend's mirrorOrientation: 0 landscape, 1 the TV
+   * is mounted 90° clockwise (portal: rotate(90deg)), 2 counter-clockwise
+   * (rotate(-90deg)). rotation is what the device applies, degrees
+   * clockwise as the viewer sees it: 0, 90 or 270. Returns true when the
+   * geometry changed, so a live portal knows to reopen. */
+  applyOrientation(orientation) {
+    const o = parseInt(orientation, 10) || 0;
+    const rotation = o === 1 || o === 90 ? 90 : o === 2 || o === 270 ? 270 : 0;
+    const portrait = rotation !== 0;
+    const dev = this.deviceOut || { w: 1920, h: 1080 };
+    const long = Math.max(dev.w, dev.h);
+    const short = Math.min(dev.w, dev.h);
+    const next = {
+      rotation,
+      canvasW: portrait ? 1080 : 1920,
+      canvasH: portrait ? 1920 : 1080,
+      outW: portrait ? short : long,
+      outH: portrait ? long : short,
+    };
+    const d = this.display;
+    const changed = Object.keys(next).some((k) => d[k] !== next[k]);
+    Object.assign(d, next);
+    return changed;
+  }
+
   constructor(opts) {
     this.deviceId = opts.deviceId;
     this.display = {
@@ -55,7 +89,12 @@ class DisplayWorker {
       canvasH: 1080,
       outW: opts.outW || 1920,
       outH: opts.outH || 1080,
+      rotation: 0,
     };
+    /* the device reports its own resolution in landscape; rotation swaps
+     * the working geometry but this stays as reported */
+    this.deviceOut = { w: this.display.outW, h: this.display.outH };
+    this.applyOrientation(opts.orientation || 0);
     this.dir = opts.dir;
     this.env = opts.env;
     this.gate = opts.gate;
@@ -747,6 +786,7 @@ class DisplayWorker {
         {
           schema: man0.schema || 1,
           canvas: { width: this.display.canvasW, height: this.display.canvasH },
+          rotation: this.display.rotation || 0,
           updateReason,
           imageOnly,
           showPage,

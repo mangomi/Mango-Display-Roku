@@ -179,6 +179,9 @@ async function validateDisplay(deviceId) {
     minor: parseInt(o.minor, 10),
     w: parseInt(o.deviceWidth, 10) || 0,
     h: parseInt(o.deviceHeight, 10) || 0,
+    /* 0 landscape, 1 mounted 90° clockwise, 2 counter-clockwise - the
+     * portal's own mapping of mirrorOrientation (parentController.js) */
+    orientation: parseInt(o.mirrorOrientation, 10) || 0,
   };
   lastKnownDisplay.set(deviceId, rec);
   return rec;
@@ -218,6 +221,7 @@ async function startWorker(cfg) {
     minor: cfg.minor,
     outW: cfg.outW,
     outH: cfg.outH,
+    orientation: cfg.orientation || 0,
     dir: path.join(DATA_ROOT, cfg.deviceId),
     env: ENV,
     gate,
@@ -266,6 +270,7 @@ async function getOrCreateWorker(id) {
       minor: known.minor,
       outW: id.w > 0 ? id.w : known.w > 0 ? known.w : 1920,
       outH: id.h > 0 ? id.h : known.h > 0 ? known.h : 1080,
+      orientation: known.orientation || 0,
       legacy: false,
     });
   })();

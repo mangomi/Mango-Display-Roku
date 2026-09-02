@@ -234,6 +234,25 @@ Each of these cost real debugging. Do not re-introduce them.
    published image, composite it over a dark background (transparent PNGs
    look blank on white), and look at it.
 
+## Rotation (2026-09-02)
+
+The portal implements a rotated display (`mirrorOrientation` 1 = 90°
+clockwise, 2 = counter-clockwise) as `portrait.html`: a host page holding
+the real page in a CSS-rotated `<iframe id="portraitFrame">`. To a
+headless capture that host is an empty document - `portalFrameOf()`
+picked it, every extractor found nothing, and the display went to one
+page with zero overlays ("everything frozen").
+
+So a rotated display is rendered UNROTATED: `displayWorker.applyOrientation`
+swaps the geometry (canvas 1080x1920, output = device dims swapped),
+`LivePortal.url()` adds `&embed=true` - the portal's own "render the
+landscape page directly, never the rotation host" switch, the same flag
+its iframe passes - and the manifest carries `rotation` 90/270 (MANIFEST.md).
+The device turns the whole canvas once. Every handler keeps working in
+the portal's coordinates; nothing is per widget. An `orientation` signal
+makes `PaintedWorker.refreshOrientation` re-read the backend record,
+reopen the portal if the geometry changed, and recapture every page.
+
 ## Open / next
 
 1. ~~Merge PR #68, then delete `portal-preview/`, drop

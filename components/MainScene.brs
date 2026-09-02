@@ -517,6 +517,15 @@ sub finalizeSwap(newKey as string, index as integer)
     else
         m.interaction.regions = []
     end if
+    ' checkboxes inside scrolling lists ride their ScrollOverlay strips:
+    ' hand the page's scroll overlays to the interaction layer so it can
+    ' aim at and tick them where they are RIGHT NOW
+    strips = []
+    for i = 0 to entry.overlays.getChildCount() - 1
+        ch = entry.overlays.getChild(i)
+        if ch.subtype() = "ScrollOverlay" then strips.Push(ch)
+    end for
+    m.interaction.stripOverlays = strips
     armPageTimer()
     ' apply any manifest that arrived while a transition/load was running
     maybeApplyPages()
@@ -692,6 +701,7 @@ sub startTransition(name as string, slotKey as string, index as integer)
     ' arrives with finalizeSwap exactly as before.
     m.interaction.targets = {}
     m.interaction.regions = []
+    m.interaction.stripOverlays = []
     entry = m.slots[slotKey]
     anim = buildTransition(name, m.frontKey, entry.slot)
     entry.slot.visible = true

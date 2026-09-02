@@ -47,6 +47,8 @@ sub init()
     m.warmSent = false
     m.heldKey = ""
     m.top.observeField("targets", "onTargets")
+    m.stripItems = []
+    m.top.observeField("stripOverlays", "onStripOverlays")
     m.top.observeField("keyPress", "onKey")
     m.top.observeField("keyRelease", "onKeyUp")
     m.top.observeField("swipeApplied", "onSwipeApplied")
@@ -110,6 +112,84 @@ end sub
 ' The press is the user's truth until the backend's own refresh proves it
 ' landed. A render can arrive before the change has propagated, and
 ' repainting the old state would read as the tick being thrown away.
+' ---- checkboxes that ride a scroll strip ---------------------------------
+' A scrolling list's checkboxes are drawn by its ScrollOverlay, inside the
+' moving strip. They are items like any other for aiming and ticking, except
+' that their on-screen rect is computed live from the strip's translation.
+sub onStripOverlays()
+    m.stripItems = []
+    ovs = m.top.stripOverlays
+    if ovs = invalid then return
+    for each ov in ovs
+        cfg = ov.config
+        if cfg = invalid or cfg.rect = invalid or ov.boxes = invalid or ov.boxNodes = invalid then continue for
+        win = ov.getChild(0)
+        if win = invalid then continue for
+        strip = win.getChild(0)
+        if strip = invalid then continue for
+        i = 0
+        for each b in ov.boxes
+            node = invalid
+            if i < ov.boxNodes.Count() then node = ov.boxNodes[i]
+            i = i + 1
+            if node = invalid then continue for
+            tid = ""
+            if b.payload <> invalid and b.payload.id <> invalid then tid = Int(b.payload.id).ToStr()
+            checked = b.checked = true
+            if tid <> "" then checked = resolveChecked(tid, checked)
+            node.uri = m.top.assetBase + spriteFor(cfg.sprites, checked)
+            proj = ""
+            if b.payload <> invalid and b.payload.projectId <> invalid then proj = Box(b.payload.projectId).ToStr()
+            wid = ""
+            if b.widgetSettingId <> invalid then wid = Box(b.widgetSettingId).ToStr()
+            kind = "todo"
+            if b.kind <> invalid then kind = b.kind
+            m.stripItems.Push({ node: node, overlay: ov, strip: strip, box: b, rect: { x: 0, y: 0, w: b.w, h: b.h }, checked: checked, sprites: cfg.sprites, id: tid, widget: wid, project: proj, kind: kind })
+        end for
+    end for
+    print "[Mango] strip checkboxes: "; m.stripItems.Count()
+    updateHighlight()
+end sub
+
+' an item's rect on screen now: static targets carry theirs; strip items
+' are their box offset from the strip's live position inside the window
+function itemRect(it as object) as object
+    if it.strip = invalid then return it.rect
+    r = it.overlay.config.rect
+    t = it.strip.translation
+    return { x: r.x + it.box.x, y: r.y + t[1] + it.box.y, w: it.box.w, h: it.box.h }
+end function
+
+' a strip item can only be aimed at while its row is inside the window
+function itemVisible(it as object) as boolean
+    if it.strip = invalid then return true
+    r = it.overlay.config.rect
+    ir = itemRect(it)
+    return ir.y + ir.h > r.y and ir.y < r.y + r.h
+end function
+
+function allItems() as object
+    out = []
+    for each it in m.items
+        out.Push(it)
+    end for
+    for each it in m.stripItems
+        out.Push(it)
+    end for
+    return out
+end function
+
+' hold any strip the pointer is over, so its boxes stand still
+sub pauseStripsUnderPointer(active as boolean)
+    ovs = m.top.stripOverlays
+    if ovs = invalid then return
+    for each ov in ovs
+        r = ov.config.rect
+        over = active and m.px >= r.x and m.px <= r.x + r.w and m.py >= r.y and m.py <= r.y + r.h
+        if ov.paused <> over then ov.paused = over
+    end for
+end sub
+
 function resolveChecked(id as string, fromManifest as boolean) as boolean
     ov = m.overrides[id]
     if ov = invalid then return fromManifest
@@ -161,6 +241,7 @@ sub onIdle()
     m.highlight.visible = false
     m.warmSent = false
     stopHold()
+    pauseStripsUnderPointer(false)
 end sub
 
 sub placePointer()
@@ -362,8 +443,10 @@ end sub
 ' checkbox has a label around it that ours doesn't
 function itemUnderPointer() as object
     pad = 12
-    for each it in m.items
-        if m.px >= it.rect.x - pad and m.px <= it.rect.x + it.rect.w + pad and m.py >= it.rect.y - pad and m.py <= it.rect.y + it.rect.h + pad
+    for each it in allItems()
+        if not itemVisible(it) then continue for
+        ir = itemRect(it)
+        if m.px >= ir.x - pad and m.px <= ir.x + ir.w + pad and m.py >= ir.y - pad and m.py <= ir.y + ir.h + pad
             return it
         end if
     end for
@@ -378,6 +461,7 @@ sub updateHighlight()
         m.highlight.visible = false
         return
     end if
+    pauseStripsUnderPointer(true)
     r = invalid
     reg = regionUnderPointer()
     if reg <> invalid
@@ -386,7 +470,8 @@ sub updateHighlight()
         it = itemUnderPointer()
         if it <> invalid
             pad = 10
-            r = { x: it.rect.x - pad, y: it.rect.y - pad, w: it.rect.w + pad * 2, h: it.rect.h + pad * 2 }
+            ir = itemRect(it)
+            r = { x: ir.x - pad, y: ir.y - pad, w: ir.w + pad * 2, h: ir.h + pad * 2 }
         end if
     end if
     if r = invalid
@@ -413,7 +498,7 @@ end sub
 ' the list as far as the TV can aim at it; todos group per project inside
 ' a widget (the portal's own rule), chores per widget.
 function listComplete(hit as object) as boolean
-    for each it in m.items
+    for each it in allItems()
         if it.widget = hit.widget
             if hit.kind <> "todo" or it.project = hit.project
                 if it.checked <> true then return false
@@ -436,12 +521,13 @@ sub activateUnderPointer()
     print "[Mango] tick "; hit.id; " -> "; hit.checked
     ' celebrate exactly like the portal: a burst at the box for a
     ' check-off, the full-display finale when its whole list is done
+    hr = itemRect(hit)
     if hit.checked
-        info = { kind: "burst", x: hit.rect.x + hit.rect.w / 2, y: hit.rect.y + hit.rect.h / 2 }
+        info = { kind: "burst", x: hr.x + hr.w / 2, y: hr.y + hr.h / 2 }
         if listComplete(hit) then info.kind = "finale"
         m.top.celebrate = info
     end if
-    sendAction2("tap", hit.rect.x + hit.rect.w / 2, hit.rect.y + hit.rect.h / 2, hit.id)
+    sendAction2("tap", hr.x + hr.w / 2, hr.y + hr.h / 2, hit.id)
 end sub
 
 ' ---- service channel ----------------------------------------------------

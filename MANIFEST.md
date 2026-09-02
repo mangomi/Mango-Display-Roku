@@ -119,6 +119,16 @@ once as a tall transparent strip and the device does the motion.
   the start and end of one loop: `+rect.h` → `-stripH`, so it enters from
   the bottom edge and leaves past the top.
 - `durationMs` — one loop, linear; `loop` — repeat (default true).
+- `boxes` — task checkboxes that live INSIDE the scrolling content, in
+  strip coordinates: `[{ x, y, w, h, checked, kind, widgetSettingId,
+  payload }]`, the same `payload` a page-level target carries. Draw each
+  as a poster inside the moving strip so it travels with its row, using
+  `sprites` — `{ empty, checked }`, the checkbox art files. A page-level
+  `targets` entry never covers these rows (the box is blanked for the
+  still), so a client that ignores `boxes` shows a scrolling list with no
+  checkboxes. Aim and tick them at their CURRENT on-screen position (strip
+  offset + box offset); a tick goes through the ordinary interact call
+  with the payload id. Hold the strip while the pointer is over it.
 
 Emitted only to devices whose client understands it
 (`NATIVE_SCROLL_PREFIXES` in `render-service/capture.js`); every other

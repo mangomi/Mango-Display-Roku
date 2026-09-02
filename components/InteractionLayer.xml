@@ -8,6 +8,10 @@
         <field id="pageIndex" type="integer" value="0" />
         <!-- the manifest's canvas and how it is turned on screen (see
              MainScene applyCanvas): pointer bounds and arrow directions -->
+        <!-- the front page's ScrollOverlay nodes: their checkboxes ride the
+             strips, so they are aimed at and ticked at their CURRENT
+             on-screen position (MainScene sets this in finalizeSwap) -->
+        <field id="stripOverlays" type="nodearray" />
         <field id="canvasW" type="integer" value="1920" />
         <field id="canvasH" type="integer" value="1080" />
         <field id="rotation" type="integer" value="0" />

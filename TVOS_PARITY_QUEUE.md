@@ -91,6 +91,22 @@ off there, not deleted here.
   disqualification at all; a too-strict rule makes gestures feel
   impossible to trigger on a real remote.
 
+## TODO — checkboxes inside scrolling lists (Roku channel + service, 2026-09-02)
+
+`scroll` overlays may now carry `boxes` + `sprites` (MANIFEST.md). A
+scrolling to-do/chores list had NO checkboxes on Roku: the page-level
+target extractor drops boxes inside a hidden scroll box, and a static
+target could not follow a sliding row anyway. The server now extracts the
+checkboxes in strip coordinates during the one-shot strip capture (and
+re-shoots the strip when their checked state changes - `boxSig` is in the
+strip cache key). Client: draw one poster per box inside the moving strip
+(Roku `ScrollOverlay` boxes/boxNodes), hit-test at strip offset + box
+offset while the row is inside the window, pause the strip while the
+pointer is over it (`paused`), tick through the normal interact call with
+`payload.id`, and keep the local "held" override until the render catches
+up - exactly what the static targets do (Roku `InteractionLayer`
+onStripOverlays/itemRect).
+
 ## TODO — display rotation (Roku channel `71399e1`, service `5586aa0`, 2026-09-02)
 
 **Manifest:** `canvas` may now be **1080x1920**, and a new top-level

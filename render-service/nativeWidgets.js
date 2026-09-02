@@ -1605,6 +1605,7 @@ function csStripKey(o, outScale) {
         Math.round(o.rect.w * outScale),
         Math.round(o.rect.h * outScale),
         Math.round(o.innerHeight),
+        o.boxSig || "",
       ].join("|"),
     )
     .digest("hex")
@@ -1661,13 +1662,21 @@ async function csCaptureStrips(page, frame, items, ctx) {
     o.toY = -meta.stripH;
     o.durationMs = Math.round(tv.ms);
     o.loop = true;
+    /* checkboxes that ride the strip (see the one-shot capture) */
+    if (meta.boxes && meta.boxes.length) {
+      o.boxes = meta.boxes;
+      o.sprites = sprites;
+    }
     delete o.liveCapture;
     delete o.idx;
     delete o.boxHeight;
     delete o.innerHeight;
     delete o.speed;
     delete o._slices;
+    delete o.boxSig;
   };
+  /* the same checkbox art the static targets use */
+  const sprites = await generateCheckboxSprites(ctx.outDir);
 
   const hits = live.map((o) => csCachedStrip(o, ctx.outDir, ctx.outScale));
   if (hits.every(Boolean)) {
@@ -1763,7 +1772,59 @@ async function csCaptureStrips(page, frame, items, ctx) {
           document.head.appendChild(st);
           window.__mmCsOneShot = saved;
           const r = par.getBoundingClientRect();
-          return { x: r.x, y: r.y, w: r.width, h: r.height };
+          /* Checkboxes that live in this scrolling content, in STRIP
+           * coordinates (relative to the box's top-left at the base pose).
+           * The page-level target extractor drops them: the box is hidden
+           * for the still, and hidden reads as "another page" there. They
+           * ride the strip on the device instead - the same payload the
+           * static targets carry, so a tick goes down the same path. */
+          const boxes = [];
+          const gestureOf = (sc) => {
+            let g = sc;
+            while (g && !g.gesture) g = g.$parent;
+            return (g && g.gesture) || {};
+          };
+          par.querySelectorAll("input.todocheckbox").forEach((el) => {
+            if (el.disabled) return;
+            const br = el.getBoundingClientRect();
+            if (br.width < 6 || br.height < 6) return;
+            const sc = window.angular ? window.angular.element(el).scope() : null;
+            const modelExpr = el.getAttribute("ng-model") || "";
+            const itemExpr = modelExpr.replace(/\.status\s*$/, "");
+            if (!sc || !itemExpr || !el.getAttribute("ng-click")) return;
+            const todo = sc.$eval(itemExpr);
+            if (!todo || todo.id === undefined) return;
+            let w = sc;
+            while (w && !w.widgetData) w = w.$parent;
+            const wd = w && w.widgetData;
+            const kind = wd && wd.contentType === "chores" ? "chores" : "todo";
+            const gesture = gestureOf(sc);
+            const allowed = kind === "chores" ? gesture.touch_chores_complete : gesture.touch_todo_complete;
+            if (allowed !== true && allowed !== 1 && allowed !== "true") return;
+            let labelId = null;
+            if (kind === "chores") {
+              let pp = sc;
+              while (pp && !(pp.value && pp.value.selectedLabel)) pp = pp.$parent;
+              if (pp && pp.value.selectedLabel) labelId = pp.value.selectedLabel.labelId;
+            }
+            boxes.push({
+              kind,
+              x: br.x - r.x,
+              y: br.y - r.y,
+              w: br.width,
+              h: br.height,
+              checked: el.checked === true,
+              widgetSettingId: wd ? wd.widgetSettingId : null,
+              payload: {
+                id: todo.id,
+                projectId: todo.projectId,
+                taskId: todo.taskId,
+                todoAccountId: todo.todoAccountId,
+                labelId,
+              },
+            });
+          });
+          return { x: r.x, y: r.y, w: r.width, h: r.height, boxes };
         },
         { idx: o.idx, innerHeight: o.innerHeight },
       );
@@ -1877,7 +1938,13 @@ async function csCaptureStrips(page, frame, items, ctx) {
           segments.push({ file, h: h / ctx.outScale });
           y += h;
         }
-        const meta = { rect: { ...o.rect }, segments, stripW: dr.width / ctx.outScale, stripH: stripH / ctx.outScale };
+        const meta = {
+          rect: { ...o.rect },
+          segments,
+          stripW: dr.width / ctx.outScale,
+          stripH: stripH / ctx.outScale,
+          boxes: one && one.box.boxes ? one.box.boxes : [],
+        };
         fsHandlers.writeFileSync(
           pathHandlers.join(ctx.outDir, "overlay_ss_" + key + "_" + tag + ".json"),
           JSON.stringify(meta),
@@ -2020,12 +2087,19 @@ const cellScrollHandler = {
         }
         const bottom = Math.min(clipBottom, cellR.bottom, r.bottom + 8);
         const winH = Math.max(r.height, bottom - r.y);
+        /* the checkboxes inside, as a signature: a tick changes no
+         * geometry, so without this a re-render would reuse a strip
+         * whose boxes show the old state */
+        const boxSig = [...win.querySelectorAll("input.todocheckbox")]
+          .map((b) => (b.checked ? "1" : "0"))
+          .join("");
         out.push({
           type: "cellScroll",
           idx: i,
           page: pageIdx,
           date: c.date || null,
           widgetSettingId: c.widgetId || null,
+          boxSig,
           rect: { x: r.x, y: r.y, w: r.width, h: winH },
           boxHeight: c.boxHeight,
           innerHeight: c.innerHeight,

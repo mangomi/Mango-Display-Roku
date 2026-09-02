@@ -3,6 +3,14 @@
     <interface>
         <field id="config" type="assocarray" />
         <field id="assetBase" type="string" />
+        <!-- checkboxes that ride the strip (config.boxes, strip coords) and
+             the posters drawn for them, index-aligned; the interaction
+             layer hit-tests them at their CURRENT on-screen position -->
+        <field id="boxes" type="array" />
+        <field id="boxNodes" type="nodearray" />
+        <!-- true while the remote pointer is over this list: the strip
+             holds still so a box can be aimed at -->
+        <field id="paused" type="boolean" value="false" />
     </interface>
     <script type="text/brightscript" uri="pkg:/components/overlays/ScrollOverlay.brs" />
 </component>

@@ -17,10 +17,25 @@
 '   fromY, toY  strip translation at the start / end of a loop, canvas px
 '   durationMs  one loop
 '   loop        false to play once (default: repeat)
+'   boxes       [ { x, y, w, h, checked, payload, ... } ] task checkboxes
+'               inside the content, in strip coordinates; drawn as
+'               posters INSIDE the moving strip so they travel with their
+'               rows (a page-level target would sit still while the row
+'               slid away). The interaction layer reads boxes/boxNodes and
+'               this strip's live translation to aim and to tick.
+'   sprites     { empty, checked }  the checkbox art files
 
 sub init()
     m.anim = invalid
     m.top.observeField("config", "onConfig")
+    m.top.observeField("paused", "onPaused")
+end sub
+
+' the remote pointer is over this list: hold the strip so a box can be
+' aimed at; released when the pointer hides
+sub onPaused()
+    if m.anim = invalid then return
+    if m.top.paused then m.anim.control = "pause" else m.anim.control = "resume"
 end sub
 
 sub onConfig()
@@ -53,6 +68,24 @@ sub onConfig()
         y = y + seg.h
     end for
 
+    ' checkboxes ride the strip: one poster per box, at its strip position
+    boxes = []
+    nodes = []
+    if cfg.boxes <> invalid and cfg.sprites <> invalid
+        for each b in cfg.boxes
+            bp = strip.createChild("Poster")
+            bp.translation = [b.x, b.y]
+            bp.width = b.w
+            bp.height = b.h
+            art = cfg.sprites.empty
+            if b.checked = true and cfg.sprites.checked <> invalid then art = cfg.sprites.checked
+            bp.uri = m.top.assetBase + art
+            boxes.Push(b)
+            nodes.Push(bp)
+        end for
+    end if
+    m.top.boxes = boxes
+    m.top.boxNodes = nodes
     fromY = 0
     toY = -cfg.stripH
     if cfg.fromY <> invalid then fromY = cfg.fromY

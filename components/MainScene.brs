@@ -62,6 +62,11 @@ sub init()
     m.interaction.observeField("pageTurn", "onPageTurn")
     m.celebrationLayer = m.top.findNode("celebrationLayer")
     m.interaction.observeField("celebrate", "onCelebrate")
+    ' the manifest's coordinate space and how it sits on this screen
+    m.stage = m.top.findNode("stage")
+    m.canvasW = 1920
+    m.canvasH = 1080
+    m.rotation = 0
 
     m.slots.slotA.poster.observeField("loadStatus", "onPosterLoad")
     m.slots.slotB.poster.observeField("loadStatus", "onPosterLoad")
@@ -188,6 +193,7 @@ sub onVersionChange()
     man = m.versionTask.manifest
     if man = invalid or man.pages = invalid or man.pages.Count() = 0 then return
     print "[Mango] display.json: "; man.pages.Count(); " page(s)"
+    applyCanvas(man)
     applyEffects(man.effects)
     if man.gestures <> invalid
         m.interaction.gestures = man.gestures
@@ -201,6 +207,51 @@ sub onVersionChange()
     m.latestReason = ""
     if man.updateReason <> invalid then m.latestReason = man.updateReason
     maybeApplyPages()
+end sub
+
+' The manifest's coordinate space, and how it sits on this screen. The
+' render service draws a rotated display UNROTATED at a portrait canvas
+' (1080x1920) and asks for one rotation here: the stage group carries the
+' page slots, overlays, effects, pointer and celebrations, so a single
+' transform turns all of them together. rotation is degrees CLOCKWISE as
+' the viewer sees it (0, 90, 270). Roku's rotation field is positive
+' counter-clockwise, hence the sign flip. The stage is placed so the
+' canvas centre lands on the screen centre, then rotated about it.
+sub applyCanvas(man as object)
+    w = 1920
+    h = 1080
+    rot = 0
+    if man.canvas <> invalid and man.canvas.width <> invalid and man.canvas.height <> invalid
+        w = Int(man.canvas.width)
+        h = Int(man.canvas.height)
+    end if
+    if man.rotation <> invalid then rot = Int(man.rotation)
+    if w = m.canvasW and h = m.canvasH and rot = m.rotation then return
+    m.canvasW = w
+    m.canvasH = h
+    m.rotation = rot
+    print "[Mango] canvas "; w; "x"; h; " rotation "; rot
+    for each k in m.slots
+        p = m.slots[k].poster
+        p.width = w
+        p.height = h
+        p.loadWidth = w
+        p.loadHeight = h
+    end for
+    m.interaction.canvasW = w
+    m.interaction.canvasH = h
+    m.interaction.rotation = rot
+    if rot = 90 or rot = 270
+        m.stage.scaleRotateCenter = [w / 2, h / 2]
+        m.stage.translation = [(1920 - w) / 2, (1080 - h) / 2]
+        if rot = 90 then m.stage.rotation = -1.5707963 else m.stage.rotation = 1.5707963
+    else
+        m.stage.scaleRotateCenter = [0, 0]
+        m.stage.translation = [0, 0]
+        m.stage.rotation = 0.0
+    end if
+    ' effects spawn against the canvas bounds: rebuild them on the next apply
+    m.effectsKey = ""
 end sub
 
 sub maybeApplyPages()
@@ -313,7 +364,7 @@ sub resetSlotTransforms(slot as object)
     slot.scale = [1.0, 1.0]
     slot.opacity = 1.0
     slot.rotation = 0.0
-    slot.scaleRotateCenter = [960, 540]
+    slot.scaleRotateCenter = [m.canvasW / 2, m.canvasH / 2]
 end sub
 
 sub loadPage(index as integer, animated as boolean)
@@ -601,17 +652,17 @@ function buildTransition(name as string, frontSlotId as string, back as object) 
     a.duration = d
     a.easeFunction = "inOutCubic"
     if name = "slideleft"
-        back.translation = [1920, 0]
-        addVec(a, bid + ".translation", [[1920, 0], [0, 0]])
+        back.translation = [m.canvasW, 0]
+        addVec(a, bid + ".translation", [[m.canvasW, 0], [0, 0]])
     else if name = "slideright"
-        back.translation = [-1920, 0]
-        addVec(a, bid + ".translation", [[-1920, 0], [0, 0]])
+        back.translation = [-m.canvasW, 0]
+        addVec(a, bid + ".translation", [[-m.canvasW, 0], [0, 0]])
     else if name = "slideup"
-        back.translation = [0, 1080]
-        addVec(a, bid + ".translation", [[0, 1080], [0, 0]])
+        back.translation = [0, m.canvasH]
+        addVec(a, bid + ".translation", [[0, m.canvasH], [0, 0]])
     else if name = "slidedown"
-        back.translation = [0, -1080]
-        addVec(a, bid + ".translation", [[0, -1080], [0, 0]])
+        back.translation = [0, -m.canvasH]
+        addVec(a, bid + ".translation", [[0, -m.canvasH], [0, 0]])
     else if name = "pop"
         back.scale = [0.3, 0.3]
         back.opacity = 0.0
@@ -679,6 +730,9 @@ sub applyEffects(effects as object)
             node = CreateObject("roSGNode", compName)
             ' assetBase before config: generated sprites resolve against it
             if node.hasField("assetBase") then node.assetBase = m.assetBaseUrl
+            ' effects spawn and travel against the canvas, not the screen
+            e.canvasW = m.canvasW
+            e.canvasH = m.canvasH
             node.config = e
             m.effectLayer.appendChild(node)
         end if
@@ -712,6 +766,8 @@ sub applyOverlays(overlays as object, container as object, under as object)
                 key = overlayStateKey(ov)
                 if key <> "" and m.overlayState.DoesExist(key) then ov.startIndex = m.overlayState[key]
             end if
+            ov.canvasW = m.canvasW
+            ov.canvasH = m.canvasH
             node.config = ov
             target = container
             if m.underTypes.DoesExist(ov.type) and under <> invalid then target = under
@@ -766,7 +822,7 @@ sub playFinale(cx as integer, cy as integer)
     for i = 0 to 5
         side = i mod 2
         x = Rnd(0) * 380 + 190                  ' left band ~190-570
-        if side = 1 then x = 1920 - (Rnd(0) * 380 + 190)
+        if side = 1 then x = m.canvasW - (Rnd(0) * 380 + 190)
         y = Rnd(0) * 430 + 55                   ' upper half
         spawnBurst(Int(x), Int(y), 560, i * 210)
     end for

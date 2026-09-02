@@ -92,9 +92,9 @@ sub animateParticle(entry as object, progress as float)
     p.height = size * aspect
     p.scaleRotateCenter = [size / 2, (size * aspect) / 2]
 
-    startX = Rnd(0) * 1920
+    startX = Rnd(0) * cvW()
     ' travel from just off one edge to just off the other
-    travel = 1080 + p.height * 2
+    travel = cvH() + p.height * 2
     fallsDown = false
     if cfg.direction <> invalid and cfg.direction = "down" then fallsDown = true
     fullDuration = travel / speed
@@ -116,7 +116,7 @@ sub animateParticle(entry as object, progress as float)
         if fallsDown
             y = -p.height + travel * t
         else
-            y = 1080 + p.height - travel * t
+            y = cvH() + p.height - travel * t
         end if
         x = startX + amp * Sin(t * fullDuration * (6.2831853 / period) + phase)
         keys.Push(f)
@@ -182,3 +182,16 @@ sub onParticleState(ev as object)
         end if
     end for
 end sub
+
+' canvas bounds from the config (the service renders a rotated display at a
+' portrait canvas); screen size is the fallback for older manifests
+function cvW() as integer
+    c = m.top.config
+    if c <> invalid and c.canvasW <> invalid then return Int(c.canvasW)
+    return 1920
+end function
+function cvH() as integer
+    c = m.top.config
+    if c <> invalid and c.canvasH <> invalid then return Int(c.canvasH)
+    return 1080
+end function

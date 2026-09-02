@@ -83,7 +83,7 @@ sub onConfig()
     m.images = cfg.images
     ' page backgrounds have no rect - they fill the canvas
     if cfg.rect = invalid
-        cfg.rect = { x: 0, y: 0, w: 1920, h: 1080 }
+        cfg.rect = { x: 0, y: 0, w: cvW(), h: cvH() }
     end if
     m.rectW = cfg.rect.w
     m.rectH = cfg.rect.h
@@ -254,3 +254,16 @@ sub onAnimState()
     resetPoster(frontPoster())
     m.pendingSwap = false
 end sub
+
+' canvas bounds from the config (the service renders a rotated display at a
+' portrait canvas); screen size is the fallback for older manifests
+function cvW() as integer
+    c = m.top.config
+    if c <> invalid and c.canvasW <> invalid then return Int(c.canvasW)
+    return 1920
+end function
+function cvH() as integer
+    c = m.top.config
+    if c <> invalid and c.canvasH <> invalid then return Int(c.canvasH)
+    return 1080
+end function

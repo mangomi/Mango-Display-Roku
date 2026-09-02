@@ -32,6 +32,12 @@
              next page, then the pair swaps - instantly for refreshes,
              animated for page transitions. Slots re-order so the incoming
              one draws on top. -->
+        <!-- stage = everything drawn in the manifest's canvas coordinates:
+             page slots, effects, the pointer, celebrations. A rotated
+             display (display.json rotation 90/270, portrait canvas) is
+             rendered unrotated by the service and turned HERE, once, for
+             all of them - see applyCanvas() in MainScene.brs. -->
+        <Group id="stage">
         <Group id="pageHost">
             <!-- under = native layers behind the page (rotating page
                  backgrounds); the page image is a transparent PNG then -->
@@ -51,6 +57,10 @@
         <Group id="effectLayer" />
         <!-- remote pointer + natively drawn task checkboxes -->
         <InteractionLayer id="interaction" />
+        <!-- confetti bursts land on top of everything, like the portal's
+             canvas at zIndex 999 -->
+        <Group id="celebrationLayer" />
+        </Group>
         <!-- "your change is being applied" spinner: centered so it can't be
              missed, only while a user edit is rendering (transient, so no
              burn-in). Rotation is animated in code - BusySpinner does NOT
@@ -66,9 +76,6 @@
         <!-- clears a page load that never reported back, so a missed
              load event cannot stop the display updating for good -->
         <Timer id="loadWatchdog" repeat="false" duration="12" />
-        <!-- confetti bursts land on top of everything, like the portal's
-             canvas at zIndex 999 -->
-        <Group id="celebrationLayer" />
     </children>
     <script type="text/brightscript" uri="pkg:/source/env.brs" />
     <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />

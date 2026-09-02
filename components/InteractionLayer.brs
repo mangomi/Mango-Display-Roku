@@ -40,8 +40,8 @@ sub init()
     m.swipeBusy = false
     m.swipeCooldown = m.top.findNode("swipeCooldown")
     m.swipeCooldown.observeField("fire", "onSwipeCooldown")
-    m.px = 960
-    m.py = 540
+    m.px = m.top.canvasW / 2
+    m.py = m.top.canvasH / 2
     m.active = false
     m.items = []
     m.warmSent = false
@@ -140,8 +140,8 @@ sub showPointer()
     ' it has to appear somewhere predictable rather than wherever it was
     ' last left or next to whatever happens to be tappable
     if not m.active
-        m.px = 960
-        m.py = 540
+        m.px = m.top.canvasW / 2
+        m.py = m.top.canvasH / 2
         placePointer()
     end if
     m.active = true
@@ -332,6 +332,15 @@ end sub
 
 sub movePointer(key as string)
     stepPx = 10
+    ' A rotated display: the stage is turned on screen, so the viewer's
+    ' arrows must map onto canvas axes. 90 = clockwise: canvas +x runs
+    ' down the screen and canvas +y runs left; 270 the reverse.
+    r = m.top.rotation
+    if r = 90
+        if key = "up" then key = "left" else if key = "down" then key = "right" else if key = "left" then key = "down" else if key = "right" then key = "up"
+    else if r = 270
+        if key = "up" then key = "right" else if key = "down" then key = "left" else if key = "left" then key = "up" else if key = "right" then key = "down"
+    end if
     if key = "up"
         m.py = m.py - stepPx
     else if key = "down"
@@ -342,9 +351,9 @@ sub movePointer(key as string)
         m.px = m.px + stepPx
     end if
     if m.px < 12 then m.px = 12
-    if m.px > 1908 then m.px = 1908
+    if m.px > m.top.canvasW - 12 then m.px = m.top.canvasW - 12
     if m.py < 12 then m.py = 12
-    if m.py > 1068 then m.py = 1068
+    if m.py > m.top.canvasH - 12 then m.py = m.top.canvasH - 12
     placePointer()
     updateHighlight()
 end sub

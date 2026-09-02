@@ -6,6 +6,11 @@
         <!-- areas where a pointer gesture is live (calendar swipe surfaces) -->
         <field id="regions" type="array" />
         <field id="pageIndex" type="integer" value="0" />
+        <!-- the manifest's canvas and how it is turned on screen (see
+             MainScene applyCanvas): pointer bounds and arrow directions -->
+        <field id="canvasW" type="integer" value="1920" />
+        <field id="canvasH" type="integer" value="1080" />
+        <field id="rotation" type="integer" value="0" />
         <field id="assetBase" type="string" />
         <field id="serviceBase" type="string" />
         <field id="identity" type="string" value="" />

@@ -93,8 +93,8 @@ sub onConfig()
     if cfg.speedY <> invalid then m.speedY = cfg.speedY
     if cfg.startDirX <> invalid then m.dirX = Int(cfg.startDirX)
     if cfg.startDirY <> invalid then m.dirY = Int(cfg.startDirY)
-    m.maxX = 1920 - m.frameW
-    m.maxY = 1080 - m.frameH
+    m.maxX = cvW() - m.frameW
+    m.maxY = cvH() - m.frameH
     m.mover.translation = [m.x, m.y]
     applyFacing()
     nextLeg()
@@ -227,3 +227,16 @@ end sub
 sub onSheetLoad()
     if m.sheet.loadStatus = "failed" then print "[Mango] spritemover sheet failed: "; m.sheet.uri
 end sub
+
+' canvas bounds from the config (the service renders a rotated display at a
+' portrait canvas); screen size is the fallback for older manifests
+function cvW() as integer
+    c = m.top.config
+    if c <> invalid and c.canvasW <> invalid then return Int(c.canvasW)
+    return 1920
+end function
+function cvH() as integer
+    c = m.top.config
+    if c <> invalid and c.canvasH <> invalid then return Int(c.canvasH)
+    return 1080
+end function

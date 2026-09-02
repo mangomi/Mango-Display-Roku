@@ -40,7 +40,7 @@ sub onConfig()
     threadColor = "0xC8C8C8CC"
     if cfg.threadColor <> invalid then threadColor = cfg.threadColor
 
-    spacing = 1920 / count
+    spacing = cvW() / count
     for i = 0 to count - 1
         baseX = spacing * i + spacing / 2 + (Rnd(0) - 0.5) * spacing * 0.4
         if baseX < 60 then baseX = 60
@@ -157,3 +157,16 @@ sub onFrame()
         entry.sheet.translation = [-col * m.frameW, -row * m.frameH]
     end for
 end sub
+
+' canvas bounds from the config (the service renders a rotated display at a
+' portrait canvas); screen size is the fallback for older manifests
+function cvW() as integer
+    c = m.top.config
+    if c <> invalid and c.canvasW <> invalid then return Int(c.canvasW)
+    return 1920
+end function
+function cvH() as integer
+    c = m.top.config
+    if c <> invalid and c.canvasH <> invalid then return Int(c.canvasH)
+    return 1080
+end function

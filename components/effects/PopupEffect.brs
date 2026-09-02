@@ -74,8 +74,8 @@ sub showNext()
     m.tick.control = "start"
 
     ' random position, kept fully on screen
-    maxX = 1920 - m.frameW
-    maxY = 1080 - m.frameH
+    maxX = cvW() - m.frameW
+    maxY = cvH() - m.frameH
     if maxX < 0 then maxX = 0
     if maxY < 0 then maxY = 0
     m.host.translation = [Rnd(0) * maxX, Rnd(0) * maxY]
@@ -162,3 +162,16 @@ end sub
 sub onSheetLoad()
     if m.sheet.loadStatus = "failed" then print "[Mango] popup sheet failed: "; m.sheet.uri
 end sub
+
+' canvas bounds from the config (the service renders a rotated display at a
+' portrait canvas); screen size is the fallback for older manifests
+function cvW() as integer
+    c = m.top.config
+    if c <> invalid and c.canvasW <> invalid then return Int(c.canvasW)
+    return 1920
+end function
+function cvH() as integer
+    c = m.top.config
+    if c <> invalid and c.canvasH <> invalid then return Int(c.canvasH)
+    return 1080
+end function

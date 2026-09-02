@@ -217,6 +217,14 @@ end sub
 ' the viewer sees it (0, 90, 270). Roku's rotation field is positive
 ' counter-clockwise, hence the sign flip. The stage is placed so the
 ' canvas centre lands on the screen centre, then rotated about it.
+'
+' The canvas is the display's OWN resolution (2026-09-02): 1280x720 on an
+' HD device, 1920x1080 on FHD. This scene is always FHD (manifest
+' ui_resolutions=fhd), so one uniform scale maps canvas px to scene px;
+' the firmware then maps the scene to the panel, and a 1280x720 page
+' image lands 1:1 on a 720p plane. Everything in the stage - slots,
+' overlays, effects, pointer - shares the scale, so no element needs to
+' know. A 1920x1080 canvas scales by 1, as before.
 sub applyCanvas(man as object)
     w = 1920
     h = 1080
@@ -241,13 +249,20 @@ sub applyCanvas(man as object)
     m.interaction.canvasW = w
     m.interaction.canvasH = h
     m.interaction.rotation = rot
+    ' canvas px -> scene px, by the long side (a portrait canvas is the
+    ' landscape one turned, so its long side is still the screen's width)
+    if w > h then s = 1920 / w else s = 1920 / h
+    print "[Mango] stage scale "; s
     if rot = 90 or rot = 270
+        ' scale and rotation share the centre, which sits on the screen centre
         m.stage.scaleRotateCenter = [w / 2, h / 2]
         m.stage.translation = [(1920 - w) / 2, (1080 - h) / 2]
+        m.stage.scale = [s, s]
         if rot = 90 then m.stage.rotation = -1.5707963 else m.stage.rotation = 1.5707963
     else
         m.stage.scaleRotateCenter = [0, 0]
         m.stage.translation = [0, 0]
+        m.stage.scale = [s, s]
         m.stage.rotation = 0.0
     end if
     ' effects spawn against the canvas bounds: rebuild them on the next apply

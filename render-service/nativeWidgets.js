@@ -623,16 +623,21 @@ function wxMotionFeasible(svgText) {
   return true;
 }
 
-function wxMotionKey(o, outScale) {
+/* noFrames: the calendar strips keep rotation native (their icon floats
+ * on a chain a frame sheet cannot carry), so the same icon at the same
+ * size has two decompositions - two keys */
+function wxMotionKey(o, outScale, noFrames) {
   return crypto
     .createHash("md5")
-    .update([WXM_VERSION, o.src, Math.round(o.rect.w * outScale), Math.round(o.rect.h * outScale), layoutTag(outScale)].join("|"))
+    .update(
+      [WXM_VERSION, o.src, Math.round(o.rect.w * outScale), Math.round(o.rect.h * outScale), layoutTag(outScale), noFrames ? "NF" : ""].join("|"),
+    )
     .digest("hex")
     .slice(0, 16);
 }
 
-function wxMotionCached(o, outDir, outScale) {
-  const metaFile = pathHandlers.join(outDir, "overlay_wxm_" + wxMotionKey(o, outScale) + ".json");
+function wxMotionCached(o, outDir, outScale, noFrames) {
+  const metaFile = pathHandlers.join(outDir, "overlay_wxm_" + wxMotionKey(o, outScale, noFrames) + ".json");
   try {
     const meta = JSON.parse(fsHandlers.readFileSync(metaFile, "utf8"));
     if (!meta || !Array.isArray(meta.layers) || !meta.layers.length) return null;
@@ -804,7 +809,7 @@ async function wxDecompose(page, o, ctx) {
     if (!plan.layers.length) throw new Error("decompose: nothing animates");
 
     const toIcon = o.rect.w / W; /* scratch px -> canvas px */
-    const key = wxMotionKey(o, ctx.outScale);
+    const key = wxMotionKey(o, ctx.outScale, !!ctx.wxNoFrames);
     const files = [];
     const shoot = async (css) => {
       await scratch.evaluate((css) => {
@@ -974,7 +979,7 @@ async function wxDecompose(page, o, ctx) {
       await pushStatic(i);
       const L = plan.layers[i];
       const tracks = convert(L.tracks, L.ctm);
-      const rotates = L.tracks.some((t) => t.prop === "rotate") && !(L.chain && L.chain.length);
+      const rotates = L.tracks.some((t) => t.prop === "rotate") && !(L.chain && L.chain.length) && !ctx.wxNoFrames;
       if (rotates) {
         const frames = await framesFor(i, L, tracks);
         if (frames) {
@@ -2716,7 +2721,11 @@ function cwmCached(key, outDir) {
     const meta = JSON.parse(fsHandlers.readFileSync(pathHandlers.join(outDir, "overlay_cwm_" + key + ".json"), "utf8"));
     if (!meta || !Array.isArray(meta.layers)) return null;
     for (const L of meta.layers) if (!fsHandlers.existsSync(pathHandlers.join(outDir, L.file))) return null;
-    if (meta.icon) for (const L of meta.icon.layers) if (!fsHandlers.existsSync(pathHandlers.join(outDir, L.file))) return null;
+    if (meta.icon)
+      for (const L of meta.icon.layers) {
+        const f = L.file || (L.frames && L.frames.file);
+        if (!f || !fsHandlers.existsSync(pathHandlers.join(outDir, f))) return null;
+      }
     return meta;
   } catch (e) {
     return null;
@@ -2884,8 +2893,10 @@ async function cwmBuild(page, frame, o, key, ctx) {
       const svgText = await (await fetch(plan.icon.src)).text();
       if (wxMotionFeasible(svgText)) {
         const io = { src: plan.icon.src, rect: plan.icon.rect, svgText };
-        let meta = wxMotionCached(io, ctx.outDir, ctx.outScale);
-        if (!meta) meta = await wxDecompose(page, io, ctx);
+        /* native rotation here: the strip's float rides every layer as a
+         * chain, which a frame sheet cannot carry */
+        let meta = wxMotionCached(io, ctx.outDir, ctx.outScale, true);
+        if (!meta) meta = await wxDecompose(page, io, { ...ctx, wxNoFrames: true });
         let chain = null;
         if (plan.icon.float !== null) {
           const fp = plan.parts.find((p) => p.idx === plan.icon.float);
@@ -3087,7 +3098,10 @@ const cellWeatherHandler = {
      * (condition, size) sharing as the sheets, but the exemplar is a set
      * of layers with sampled tracks, built once, never filmed. ---- */
     if (ctx.nativeWeather) {
-      const mkey = (o) => crypto.createHash("md5").update(CWM_VERSION + "|" + sizeKey(o)).digest("hex").slice(0, 16);
+      /* WXM_VERSION too: the strip meta embeds its icon's decomposition,
+       * so an icon-renderer change must rebuild the strips (the cloudy
+       * badge stayed cropped from cache after the aspect fix, 2026-09-02) */
+      const mkey = (o) => crypto.createHash("md5").update(CWM_VERSION + "|" + WXM_VERSION + "|" + sizeKey(o)).digest("hex").slice(0, 16);
       const mhits = live.map((o) => cwmCached(mkey(o), ctx.outDir));
       const extras = [];
       if (mhits.every(Boolean)) {

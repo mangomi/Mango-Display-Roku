@@ -58,7 +58,9 @@ function offsets() {
     return s / 0x7fffffff;
   };
   const out = [[0, 0]];
-  for (let i = 1; i < SLOTS; i++) out.push([Math.round((rnd() * 20 - 5) * 10) / 10, Math.round((rnd() * 12 - 3) * 10) / 10]);
+  /* whole pixels: a layer drawn at a half-pixel is blended across two
+   * and 14px text turns to mush (Dave, 2026-09-03) */
+  for (let i = 1; i < SLOTS; i++) out.push([Math.round(rnd() * 20 - 5), Math.round(rnd() * 12 - 3)]);
   return out;
 }
 
@@ -90,13 +92,23 @@ function tracks() {
 async function badgeOverlay(page, frame, opts) {
   const sharp = require("sharp");
   const { outDir, outScale } = opts;
-  const rect = await frame.evaluate(() => {
+  const raw = await frame.evaluate(() => {
     const el = document.querySelector(".night-indicator");
     if (!el) return null;
     const r = el.getBoundingClientRect();
     return { x: r.x, y: r.y, w: r.width, h: r.height };
   });
-  if (!rect || rect.w < 4 || rect.h < 4) return null;
+  if (!raw || raw.w < 4 || raw.h < 4) return null;
+  /* snapped to the output pixel grid, like every other overlay: the
+   * photograph and the box share whole pixels, so the text lands on
+   * its own pixels instead of being blended across two */
+  const s = outScale || 1;
+  const rect = {
+    x: Math.round(raw.x * s) / s,
+    y: Math.round(raw.y * s) / s,
+    w: Math.max(1, Math.round(raw.w * s)) / s,
+    h: Math.max(1, Math.round(raw.h * s)) / s,
+  };
   const outW = Math.max(1, Math.round((rect.w + PAD.left + PAD.right) * outScale));
   const outH = Math.max(1, Math.round((rect.h + PAD.top + PAD.bottom) * outScale));
   const metaFile = path.join(outDir, "overlay_night_" + outW + "x" + outH + ".json");

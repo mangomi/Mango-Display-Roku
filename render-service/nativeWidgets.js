@@ -1875,8 +1875,19 @@ async function csCaptureStrips(page, frame, items, ctx) {
       const c = list[i];
       if (!c || !c.content) return;
       for (let n = c.content.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+        /* #main carries the page colour as a `background-color` LONGHAND
+         * (portal loadMirrorPageThemeCss). Blanking the SHORTHAND here and
+         * restoring the shorthand's (empty) old value wiped that longhand,
+         * and every later still showed the body's default dark instead of
+         * the display's colour (the tester's pink, 2026-09-03). The film
+         * stylesheet already makes #main transparent, so skip it; for the
+         * rest save and restore the longhands as well as the shorthand. */
+        if (n.id === "main") continue;
         if (window.__mmCsBg.some((e) => e.el === n)) continue;
-        window.__mmCsBg.push({ el: n, bg: n.style.getPropertyValue("background"), pri: n.style.getPropertyPriority("background") });
+        window.__mmCsBg.push({
+          el: n,
+          props: ["background", "background-color", "background-image"].map((p) => [p, n.style.getPropertyValue(p), n.style.getPropertyPriority(p)]),
+        });
         n.style.setProperty("background", "transparent", "important");
       }
     });
@@ -2142,8 +2153,10 @@ async function csCaptureStrips(page, frame, items, ctx) {
       const park = document.getElementById("mm-scroll-park");
       if (park) park.disabled = false;
       (window.__mmCsBg || []).forEach((e) => {
-        if (e.bg) e.el.style.setProperty("background", e.bg, e.pri || "");
-        else e.el.style.removeProperty("background");
+        e.el.style.removeProperty("background");
+        (e.props || []).forEach(([p, v, pri]) => {
+          if (v) e.el.style.setProperty(p, v, pri || "");
+        });
       });
       window.__mmCsBg = [];
       document.querySelectorAll("style").forEach((n) => {
@@ -2472,8 +2485,19 @@ const cellScrollHandler = {
         const c = list[i];
         if (!c || !c.content) return;
         for (let n = c.content.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+          /* #main carries the page colour as a `background-color` LONGHAND
+           * (portal loadMirrorPageThemeCss). Blanking the SHORTHAND here and
+           * restoring the shorthand's (empty) old value wiped that longhand,
+           * and every later still showed the body's default dark instead of
+           * the display's colour (the tester's pink, 2026-09-03). The film
+           * stylesheet already makes #main transparent, so skip it; for the
+           * rest save and restore the longhands as well as the shorthand. */
+          if (n.id === "main") continue;
           if (window.__mmCsBg.some((e) => e.el === n)) continue;
-          window.__mmCsBg.push({ el: n, bg: n.style.getPropertyValue("background"), pri: n.style.getPropertyPriority("background") });
+          window.__mmCsBg.push({
+            el: n,
+            props: ["background", "background-color", "background-image"].map((p) => [p, n.style.getPropertyValue(p), n.style.getPropertyPriority(p)]),
+          });
           n.style.setProperty("background", "transparent", "important");
         }
       });
@@ -2606,8 +2630,10 @@ const cellScrollHandler = {
         const park = document.getElementById("mm-scroll-park");
         if (park) park.disabled = false;
         (window.__mmCsBg || []).forEach((e) => {
-          if (e.bg) e.el.style.setProperty("background", e.bg, e.pri || "");
-          else e.el.style.removeProperty("background");
+          e.el.style.removeProperty("background");
+          (e.props || []).forEach(([p, v, pri]) => {
+            if (v) e.el.style.setProperty(p, v, pri || "");
+          });
         });
         window.__mmCsBg = [];
         document.querySelectorAll("style").forEach((n) => {

@@ -588,8 +588,9 @@ end sub
 ' swipe only alters that widget, so a spinner in the middle of the screen
 ' points at nothing - the portal shows it on the widget too.
 sub placeSpinner()
-    cx = 960
-    cy = 540
+    ' the scene is the device's own resolution (1280x720 on an HD box)
+    cx = m.sceneW / 2
+    cy = m.sceneH / 2
     at = m.interaction.busyAt
     if at <> invalid and at.Count() = 2
         cx = at[0]

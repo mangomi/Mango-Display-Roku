@@ -51,6 +51,58 @@ const ROOT = (process.env.ASSET_ROOT || "").replace(/^\/+|\/+$/g, "");
 // to render this cycle is still on a device's screen).
 const REAPABLE = /^(overlay_wxc_[0-9a-f]+_[0-9a-f]+|overlay_gif_[0-9a-f]+)\.(png|json)$/;
 const rootedKey = (rest) => (ROOT ? ROOT + "/" : "") + rest;
+/* the environment's public root (the per-display prefix hangs under it) */
+const publicRoot = () => (PUBLIC_BASE ? PUBLIC_BASE + "/" + rootedKey("") : "");
+
+/* The channel bundles only Source Sans Pro - 8.5MB of Google Fonts blew
+ * Roku's 4MB package limit (2026-09-03). The image carries the same
+ * fonts for Chromium; publish them once per process under <root>/fonts/
+ * (immutable, content-named by file) and hand devices the base in
+ * display.json so FontTask can fetch the few a manifest names. */
+let fontsPublished = null;
+function publishFonts(dir) {
+  if (!enabled()) return Promise.resolve(0);
+  if (fontsPublished) return fontsPublished;
+  fontsPublished = (async () => {
+    const want = [];
+    const walk = (d, rel) => {
+      for (const name of fs.readdirSync(d)) {
+        const p = path.join(d, name);
+        if (fs.statSync(p).isDirectory()) walk(p, rel + name + "/");
+        else if (/\.(ttf|otf)$/i.test(name)) want.push({ path: p, key: rootedKey("fonts/" + rel + name) });
+      }
+    };
+    walk(dir, "");
+    const have = new Set();
+    let token;
+    do {
+      const page = await s3().send(new ListObjectsV2Command({ Bucket: BUCKET, Prefix: rootedKey("fonts/"), ContinuationToken: token }));
+      for (const o of page.Contents || []) have.add(o.Key);
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    let n = 0;
+    for (const f of want) {
+      if (have.has(f.key)) continue;
+      await s3().send(
+        new PutObjectCommand({
+          Bucket: BUCKET,
+          Key: f.key,
+          Body: fs.readFileSync(f.path),
+          ContentType: /\.otf$/i.test(f.path) ? "font/otf" : "font/ttf",
+          CacheControl: "public, max-age=31536000, immutable",
+        }),
+      );
+      n++;
+    }
+    console.log("fonts: " + want.length + " on the CDN (" + n + " uploaded now)");
+    return n;
+  })().catch((e) => {
+    fontsPublished = null;
+    console.error("fonts: publish failed:", e.message);
+    return 0;
+  });
+  return fontsPublished;
+}
 
 const TYPES = {
   ".json": "application/json",
@@ -327,4 +379,4 @@ class AssetPublisher {
   }
 }
 
-module.exports = { AssetPublisher, derivePrefix, enabled, BUCKET };
+module.exports = { publicRoot, publishFonts, AssetPublisher, derivePrefix, enabled, BUCKET };

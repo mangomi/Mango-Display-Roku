@@ -42,7 +42,7 @@ while IFS= read -r fam; do
     if curl -s --max-time 30 -o "$OUT/$safe.ttf" "$url" && [ -s "$OUT/$safe.ttf" ]; then
         echo "ok    $fam -> fonts/gf/$safe.ttf ($(du -k "$OUT/$safe.ttf" | cut -f1)KB)"
         ok=$((ok+1))
-        entries="$entries        \"$fam\": \"pkg:/fonts/gf/$safe.ttf\"
+        entries="$entries        \"$fam\": \"gf/$safe.ttf\"
 "
         json_entries="$json_entries  \"$fam\": \"gf/$safe.ttf\",
 "

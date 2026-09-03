@@ -1,7 +1,7 @@
 title=Mango Display
 major_version=1
 minor_version=0
-build_version=00001
+build_version=00002
 mm_icon_focus_fhd=pkg:/images/icon_fhd.png
 mm_icon_focus_hd=pkg:/images/icon_hd.png
 mm_icon_focus_sd=pkg:/images/icon_sd.png
@@ -10,3 +10,4 @@ splash_screen_hd=pkg:/images/splash_hd.png
 splash_screen_fhd=pkg:/images/splash_fhd.png
 splash_color=#0b0e14
 ui_resolutions=fhd,hd
+rsg_version=1.3

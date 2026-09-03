@@ -79,4 +79,5 @@
     </children>
     <script type="text/brightscript" uri="pkg:/source/env.brs" />
     <script type="text/brightscript" uri="pkg:/components/MainScene.brs" />
+    <script type="text/brightscript" uri="pkg:/source/fontMap.brs" />
 </component>

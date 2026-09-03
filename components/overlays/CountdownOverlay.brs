@@ -40,7 +40,7 @@ function makeLabel(el as object) as object
     ' the user's chosen family from the bundled catalog; unknown or
     ' absent -> Source Sans Pro, matching the old behavior
     uri = ""
-    if el.fontFamily <> invalid then uri = rokuFontFile(el.fontFamily)
+    if el.fontFamily <> invalid then uri = rokuFontPath(el.fontFamily)
     if uri <> ""
         fnt.uri = uri
     else if el.bold = true

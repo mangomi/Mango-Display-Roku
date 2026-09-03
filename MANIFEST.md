@@ -44,6 +44,12 @@ canvas        { width, height } - the coordinate space above: the
               display's own resolution (e.g. 1280x720, 1920x1080). A
               ROTATED display has the two swapped (e.g. 720x1280): the
               page was rendered unrotated at that size (see rotation).
+fontBase      URL prefix under which the Google Fonts the overlays name
+              (any `fontFamily`) are served: `<fontBase>gf/<File>.ttf`,
+              per source/fontMap.brs. The channel bundles only Source
+              Sans Pro and fetches the rest into its cache before
+              applying a manifest (FontTask). Empty when assets are
+              served locally.
 night         true while the display is in night mode: every page image
               is fully transparent and carries no widgets or effects,
               only one `motion` overlay (the portal's "Night mode"

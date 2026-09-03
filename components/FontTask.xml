@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- Fetches the Google Fonts a manifest names into cachefs (see
+     source/fontMap.brs). The channel bundles only Source Sans Pro; the
+     rest live next to the display assets on the CDN (display.json
+     fontBase) so the package stays under Roku's 4MB limit. -->
+<component name="FontTask" extends="Task">
+    <interface>
+        <field id="base" type="string" />
+        <field id="files" type="array" />
+        <field id="done" type="boolean" value="false" />
+    </interface>
+    <script type="text/brightscript" uri="pkg:/components/FontTask.brs" />
+    <script type="text/brightscript" uri="pkg:/source/fontMap.brs" />
+</component>

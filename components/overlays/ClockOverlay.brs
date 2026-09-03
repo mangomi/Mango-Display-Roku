@@ -41,7 +41,7 @@ function makeLabel(el as object) as object
     ' its bold there is browser-synthesized, which Roku cannot do).
     ' Unknown family -> Source Sans Pro, matching the old behavior.
     uri = ""
-    if el.fontFamily <> invalid then uri = rokuFontFile(el.fontFamily)
+    if el.fontFamily <> invalid then uri = rokuFontPath(el.fontFamily)
     if uri <> ""
         fnt.uri = uri
     else if el.bold = true

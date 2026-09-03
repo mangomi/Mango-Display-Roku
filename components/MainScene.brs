@@ -101,6 +101,9 @@ sub init()
 
     m.frontKey = ""
     m.night = false
+    m.fontBase = ""
+    m.fontsReady = true
+    m.fontTask = invalid
     m.pages = invalid
     m.latestPages = invalid
     m.pageIndex = 0
@@ -222,6 +225,8 @@ sub onVersionChange()
     print "[Mango] display.json: "; man.pages.Count(); " page(s)"
     applyCanvas(man)
     applyNight(man.night = true)
+    if man.fontBase <> invalid then m.fontBase = man.fontBase
+    ensureFonts(man.pages)
     applyEffects(man.effects)
     if man.gestures <> invalid
         m.interaction.gestures = man.gestures
@@ -325,8 +330,68 @@ sub applyNight(on as boolean)
     end if
 end sub
 
+' The fonts a manifest's native text needs (any fontFamily in any overlay)
+' are fetched into cachefs BEFORE the pages are applied, so labels are
+' built with the right face instead of the fallback. Nothing to fetch, or
+' no fontBase yet: pages apply at once. FontTask reports done whether or
+' not every fetch succeeded, so a bad network can only cost the fallback
+' face, never the page.
+sub ensureFonts(pages as object)
+    files = {}
+    if pages <> invalid
+        for each pg in pages
+            if pg.overlays <> invalid then collectFonts(pg.overlays, files, 0)
+        end for
+    end if
+    missing = []
+    fs = CreateObject("roFileSystem")
+    for each f in files
+        if not fs.Exists(rokuFontCachePath(f)) then missing.push(f)
+    end for
+    if missing.Count() = 0 or m.fontBase = ""
+        m.fontsReady = true
+        return
+    end if
+    if m.fontTask <> invalid then m.fontTask.control = "stop"
+    m.fontsReady = false
+    print "[Mango] fonts to fetch: "; missing.Count()
+    t = CreateObject("roSGNode", "FontTask")
+    t.base = m.fontBase
+    t.files = missing
+    t.observeField("done", "onFontsDone")
+    m.fontTask = t
+    t.control = "RUN"
+end sub
+
+sub collectFonts(node as dynamic, files as object, depth as integer)
+    if depth > 6 or node = invalid then return
+    if type(node) = "roArray" or type(node) = "roAssociativeArray"
+        if type(node) = "roAssociativeArray"
+            fam = node.fontFamily
+            if fam <> invalid and (type(fam) = "roString" or type(fam) = "String")
+                f = rokuFontFile(fam)
+                if f <> "" then files[f] = true
+            end if
+            for each k in node
+                collectFonts(node[k], files, depth + 1)
+            end for
+        else
+            for each item in node
+                collectFonts(item, files, depth + 1)
+            end for
+        end if
+    end if
+end sub
+
+sub onFontsDone()
+    m.fontsReady = true
+    m.fontTask = invalid
+    maybeApplyPages()
+end sub
+
 sub maybeApplyPages()
     if m.latestPages = invalid then return
+    if not m.fontsReady then return
     if m.activeAnim <> invalid or m.pendingLoad <> invalid then return
     m.pages = m.latestPages
     m.latestPages = invalid

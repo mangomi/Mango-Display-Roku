@@ -18,7 +18,8 @@ const path = require("path");
 const WebSocket = require("ws");
 const { InteractionSession } = require("./session");
 const { RenderPool } = require("./renderPool");
-const { AssetPublisher, derivePrefix, enabled: r2Enabled } = require("./assets");
+const { AssetPublisher, derivePrefix, enabled: r2Enabled, publicRoot, publishFonts } = require("./assets");
+const FONT_DIR = process.env.MANGO_FONT_DIR || "/usr/local/share/fonts/mangodisplay";
 
 /* The layout space is the device's own resolution (Dave, 2026-09-02): the
  * portal is opened at exactly the pixels the TV shows, so text is
@@ -159,6 +160,9 @@ class DisplayWorker {
   async start() {
     fs.mkdirSync(this.dir, { recursive: true });
     this.publisher = new AssetPublisher(await derivePrefix(this.deviceId));
+    /* once per process; a display's first publish waits for it so its
+     * manifest never names a fontBase with nothing behind it */
+    if (r2Enabled() && fs.existsSync(FONT_DIR)) await publishFonts(FONT_DIR);
     /* what the bucket already holds for this display, so the reaper can
      * prune art left behind by earlier processes (best effort) */
     const seeded = await this.publisher.seedFromRemote().catch(() => 0);
@@ -815,6 +819,8 @@ class DisplayWorker {
           /* the display is dark: the device plays its black clip full
            * screen under transparent pages (night.js, MainScene applyNight) */
           night: man0.night === true,
+          /* where FontTask fetches the Google Fonts the overlays name */
+          fontBase: r2Enabled() ? publicRoot() + "fonts/" : "",
           /* the version this manifest is announced as (announce() bumps
            * after the upload lands); a restarting task continues from it */
           version: this.version + 1,

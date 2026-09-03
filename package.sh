@@ -65,7 +65,11 @@ EOF
 esac
 
 rm -f MangoDisplayRoku.zip
-zip -r MangoDisplayRoku.zip manifest source components images fonts media -x '*.DS_Store'
+# fonts/gf is NOT packaged: 8.5MB of Google Fonts blew Roku's 4MB package
+# limit (2026-09-03). The service publishes them to the CDN and the
+# channel fetches the ones a display uses (FontTask). Source Sans Pro
+# stays bundled as the fallback face.
+zip -r MangoDisplayRoku.zip manifest source components images fonts media -x '*.DS_Store' 'fonts/gf/*'
 echo ""
 echo "Created MangoDisplayRoku.zip  (environment: $ENV)"
 echo "Install via browser at http://ROKU_TV_IP (Application Installer), or:"

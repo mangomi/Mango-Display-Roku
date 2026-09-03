@@ -11,6 +11,12 @@ off there, not deleted here.
 
 ## REQUIRED — new client behavior
 
+- [ ] **Fonts come from the CDN** (`fontBase` in display.json,
+  2026-09-03): the Roku no longer bundles the Google Fonts (4MB package
+  limit). Fetch `<fontBase>gf/<File>.ttf` for every `fontFamily` a
+  manifest names (fontMap.json has the family -> file map) into a local
+  cache before building labels; fall back to the bundled Source Sans Pro.
+
 - [ ] **Night mode** (`night: true` in display.json, 2026-09-03): pages
   arrive as fully transparent PNGs with a single `motion` overlay (the
   badge). Play a black looping video FULL SCREEN beneath the page layer

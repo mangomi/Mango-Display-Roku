@@ -29,7 +29,9 @@ const crypto = require("crypto");
 const SLOT_MS = 35000; /* portal: $interval(cycle, 35000) */
 const FADE_MS = 4000; /* portal: transition: opacity 4s */
 const SLOTS = 8; /* offsets before the loop repeats: 280s */
-const BADGE_OPACITY = 0.42; /* portal: .night-indicator.visible */
+/* the portal shows the badge at 0.42, but over the Roku's video plane
+ * that read as barely there on Dave's TV (2026-09-03): brighter here */
+const BADGE_OPACITY = 0.85;
 /* portal randomOffset(): x in [-5, 15), y in [-3, 9) */
 const PAD = { left: 5, top: 3, right: 15, bottom: 9 };
 

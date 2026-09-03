@@ -30,9 +30,8 @@
  *    with what the TV shows, text is rasterised on whole pixels, and the
  *    backend (which the portal tells its window size) scales the layout
  *    to it like it does for any browser display. The device scale factor
- *    outW/canvasW is 1 then; it only differs for a display kept on the
- *    legacy 1920x1080 layout (displayWorker.js LEGACY_CANVAS_IDS), whose
- *    screenshot is scaled to the TV.
+ *    outW/canvasW is therefore 1; the expression stays only so a canvas
+ *    that ever differs from the output still comes out at the TV's size.
  */
 const { chromium } = require("playwright");
 const fs = require("fs");

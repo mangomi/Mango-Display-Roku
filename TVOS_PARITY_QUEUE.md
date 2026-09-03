@@ -166,9 +166,8 @@ pixels - the uneven letter spacing of a 1920 layout drawn at 2/3 is
 gone - and the display's backend record becomes that size, so the
 webapp designer and the layout geometry follow it like any browser
 display. Native-scroll pace and effect spawn bounds follow the canvas
-(`csPaceScale`, `extractEffects` canvasW/H). A display listed in
-`LEGACY_CANVAS_IDS` (displayWorker.js) keeps the old 1920x1080 canvas
-with a scaled image while its channel predates the client change.
+(`csPaceScale`, `extractEffects` canvasW/H). There is no other
+layout.
 
 **What the client must do (Roku reference: MainScene `init` + `applyCanvas`):**
 - Read `canvas` from display.json; never assume 1920x1080.

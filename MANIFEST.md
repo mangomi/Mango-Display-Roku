@@ -34,10 +34,7 @@ letter (2026-09-02). The geometry stays in canvas units so a client can
 still scale it - `applyCanvas` (MainScene.brs) keeps a uniform stage
 scale as a safety net for a canvas that does not match its scene.
 
-A display may still be served the legacy 1920×1080 canvas with a scaled
-image (`LEGACY_CANVAS_IDS` in displayWorker.js) while its channel
-predates the stage scaling. Clients must read `canvas` and never assume
-1920×1080.
+Clients must read `canvas` and never assume 1920×1080.
 
 ## display.json
 

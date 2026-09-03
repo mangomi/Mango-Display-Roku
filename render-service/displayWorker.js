@@ -24,12 +24,9 @@ const { AssetPublisher, derivePrefix, enabled: r2Enabled } = require("./assets")
  * portal is opened at exactly the pixels the TV shows, so text is
  * rasterised on whole pixels and the display's record carries that size -
  * a 720p Roku is a 1280x720 display, like any 720p browser. The channel
- * scales its stage from the canvas to its FHD scene (MainScene.brs
- * applyCanvas). A device still on a channel WITHOUT that scaling would
- * draw a small canvas at 2/3 size in a corner, so it keeps the old
- * 1920x1080 layout (screenshot scaled to the TV) until its channel is
- * updated. Remove an id here the day its new zip goes on. */
-const LEGACY_CANVAS_IDS = []; /* 2026-09-03: the tester's Roku moves to the new channel; nobody left on the old layout */
+ * runs its scene at that same resolution (MainScene.brs). There is no
+ * other layout: a device that cannot show its own resolution does not
+ * exist (Dave, 2026-09-03: "no such thing as legacy anymore"). */
 
 const DEBOUNCE_MS = 2500;
 const KEEPALIVE_MS = 60000;
@@ -79,9 +76,9 @@ class DisplayWorker {
     const short = Math.min(dev.w, dev.h);
     const next = {
       rotation,
-      /* the layout space: the device's own pixels, or the legacy 1920x1080 */
-      canvasW: this.nativeCanvas ? (portrait ? short : long) : portrait ? 1080 : 1920,
-      canvasH: this.nativeCanvas ? (portrait ? long : short) : portrait ? 1920 : 1080,
+      /* the layout space: the device's own pixels */
+      canvasW: portrait ? short : long,
+      canvasH: portrait ? long : short,
       outW: portrait ? short : long,
       outH: portrait ? long : short,
     };
@@ -105,7 +102,6 @@ class DisplayWorker {
      * the working geometry but this stays as reported */
     this.deviceOut = { w: this.display.outW, h: this.display.outH };
     /* canvasW/H (the layout space) are set by applyOrientation */
-    this.nativeCanvas = !LEGACY_CANVAS_IDS.includes(String(opts.deviceId));
     this.applyOrientation(opts.orientation || 0);
     this.dir = opts.dir;
     this.env = opts.env;
@@ -195,7 +191,7 @@ class DisplayWorker {
 
     this.log(
       "worker start (major " + this.display.major + " minor " + this.display.minor + ")",
-      this.display.outW + "x" + this.display.outH + (this.nativeCanvas ? "" : " (legacy 1920x1080 layout)"),
+      this.display.outW + "x" + this.display.outH,
       this.legacy ? "legacy-env" : "on-demand",
     );
     this.log("assets", this.publisher.publicBase() || "(served locally)");

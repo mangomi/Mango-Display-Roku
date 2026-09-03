@@ -11,6 +11,14 @@ off there, not deleted here.
 
 ## REQUIRED — new client behavior
 
+- [ ] **Night mode** (`night: true` in display.json, 2026-09-03): pages
+  arrive as fully transparent PNGs with a single `motion` overlay (the
+  badge). Play a black looping video FULL SCREEN beneath the page layer
+  (Roku reuses its keep-alive clip: MainScene `applyNight`), hide any
+  opaque backdrop, draw the badge overlay normally. On `night` false or
+  absent, restore the backdrop and the hidden keep-alive player. A black
+  image is NOT equivalent: TVs only dim their backlight for video.
+
 - [ ] **`scroll` overlay type — natively scrolled calendar cells / lists**
   (Roku `ScrollOverlay`, commit `37f3826`). For Roku the server no longer
   films scrolling cell content into a `gif` sprite sheet; it captures it

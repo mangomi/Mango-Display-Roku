@@ -812,6 +812,9 @@ class DisplayWorker {
           schema: man0.schema || 1,
           canvas: { width: this.display.canvasW, height: this.display.canvasH },
           rotation: this.display.rotation || 0,
+          /* the display is dark: the device plays its black clip full
+           * screen under transparent pages (night.js, MainScene applyNight) */
+          night: man0.night === true,
           /* the version this manifest is announced as (announce() bumps
            * after the upload lands); a restarting task continues from it */
           version: this.version + 1,

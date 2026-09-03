@@ -12,6 +12,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const nativeWidgets = require("./nativeWidgets");
+const night = require("./night");
 
 // Manifest contract version - see MANIFEST.md. Bump on a BREAKING change
 // (a field removed or its meaning changed); additive fields do not need
@@ -546,6 +547,39 @@ async function capturePage(page, opts) {
       .catch(() => {});
   }
   mark("portal-settled");
+
+  /* Night mode: the portal covers everything with a black video and a
+   * badge; nothing underneath may be extracted or drawn (see night.js) */
+  if (portalFrame && (await night.isNightMode(portalFrame))) {
+    const pageMeta = await extractPageMeta(page);
+    const n = await night.captureNight(page, portalFrame, {
+      out,
+      outDir,
+      width,
+      height,
+      outWidth,
+      outHeight,
+      outScale: outWidth / width,
+    });
+    mark("night");
+    const manifest = {
+      schema: SCHEMA_VERSION,
+      canvas: { width, height },
+      rotation: opts.rotation || 0,
+      night: true,
+      overlays: n.overlays,
+      effects: [],
+      targets: [],
+      regions: [],
+      pageMeta,
+      imageFile: path.basename(n.outPath),
+      imageHash: crypto.createHash("md5").update(fs.readFileSync(n.outPath)).digest("hex").slice(0, 12),
+    };
+    fs.writeFileSync(out.replace(/\.jpe?g$/i, "") + ".manifest.json", JSON.stringify(manifest, null, 1));
+    console.log("timings: total=" + (Date.now() - t0) + "ms " + marks.join(" ") + " (night mode)");
+    console.log("manifest: night mode, " + n.overlays.length + " overlay(s)" + (pageMeta ? ", " + pageMeta.pageCount + " page(s)" : ""));
+    return manifest;
+  }
 
   /* set by any handler that skipped filming so the page could publish
    * now; the caller re-captures with filming allowed straight after */

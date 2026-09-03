@@ -44,6 +44,14 @@ canvas        { width, height } - the coordinate space above: the
               display's own resolution (e.g. 1280x720, 1920x1080). A
               ROTATED display has the two swapped (e.g. 720x1280): the
               page was rendered unrotated at that size (see rotation).
+night         true while the display is in night mode: every page image
+              is fully transparent and carries no widgets or effects,
+              only one `motion` overlay (the portal's "Night mode"
+              badge, fading and nudging every 35s against burn-in). The
+              client plays a BLACK VIDEO full screen underneath - not a
+              black picture; TVs dim their backlight for video - and
+              lifts any opaque backdrop so it shows through. Absent or
+              false means normal.
 rotation      0 | 90 | 270 - degrees CLOCKWISE, as the viewer sees it,
               that the client must turn the WHOLE canvas to show it
               upright on this screen. Non-zero always comes with a

@@ -1757,7 +1757,7 @@ function csCachedSheet(o, outDir, outScale) {
  * understands "scroll" (ctx.nativeScroll); everyone else keeps the sheets.
  * The blanking, alpha and ancestor-background handling are the sheet
  * path's, repeated so the two stay independent until the sheets can go. */
-const CS_STRIP_SALT = "strip-v3-pieces"; /* v3: strips shot in viewport pieces - cached v2 strips were cut at the screen bottom */ /* bumped 2026-09-02: strips are now shot whole, not sliced */
+const CS_STRIP_SALT = "strip-v4-identity"; /* v4: cells resolved by identity at film time - v3 could cache another cell's pixels under a key */ /* bumped 2026-09-02: strips are now shot whole, not sliced */
 const CS_SEG_MAX = 2048; /* Roku texture cap, output px */
 
 function csStripKey(o, outScale) {
@@ -1951,8 +1951,7 @@ async function csCaptureStrips(page, frame, items, ctx) {
     const shift = (dy) =>
       fr.evaluate(
         ({ idx, dy }) => {
-          const c = (window.mmScrollCells || [])[idx];
-          const par = c && c.content ? c.content.parentElement : null;
+          const par = document.querySelector('[data-mm-cs-box="' + idx + '"]');
           if (!par) return;
           if (dy) par.style.setProperty("transform", "translateY(" + -dy + "px)", "important");
           else par.style.removeProperty("transform");
@@ -1991,9 +1990,24 @@ async function csCaptureStrips(page, frame, items, ctx) {
       const box = await frame.evaluate(
         (args) => {
           const list = window.mmScrollCells || [];
-          const c = list[args.idx];
-          if (!c || !c.content) throw new Error("cell gone");
+          /* By IDENTITY, not position: the portal republishes this list
+           * whenever a cell re-measures (a layout edit, a view change),
+           * and list[idx] can then be a different cell than extract()
+           * saw. That photographed a month cell's 76px of events into an
+           * 881px strip cached under the list widget's key - the list
+           * went blank and its events scrolled out of a day cell (Dave,
+           * 2026-09-03). The geometry must match too. */
+          const same = (x) =>
+            x && x.content && String(x.widgetId) === String(args.widgetSettingId) && (x.date || null) === (args.date || null);
+          let c = same(list[args.idx]) ? list[args.idx] : list.find(same);
+          if (!c || !c.content || !document.documentElement.contains(c.content)) throw new Error("cell gone");
           const par = c.content.parentElement || c.content;
+          const r0 = par.getBoundingClientRect();
+          if (Math.abs(r0.x - args.rect.x) > 3 || Math.abs(r0.y - args.rect.y) > 3 || Math.abs(r0.width - args.rect.w) > 3) {
+            throw new Error("cell moved (" + Math.round(r0.x) + "," + Math.round(r0.y) + " " + Math.round(r0.width) + "px vs " + Math.round(args.rect.x) + "," + Math.round(args.rect.y) + " " + Math.round(args.rect.w) + "px)");
+          }
+          if (Math.abs((c.innerHeight || 0) - args.innerHeight) > 3) throw new Error("cell re-measured (" + c.innerHeight + " vs " + args.innerHeight + "px)");
+          par.setAttribute("data-mm-cs-box", String(args.idx));
           const group = par.querySelectorAll(".-m-scroll-c");
           const saved = [];
           const set = (el, prop, val) => {
@@ -2084,19 +2098,28 @@ async function csCaptureStrips(page, frame, items, ctx) {
           });
           return { x: r.x, y: r.y, w: r.width, h: r.height, boxes, contentBottom };
         },
-        { idx: o.idx, innerHeight: o.innerHeight },
+        { idx: o.idx, innerHeight: o.innerHeight, widgetSettingId: o.widgetSettingId, date: o.date, rect: o.rect },
       );
       await frame.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       const buf = await csCaptureTall(page, frame, o.idx, { x: box.x, y: box.y, w: Math.max(1, box.w), h: Math.max(1, box.h) });
       oneShot.set(o.idx, { buf, box });
     } catch (e) {
-      console.log("cellScroll strip: one-shot failed for " + o.date + " (" + e.message + ") - slicing it");
+      if (/cell (gone|moved|re-measured)/.test(e.message)) {
+        /* not this cell any more: leave it for the follow-up capture,
+         * which extracts afresh; slicing would photograph the wrong cell */
+        console.log("cellScroll strip: " + o.date + " skipped (" + e.message + ") - refilming on the follow-up");
+        o.skip = true;
+        if (ctx.filmState) ctx.filmState.pending = true;
+      } else {
+        console.log("cellScroll strip: one-shot failed for " + o.date + " (" + e.message + ") - slicing it");
+      }
     } finally {
       await frame
         .evaluate(() => {
           const st = document.getElementById("mm-cs-oneshot");
           if (st) st.remove();
           document.querySelectorAll("[data-mm-cs]").forEach((el) => el.removeAttribute("data-mm-cs"));
+          document.querySelectorAll("[data-mm-cs-box]").forEach((el) => el.removeAttribute("data-mm-cs-box"));
           (window.__mmCsOneShot || []).forEach((s) => {
             if (s.val) s.el.style.setProperty(s.prop, s.val, s.pri || "");
             else s.el.style.removeProperty(s.prop);
@@ -2106,7 +2129,7 @@ async function csCaptureStrips(page, frame, items, ctx) {
         .catch(() => {});
     }
   }
-  const sliced = need.filter((o) => !oneShot.has(o.idx));
+  const sliced = need.filter((o) => !oneShot.has(o.idx) && !o.skip);
   const sliceSteps = sliced.length ? Math.max(...sliced.map((o) => o._slices)) : 0;
   try {
     const shots = [];

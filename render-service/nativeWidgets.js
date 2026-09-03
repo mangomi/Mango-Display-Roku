@@ -1082,7 +1082,10 @@ const weatherIconHandler = {
       ];
       for (const el of els) {
         const r = el.getBoundingClientRect();
-        if (r.width < 30 || el.offsetParent === null) continue;
+        /* only a sanity floor: the 30px cutoff was from the sprite era
+         * (filming cost tens of seconds per size) and hid the 24-hour
+         * forecast's 27px suns once the layout shrank to 1280 */
+        if (r.width < 8 || r.height < 8 || el.offsetParent === null) continue;
         const key = el.id || el.className.toString();
         const m = key.match(/icon_(\d+)_(\d+)/);
         if (!m) continue;
@@ -2658,7 +2661,7 @@ const cellScrollHandler = {
  * with the strip's CSS float on the <img> folded in as a chain level. */
 const CWM_MIN_SAMPLES = 12;
 const CWM_MAX_SAMPLES = 48;
-const CWM_VERSION = "3";
+const CWM_VERSION = "4"; /* 4: icon box = the float's whole sweep */
 
 function cwmSampleCount(cycleMs) {
   return Math.max(CWM_MIN_SAMPLES, Math.min(CWM_MAX_SAMPLES, Math.round(cycleMs / 40)));
@@ -2898,6 +2901,9 @@ async function cwmBuild(page, frame, o, key, ctx) {
         let meta = wxMotionCached(io, ctx.outDir, ctx.outScale, true);
         if (!meta) meta = await wxDecompose(page, io, { ...ctx, wxNoFrames: true });
         let chain = null;
+        /* the box the icon overlay clips to, relative to the resting box:
+         * grown below to the float's whole sweep */
+        let sweep = { x: 0, y: 0, w: plan.icon.rect.w, h: plan.icon.rect.h };
         if (plan.icon.float !== null) {
           const fp = plan.parts.find((p) => p.idx === plan.icon.float);
           const sel = '.mm-weather-header-meta [data-mm-cwl="' + fp.idx + '"]';
@@ -2919,12 +2925,46 @@ async function cwmBuild(page, frame, o, key, ctx) {
             { sel, n, delayMs: fp.delayMs, cycleMs: fp.cycleMs, direction: fp.direction },
           );
           const dec = sm.out.map((x) => Object.assign(cwmDecomposeMatrix(x.t), { op: x.op }));
-          const c = [plan.icon.rect.w / 2, plan.icon.rect.h / 2];
+          const bw = plan.icon.rect.w;
+          const bh = plan.icon.rect.h;
+          const c = [bw / 2, bh / 2];
           const tr = cwmTracksFromSamples(dec, Math.round(sm.total), Math.max(0, Math.round(fp.delayMs)), c);
+          /* The overlay clips to its rect, and the float's keyframes carry
+           * the icon's whole placement - the cloudy badge slides 30px to
+           * centre itself, lifts 4px and grows 10% - so the resting box
+           * held only half the cloud (Dave, 2026-09-02: "cut in half").
+           * The rect is the union of every sampled pose; the resting box
+           * sits inside it at (px, py), baked into the chain's translation
+           * (scale/rotation centres are in the group's own space, so they
+           * stay at the resting box's centre). */
+          let ux0 = 0, uy0 = 0, ux1 = bw, uy1 = bh;
+          for (const s of dec) {
+            const hw = (bw * Math.abs(s.sx || 1)) / 2;
+            const hh = (bh * Math.abs(s.sy || 1)) / 2;
+            const turned = Math.abs(s.rot || 0) > 0.5;
+            const ex = turned ? Math.hypot(hw, hh) : hw;
+            const ey = turned ? Math.hypot(hw, hh) : hh;
+            const cx = bw / 2 + (s.tx || 0);
+            const cy = bh / 2 + (s.ty || 0);
+            ux0 = Math.min(ux0, cx - ex);
+            ux1 = Math.max(ux1, cx + ex);
+            uy0 = Math.min(uy0, cy - ey);
+            uy1 = Math.max(uy1, cy + ey);
+          }
+          ux0 = Math.floor(ux0); uy0 = Math.floor(uy0); ux1 = Math.ceil(ux1); uy1 = Math.ceil(uy1);
+          const px = -ux0;
+          const py = -uy0;
+          if (px || py) {
+            const r2 = (v) => Math.round(v * 100) / 100;
+            const trans = tr.find((t) => t.prop === "translation");
+            if (trans) trans.values = trans.values.map((v) => [r2(v[0] + px), r2(v[1] + py)]);
+            else tr.push({ prop: "translation", cycleMs: Math.round(sm.total), delayMs: 0, keys: [0, 1], values: [[px, py], [px, py]] });
+          }
+          sweep = { x: ux0, y: uy0, w: ux1 - ux0, h: uy1 - uy0 };
           if (tr.length) chain = [{ tracks: tr }];
         }
         icon = {
-          rect: { x: plan.icon.rect.x - o.rect.x, y: plan.icon.rect.y - o.rect.y, w: plan.icon.rect.w, h: plan.icon.rect.h },
+          rect: { x: plan.icon.rect.x - o.rect.x + sweep.x, y: plan.icon.rect.y - o.rect.y + sweep.y, w: sweep.w, h: sweep.h },
           layers: meta.layers.map((L) => {
             const out = { file: L.file, tracks: L.tracks || [] };
             if (L.opacity !== undefined && L.opacity !== null) out.opacity = L.opacity;

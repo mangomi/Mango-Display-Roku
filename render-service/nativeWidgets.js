@@ -2075,7 +2075,14 @@ async function csCaptureStrips(page, frame, items, ctx) {
               },
             });
           });
-          return { x: r.x, y: r.y, w: r.width, h: r.height, boxes };
+          /* how far down the box the content really reaches, so a shot
+           * that came out short can be told from a list that is short */
+          let contentBottom = 0;
+          par.querySelectorAll("[data-mm-cs], [data-mm-cs] *").forEach((el) => {
+            const b = el.getBoundingClientRect();
+            if (b.width > 0 && b.height > 0) contentBottom = Math.max(contentBottom, b.bottom - r.y);
+          });
+          return { x: r.x, y: r.y, w: r.width, h: r.height, boxes, contentBottom };
         },
         { idx: o.idx, innerHeight: o.innerHeight },
       );
@@ -2191,10 +2198,40 @@ async function csCaptureStrips(page, frame, items, ctx) {
           stripH: stripH / ctx.outScale,
           boxes: one && one.box.boxes ? one.box.boxes : [],
         };
-        fsHandlers.writeFileSync(
-          pathHandlers.join(ctx.outDir, "overlay_ss_" + key + "_" + tag + ".json"),
-          JSON.stringify(meta),
-        );
+        /* A strip photographed while its page was mid-swap (the burst
+         * right after a worker restart, 2026-09-03: the tester's chores
+         * came out drawn only to the screen's edge, then cached under a
+         * key nothing would change) must not be remembered. Compare the
+         * last drawn row with where the content really ends; a short
+         * strip is still published now - better than a blank cell - but
+         * gets no cache entry and asks for the follow-up capture. */
+        let short = false;
+        if (one && one.box.contentBottom > 0) {
+          const { data, info } = await sharp(stripBuf).raw().toBuffer({ resolveWithObject: true });
+          let drawn = -1;
+          for (let y = info.height - 1; y >= 0 && drawn < 0; y--) {
+            for (let x = 0; x < info.width; x += 2) {
+              if (data[(y * info.width + x) * info.channels + 3] > 30) {
+                drawn = y;
+                break;
+              }
+            }
+          }
+          const expected = Math.min(info.height, Math.round(one.box.contentBottom * ctx.outScale));
+          short = drawn < expected - 40;
+          if (short) {
+            console.log(
+              "cellScroll strip: " + o.date + " came out short (drawn " + (drawn + 1) + " of " + expected + "px) - not cached, refilming on the follow-up",
+            );
+            if (ctx.filmState) ctx.filmState.pending = true;
+          }
+        }
+        if (!short) {
+          fsHandlers.writeFileSync(
+            pathHandlers.join(ctx.outDir, "overlay_ss_" + key + "_" + tag + ".json"),
+            JSON.stringify(meta),
+          );
+        }
         const tv = csTvDuration(o, ctx);
         console.log(
           "cellScroll strip: " + o.date + " " + (one ? "one shot" : o._slices + " slice(s)") + ", " + stripH + "px, loop " +

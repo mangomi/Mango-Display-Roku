@@ -731,6 +731,14 @@ async function capturePage(page, opts) {
     if (!g.handler.captureAfter) continue;
     try {
       g.items = await g.handler.captureAfter(page, portalFrame, g.items, captureCtx);
+      /* an item may expand into several overlays that must keep its
+       * place in paint order (a weather icon's frame sheet between its
+       * motion layers) */
+      g.items = g.items.flatMap((o) => {
+        const extras = o._extras || [];
+        delete o._extras;
+        return [o, ...extras];
+      });
     } catch (e) {
       console.error("live capture '" + g.handler.type + "' failed:", e.message);
     }

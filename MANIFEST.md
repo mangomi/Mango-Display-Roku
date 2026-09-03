@@ -154,8 +154,18 @@ each moving part ONCE as a transparent PNG plus exactly that motion, so
 the device animates it every refresh instead of stepping a filmed sheet.
 Emitted only to platforms in `NATIVE_WEATHER_PREFIXES` (capture.js) and
 only for icons that decompose; everything else stays a `gif` sheet.
-- `rect` — the icon box, canvas px. Every layer PNG is the whole box
-  (rendered at 2x for crispness); draw them all at `rect`, bottom to top.
+- `rect` — the icon box, canvas px. Every layer PNG is the whole box,
+  rendered at exactly the output size; draw them all at `rect`, bottom
+  to top.
+- A layer that ROTATES is not shipped as a `rotation` track (2026-09-02:
+  device-side bitmap rotation made thin rays pulse). It arrives as its
+  own `gif` overlay - a frame sheet of the layer at 15 poses/s over its
+  cycle, drawn on the pixel grid - placed in the overlay list exactly
+  where the layer sits in paint order, between `motion` overlays holding
+  the layers below and above it at the same `rect`. A client that draws
+  overlays in list order needs nothing new. For these sheets `frameW` /
+  `frameH` equal `rect.w` / `rect.h` (canvas px); stretch the sheet to
+  `cols x frameW` by `rows x frameH`.
 - `layers[]` — `{ file, tracks[], opacity, chain[] }`. `opacity` is the
   layer's value BEFORE its first loop (a delayed raindrop waits invisible).
   `chain` lists outer motions applied on top of the layer's own, outermost

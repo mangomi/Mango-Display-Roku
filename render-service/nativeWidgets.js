@@ -585,18 +585,31 @@ function wxCachedSheet(o, outDir, outScale) {
  * an icon (stroke-dashoffset on wind, animateMotion, CSS keyframes) keeps
  * the sprite sheet - the feasibility test below decides per icon.
  *
- * Geometry: the SVG is laid out in a scratch page at WXM_SUPER times the
- * on-screen size and at the BOX'S OWN ASPECT - an SVG in a 60x32 badge
+ * Geometry: the SVG is laid out in a scratch page at EXACTLY the
+ * on-screen size and at the box's own aspect - an SVG in a 60x32 badge
  * is fitted (preserveAspectRatio meet) exactly as the portal's <img>
- * fits it; a square scratch cropped to the box kept only the top of a
- * wide box (the calendar's cloud lost its bottom half, Dave 2026-09-02).
- * <use> references are inlined so every animated element is actually
+ * fits it (a square scratch cropped to the box kept only the top of a
+ * wide box: the calendar's cloud lost its bottom half, Dave 2026-09-02),
+ * and nothing is resampled on the device (a 2x picture shrunk by the
+ * Roku came out softer than one drawn on its own pixels). <use>
+ * references are inlined so every animated element is actually
  * rendered, and each element's screen matrix maps its local rotation
  * centre / translation vector into icon pixels. Layer PNGs are the whole
- * icon box with only that element painted. */
-const WXM_SUPER = 2;
-const WXM_MAX_PX = 512;
-const WXM_VERSION = "3"; /* 3: scratch at the box's aspect */
+ * icon box with only that element painted.
+ *
+ * ROTATION is not left to the device. Turning a bitmap resamples it
+ * every frame, and a 3px ray that lands between pixel columns is drawn
+ * paler and fatter than one that lands on a column - the rays pulsed as
+ * they turned (Dave, 2026-09-02: "blinking in and out"). A layer with a
+ * rotate track is instead rendered at WXM_FRAME_FPS poses over its cycle,
+ * each drawn by Chromium on the pixel grid, packed into a sprite grid and
+ * delivered as a `gif` overlay in paint order between the motion layers
+ * around it (wxMotionFill). Translation and opacity stay native: sliding
+ * a soft shape does not show the artefact. */
+const WXM_VERSION = "4"; /* 4: exact-size scratch, rotating layers as frames */
+const WXM_FRAME_FPS = 15;
+const WXM_FRAME_MAX = 120;
+const WXM_SHEET_MAX = 2048; /* GPUs reject larger single textures */
 
 function wxMotionFeasible(svgText) {
   if (!/<animate/i.test(svgText)) return false;
@@ -624,7 +637,8 @@ function wxMotionCached(o, outDir, outScale) {
     const meta = JSON.parse(fsHandlers.readFileSync(metaFile, "utf8"));
     if (!meta || !Array.isArray(meta.layers) || !meta.layers.length) return null;
     for (const L of meta.layers) {
-      if (!L.file || !fsHandlers.existsSync(pathHandlers.join(outDir, L.file))) return null;
+      const f = L.file || (L.frames && L.frames.file);
+      if (!f || !fsHandlers.existsSync(pathHandlers.join(outDir, f))) return null;
     }
     return meta;
   } catch (e) {
@@ -662,11 +676,9 @@ async function wxDecompose(page, o, ctx) {
   const sharp = require("sharp");
   const outW = Math.max(1, Math.round(o.rect.w * ctx.outScale));
   const outH = Math.max(1, Math.round(o.rect.h * ctx.outScale));
-  const S = Math.min(WXM_MAX_PX, Math.max(64, Math.round(Math.max(outW, outH) * WXM_SUPER)));
-  /* scratch px per output px, then the scratch box at the icon's aspect */
-  const k = S / Math.max(outW, outH);
-  const W = Math.max(1, Math.round(outW * k));
-  const H = Math.max(1, Math.round(outH * k));
+  /* the scratch IS the box: one page px per output px */
+  const W = outW;
+  const H = outH;
   const scratch = await page.context().browser().newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
   try {
     await scratch.setContent(
@@ -734,6 +746,7 @@ async function wxDecompose(page, o, ctx) {
           keyTimes: list(a.getAttribute("keyTimes")).map(Number),
           dur: a.getAttribute("dur"),
           begin: a.getAttribute("begin"),
+          additive: a.getAttribute("additive") || "replace",
         });
         a.remove(); /* base pose for the layer image */
       }
@@ -870,14 +883,109 @@ async function wxDecompose(page, o, ctx) {
       }
       return tracks;
     };
+    /* value of one raw SMIL track at t ms into its cycle: linear between
+     * keyTimes (SMIL's default calcMode), held through any gap */
+    const rawAt = (t, ms) => {
+      const timing = wxMotionTiming(t);
+      const n = t.values.length;
+      if (n < 1) return null;
+      const keys = t.keyTimes.length === n ? t.keyTimes : t.values.map((_, k) => k / Math.max(1, n - 1));
+      const cyc = timing.cycleS * 1000;
+      const tc = (((ms - timing.delayS * 1000) % cyc) + cyc) % cyc;
+      const p = timing.durS > 0 ? Math.min(1, tc / (timing.durS * 1000)) : 1;
+      let k = 0;
+      while (k < n - 2 && p > keys[k + 1]) k++;
+      const span = keys[k + 1] - keys[k];
+      const f = n < 2 || !(span > 0) ? 0 : Math.max(0, Math.min(1, (p - keys[k]) / span));
+      const lerp = (a, b) => a + (b - a) * f;
+      const A = t.values[k].split(/[\s,]+/).map(Number);
+      const B = (t.values[k + 1] || t.values[k]).split(/[\s,]+/).map(Number);
+      return A.map((a, j) => lerp(a, B[j] === undefined || isNaN(B[j]) ? a : B[j]));
+    };
+    const framesFor = async (i, L, tracks) => {
+      const cycleMs = Math.max(...tracks.map((t) => t.cycleMs));
+      if (!(cycleMs > 0)) return null;
+      const maxCols = Math.max(1, Math.floor(WXM_SHEET_MAX / W));
+      const maxRows = Math.max(1, Math.floor(WXM_SHEET_MAX / H));
+      const n = Math.max(2, Math.min(WXM_FRAME_MAX, maxCols * maxRows, Math.round((cycleMs / 1000) * WXM_FRAME_FPS)));
+      const cols = Math.min(n, maxCols);
+      const rows = Math.ceil(n / cols);
+      const sel = '#host svg [data-mm-layer="' + i + '"]';
+      const base = await scratch.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        return el ? el.getAttribute("transform") || "" : "";
+      }, sel);
+      const frames = [];
+      for (let k = 0; k < n; k++) {
+        const ms = (k / n) * cycleMs;
+        let transform = base;
+        let opacity = L.baseOpacity;
+        for (const t of L.tracks) {
+          const v = rawAt(t, ms);
+          if (!v) continue;
+          if (t.prop === "rotate") {
+            const piece = "rotate(" + v[0] + " " + (v[1] || 0) + " " + (v[2] || 0) + ")";
+            transform = t.additive === "sum" ? (transform + " " + piece).trim() : piece;
+          } else if (t.prop === "translate") {
+            const piece = "translate(" + v[0] + " " + (v[1] || 0) + ")";
+            transform = t.additive === "sum" ? (transform + " " + piece).trim() : piece;
+          } else if (t.prop === "opacity") {
+            opacity = v[0];
+          }
+        }
+        await scratch.evaluate(
+          ({ sel, transform, opacity }) => {
+            const el = document.querySelector(sel);
+            if (!el) return;
+            if (transform) el.setAttribute("transform", transform);
+            else el.removeAttribute("transform");
+            el.style.opacity = String(opacity);
+          },
+          { sel, transform, opacity },
+        );
+        frames.push(
+          await shoot(
+            "#host svg * { visibility: hidden !important } " + sel + ", " + sel + " * { visibility: visible !important }",
+          ),
+        );
+      }
+      await scratch.evaluate(
+        ({ sel, base }) => {
+          const el = document.querySelector(sel);
+          if (!el) return;
+          if (base) el.setAttribute("transform", base);
+          else el.removeAttribute("transform");
+          el.style.opacity = "";
+        },
+        { sel, base },
+      );
+      const sheet = await sharp({
+        create: { width: cols * W, height: rows * H, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+      })
+        .composite(frames.map((buf, k) => ({ input: buf, left: (k % cols) * W, top: Math.floor(k / cols) * H })))
+        .png()
+        .toBuffer();
+      const tag = crypto.createHash("md5").update(sheet).digest("hex").slice(0, 8);
+      const name = "overlay_wxm_" + key + "_" + i + "_f_" + tag + ".png";
+      fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, name), sheet);
+      return { file: name, frameCount: n, frameMs: Math.max(33, Math.round(cycleMs / n)), cols, rows };
+    };
     for (let i = 0; i < plan.layers.length; i++) {
       await pushStatic(i);
       const L = plan.layers[i];
+      const tracks = convert(L.tracks, L.ctm);
+      const rotates = L.tracks.some((t) => t.prop === "rotate") && !(L.chain && L.chain.length);
+      if (rotates) {
+        const frames = await framesFor(i, L, tracks);
+        if (frames) {
+          layers.push({ frames });
+          continue;
+        }
+      }
       const buf = await shoot(
         "#host svg * { visibility: hidden !important } " +
           '#host svg [data-mm-layer="' + i + '"], #host svg [data-mm-layer="' + i + '"] * { visibility: visible !important; opacity: 1 !important }',
       );
-      const tracks = convert(L.tracks, L.ctm);
       /* what the layer looks like BEFORE its first loop starts (a delayed
        * drop must wait invisible, not at full opacity) */
       const op = tracks.find((t) => t.prop === "opacity");
@@ -910,21 +1018,52 @@ function snapRect(rect, outScale) {
   };
 }
 
+/* One icon becomes one or more overlays in paint order: runs of native
+ * layers as `motion`, each frame-baked (rotating) layer as a `gif` sheet
+ * at the same box. The first part takes over `o`; the rest ride on
+ * o._extras, which capture.js splices in right after it. */
 function wxMotionFill(o, meta, outScale) {
-  o.type = "motion";
-  o.source = o.src;
-  o.rect = snapRect(o.rect, outScale);
-  o.layers = meta.layers.map((L) => {
+  const rect = snapRect(o.rect, outScale);
+  const source = o.src;
+  const parts = [];
+  let run = null;
+  for (const L of meta.layers) {
+    if (L.frames) {
+      const f = L.frames;
+      parts.push({
+        type: "gif",
+        rect: { ...rect },
+        stripFile: f.file,
+        /* canvas units: the device stretches the sheet to cols x this */
+        frameW: rect.w,
+        frameH: rect.h,
+        frameCount: f.frameCount,
+        frameMs: f.frameMs,
+        cols: f.cols,
+        rows: f.rows,
+      });
+      run = null;
+      continue;
+    }
     const out = { file: L.file, tracks: L.tracks || [] };
     if (L.opacity !== undefined && L.opacity !== null) out.opacity = L.opacity;
     if (L.chain && L.chain.length) out.chain = L.chain;
-    return out;
-  });
+    if (!run) {
+      run = { type: "motion", rect: { ...rect }, layers: [] };
+      parts.push(run);
+    }
+    run.layers.push(out);
+  }
   delete o.liveCapture;
   delete o.period;
   delete o.src;
   delete o.svgText;
   delete o.native;
+  delete o.layers;
+  const carried = { page: o.page, widgetSettingId: o.widgetSettingId, source };
+  Object.assign(o, parts[0], { source });
+  o._extras = parts.slice(1).map((p) => ({ ...carried, ...p }));
+  return o._extras;
 }
 
 const weatherIconHandler = {
@@ -1058,9 +1197,10 @@ const weatherIconHandler = {
         if (!meta) {
           const t0 = Date.now();
           meta = await wxDecompose(page, o, ctx);
+          const nf = meta.layers.filter((L) => L.frames).length;
           console.log(
             "wx motion: " + String(o.src).split("/").pop().slice(0, 30) + " -> " + meta.layers.length +
-              " layer(s) in " + (Date.now() - t0) + "ms",
+              " layer(s)" + (nf ? " (" + nf + " as frames)" : "") + " in " + (Date.now() - t0) + "ms",
           );
         }
         wxMotionFill(o, meta, ctx.outScale);
@@ -4542,4 +4682,4 @@ module.exports = {
 
 /* test hook: the weather-motion decomposer, for the standalone check in
  * test/ and for poking at an icon without a display */
-module.exports.__wx = { wxDecompose, wxMotionFeasible, wxMotionTiming };
+module.exports.__wx = { wxDecompose, wxMotionFeasible, wxMotionTiming, wxMotionFill };

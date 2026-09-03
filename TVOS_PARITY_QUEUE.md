@@ -59,6 +59,15 @@ off there, not deleted here.
 
 ## VERIFY — server behavior changed; client likely fine as built
 
+- [ ] **Rotating weather-icon layers now arrive as `gif` frame sheets**
+  (2026-09-02, `WXM_VERSION` 4): a sunny / partly-cloudy / sun-rain icon
+  is emitted as up to three overlays at the same rect - `motion` (layers
+  below), `gif` (the rays, 90 frames in a cols x rows grid, `frameW/H` =
+  `rect.w/h` canvas px), `motion` (layers above) - in that list order.
+  No `rotation` tracks are emitted for icons any more. If tvOS draws
+  overlays in list order and already plays `gif` sheets, nothing to do;
+  check that the sheet's `cols`/`rows` grid (not a single column) is
+  honoured and that frames are stretched to `frameW x frameH`.
 - [ ] **Two popup entries can share one sprite sheet** (firework runs
   two concurrent players, `8d01b6d`): the effects array may contain
   multiple `popup` entries whose `stripFile` is the same file with

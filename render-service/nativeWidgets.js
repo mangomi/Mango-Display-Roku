@@ -1681,7 +1681,7 @@ const CS_MAX_FRAMES = 700;
  * tracks the letters and sees every update, so it gets the full 30fps
  * with a step around a tenth of an output pixel (Dave, 2026-09-02: "the
  * rain is nice and smooth, but this still looks a bit jerky"). */
-const CS_TV_PACE = 4 / 1.5; /* 2026-09-02: tester wanted both speeds 50% faster */
+const CS_TV_PACE = 4 / 1.8; /* 2026-09-02: tester wanted faster; 1.5x, then Dave: 1.8x */
 const CS_PLAY_MS = 33;
 /* The old 1:1 note, kept because the arithmetic still matters: the marquee is
  * a constant-velocity scroller - speed = (boxHeight + innerHeight) * 35

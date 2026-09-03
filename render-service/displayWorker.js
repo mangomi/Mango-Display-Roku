@@ -29,7 +29,7 @@ const { AssetPublisher, derivePrefix, enabled: r2Enabled } = require("./assets")
  * draw a small canvas at 2/3 size in a corner, so it keeps the old
  * 1920x1080 layout (screenshot scaled to the TV) until its channel is
  * updated. Remove an id here the day its new zip goes on. */
-const LEGACY_CANVAS_IDS = ["RK482285597"];
+const LEGACY_CANVAS_IDS = []; /* 2026-09-03: the tester's Roku moves to the new channel; nobody left on the old layout */
 
 const DEBOUNCE_MS = 2500;
 const KEEPALIVE_MS = 60000;

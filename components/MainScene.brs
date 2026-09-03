@@ -100,6 +100,7 @@ sub init()
     m.pageTimer.observeField("fire", "onPageTimer")
 
     m.frontKey = ""
+    m.night = false
     m.pages = invalid
     m.latestPages = invalid
     m.pageIndex = 0
@@ -220,6 +221,7 @@ sub onVersionChange()
     if man = invalid or man.pages = invalid or man.pages.Count() = 0 then return
     print "[Mango] display.json: "; man.pages.Count(); " page(s)"
     applyCanvas(man)
+    applyNight(man.night = true)
     applyEffects(man.effects)
     if man.gestures <> invalid
         m.interaction.gestures = man.gestures
@@ -293,6 +295,34 @@ sub applyCanvas(man as object)
     end if
     ' effects spawn against the canvas bounds: rebuild them on the next apply
     m.effectsKey = ""
+end sub
+
+' Night mode: the service publishes transparent pages and one badge
+' overlay, and the display must be as dark as a TV can go - a VIDEO, not a
+' black picture, because sets dim their backlight for video (Dave,
+' 2026-09-03). The keep-alive clip is black and already playing behind
+' the scene, so night mode is the same player made full screen, with the
+' black backdrop lifted so it shows through the transparent page. Off
+' again, the player shrinks back behind the backdrop and keeps the box
+' awake as before - no gap in playback either way.
+sub applyNight(on as boolean)
+    if on = m.night then return
+    m.night = on
+    v = m.idleKeepAlive
+    bg = m.top.findNode("bg")
+    if on
+        v.width = m.sceneW
+        v.height = m.sceneH
+        v.translation = [0, 0]
+        bg.visible = false
+        print "[Mango] night mode on"
+    else
+        v.width = 320
+        v.height = 180
+        v.translation = [0, 0]
+        bg.visible = true
+        print "[Mango] night mode off"
+    end if
 end sub
 
 sub maybeApplyPages()

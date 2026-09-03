@@ -1757,7 +1757,7 @@ function csCachedSheet(o, outDir, outScale) {
  * understands "scroll" (ctx.nativeScroll); everyone else keeps the sheets.
  * The blanking, alpha and ancestor-background handling are the sheet
  * path's, repeated so the two stay independent until the sheets can go. */
-const CS_STRIP_SALT = "strip-v2-oneshot"; /* bumped 2026-09-02: strips are now shot whole, not sliced */
+const CS_STRIP_SALT = "strip-v3-pieces"; /* v3: strips shot in viewport pieces - cached v2 strips were cut at the screen bottom */ /* bumped 2026-09-02: strips are now shot whole, not sliced */
 const CS_SEG_MAX = 2048; /* Roku texture cap, output px */
 
 function csStripKey(o, outScale) {

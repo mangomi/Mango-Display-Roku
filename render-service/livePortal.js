@@ -227,6 +227,34 @@ class LivePortal {
                 }
               }
             }
+            /* "Fill day with photo" never puts the URL on the page first:
+             * the portal pre-checks it with a detached Image (checkImage)
+             * and paints its "not accessible" placeholder when that
+             * fails - which the DOM test above guaranteed (Dave,
+             * 2026-09-03). So also ask the DATA: is this URL a photo on
+             * any event of any calendar widget on the page? MainCtrl's
+             * scope holds every widget's payload; a calendar's events
+             * sit in widget.data.events.data[] with their imageUrl. */
+            try {
+              const ctl = document.querySelector('[ng-controller="MainCtrl"]');
+              const sc = ctl && window.angular ? window.angular.element(ctl).scope() : null;
+              const pages = [].concat(sc && sc.groups ? sc.groups : [], sc && sc.temppgroups ? sc.temppgroups : []);
+              for (const g of pages) {
+                for (const w of (g && g.widgets) || []) {
+                  if (!/calendar/i.test(String(w && w.contentType))) continue;
+                  const ev = w.data && w.data.events;
+                  const list = Array.isArray(ev) ? ev : ev && Array.isArray(ev.data) ? ev.data : [];
+                  for (const e of list) {
+                    if (e && e.imageUrl && abs(e.imageUrl) === u) {
+                      seen.add(u);
+                      return true;
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              /* no angular / no data yet: fall through to the block */
+            }
             return false;
           }, url);
         } catch (e) {

@@ -10,7 +10,8 @@ when convenient, and scrub it from git history when you do.
 | item | value |
 |---|---|
 | Developer ID | `e3f1bfaf0ead2d212191a61c3e2ba164ae4fd2d4` |
-| Signing password | **FILL IN BY HAND** — the string Roku printed after `genkey` on 2026-09-03 (also in Dave's Mac keychain: `security find-generic-password -a rokudev -s roku-signing -w`) |
+| Signing password | j/3/Pfr8GonnPC9S182b2g== 
+  the string Roku printed after `genkey` on 2026-09-03 (also in Dave's Mac keychain: `security find-generic-password -a rokudev -s roku-signing -w`) |
 | Generated on | Roku Express X026001ENXR9, Roku OS 15.3.4, 2026-09-03 |
 | Signed package (rekey source) | `signing/MangoDisplay_1_0_test.pkg` (channel 1.0 build 1, TEST environment) |
 

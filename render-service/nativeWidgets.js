@@ -1922,10 +1922,70 @@ async function csCaptureStrips(page, frame, items, ctx) {
    * Instead the window is let grow to the content's full height for one
    * shot - sticky only ever engages inside a clipping box, so nothing
    * pins - with everything but this cell's content hidden, since the
-   * grown box now overlaps whatever sits below it. Playwright's fullPage
-   * clip reaches below the viewport. If a page refuses the clip, that
-   * cell falls back to slicing. */
+   * grown box now overlaps whatever sits below it.
+   *
+   * A grown box usually reaches below the viewport, and nothing below
+   * the viewport can be photographed here: Playwright's fullPage clip was
+   * silently truncated to the document height, which the portal pins to
+   * the viewport (every list came back drawn only down to the screen's
+   * bottom edge and transparent below - the tester's 16 chores showed
+   * nine, 2026-09-03; Dave's list strip stopped at 659 of 881px), and
+   * Chromium's captureBeyondViewport neither paints past the portal's
+   * position:fixed app container nor avoids a resize event, on which the
+   * portal reloads the display. So the grown box is SHIFTED up through
+   * the viewport instead, one viewport-height piece per plain in-viewport
+   * screenshot, and the pieces are stitched at integer offsets. Sticky
+   * still never engages (the box is not clipping), the viewport never
+   * changes, and a short piece throws into the slicing fallback. */
   const oneShot = new Map(); /* idx -> { buf, box } */
+  /* The grown box (viewport CSS px) photographed in viewport-height
+   * pieces: the box is translated up by (box.y + offset) so each piece
+   * lands at the top of the screen, shot with a plain clip, then the
+   * pieces are stacked. Offsets are integers so the pieces share one
+   * pixel grid. A piece that comes back short throws, which the caller
+   * turns into the slicing fallback. */
+  async function csCaptureTall(pg, fr, idx, box) {
+    const vp = pg.viewportSize() || { width: 1920, height: 1080 };
+    const dsf = (await pg.evaluate(() => window.devicePixelRatio)) || 1;
+    const pieces = [];
+    const shift = (dy) =>
+      fr.evaluate(
+        ({ idx, dy }) => {
+          const c = (window.mmScrollCells || [])[idx];
+          const par = c && c.content ? c.content.parentElement : null;
+          if (!par) return;
+          if (dy) par.style.setProperty("transform", "translateY(" + -dy + "px)", "important");
+          else par.style.removeProperty("transform");
+          return new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        },
+        { idx, dy },
+      );
+    try {
+      let total = 0;
+      for (let off = 0; off < box.h; off += vp.height) {
+        const h = Math.min(vp.height, box.h - off);
+        const dy = box.y + off; /* the piece's top lands at y = 0 */
+        await shift(dy);
+        const clipY = 0;
+        const clipH = Math.max(1, Math.min(h, vp.height));
+        const png = await pg.screenshot({ type: "png", omitBackground: true, clip: { x: box.x, y: clipY, width: box.w, height: clipH } });
+        const meta = await sharp(png).metadata();
+        const wantH = Math.round(clipH * dsf);
+        if (meta.height < wantH - 2) throw new Error("piece short: " + meta.height + " of " + wantH + "px at " + off);
+        pieces.push({ png, top: total, h: meta.height, w: meta.width });
+        total += meta.height;
+      }
+      if (pieces.length === 1) return pieces[0].png;
+      return await sharp({
+        create: { width: pieces[0].w, height: total, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+      })
+        .composite(pieces.map((p) => ({ input: p.png, left: 0, top: p.top })))
+        .png()
+        .toBuffer();
+    } finally {
+      await shift(0).catch(() => {});
+    }
+  }
   for (const o of need) {
     try {
       const box = await frame.evaluate(
@@ -1955,6 +2015,9 @@ async function csCaptureStrips(page, frame, items, ctx) {
           const st = document.createElement("style");
           st.id = "mm-cs-oneshot";
           st.textContent =
+            /* the marquee (jQuery, inline top) must not move between the
+             * pieces: a stylesheet rule outranks its inline writes */
+            "[data-mm-cs] { top: 0 !important } " +
             "body * { visibility: hidden !important } " +
             "[data-mm-cs], [data-mm-cs] * { visibility: visible !important }";
           document.head.appendChild(st);
@@ -2017,12 +2080,7 @@ async function csCaptureStrips(page, frame, items, ctx) {
         { idx: o.idx, innerHeight: o.innerHeight },
       );
       await frame.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-      const buf = await page.screenshot({
-        type: "png",
-        omitBackground: true,
-        fullPage: true,
-        clip: { x: box.x, y: box.y, width: Math.max(1, box.w), height: Math.max(1, box.h) },
-      });
+      const buf = await csCaptureTall(page, frame, o.idx, { x: box.x, y: box.y, w: Math.max(1, box.w), h: Math.max(1, box.h) });
       oneShot.set(o.idx, { buf, box });
     } catch (e) {
       console.log("cellScroll strip: one-shot failed for " + o.date + " (" + e.message + ") - slicing it");

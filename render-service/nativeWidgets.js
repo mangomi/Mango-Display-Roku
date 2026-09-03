@@ -2661,7 +2661,7 @@ const cellScrollHandler = {
  * with the strip's CSS float on the <img> folded in as a chain level. */
 const CWM_MIN_SAMPLES = 12;
 const CWM_MAX_SAMPLES = 48;
-const CWM_VERSION = "5"; /* 5: icon layers padded to the float's sweep */
+const CWM_VERSION = "6"; /* 6: icon float relative to its resting transform */
 
 function cwmSampleCount(cycleMs) {
   return Math.max(CWM_MIN_SAMPLES, Math.min(CWM_MAX_SAMPLES, Math.round(cycleMs / 40)));
@@ -2911,6 +2911,17 @@ async function cwmBuild(page, frame, o, key, ctx) {
           const sm = await frame.evaluate(
             ({ sel, n, delayMs, cycleMs, direction }) => {
               const el = document.querySelector(sel);
+              /* the pose the box was measured at: animation off. The
+               * resting rule already centres the icon (translateX(-50%))
+               * and the keyframes repeat that slide, so a sample taken as
+               * an absolute matrix carries the slide twice against a box
+               * that has it once - the cloud sat one cloud-width left of
+               * the portal's (Dave, 2026-09-03). Samples are made relative
+               * to this matrix below. */
+              const prevAnim = el.style.animation;
+              el.style.animation = "none";
+              const rest = getComputedStyle(el).transform;
+              el.style.animation = prevAnim;
               const anim = el.getAnimations()[0];
               const alt = direction === "alternate" || direction === "alternate-reverse";
               const total = alt ? cycleMs * 2 : cycleMs;
@@ -2920,11 +2931,22 @@ async function cwmBuild(page, frame, o, key, ctx) {
                 const cs = getComputedStyle(el);
                 out.push({ t: cs.transform, op: parseFloat(cs.opacity) });
               }
-              return { out, total };
+              return { out, total, rest };
             },
             { sel, n, delayMs: fp.delayMs, cycleMs: fp.cycleMs, direction: fp.direction },
           );
-          const dec = sm.out.map((x) => Object.assign(cwmDecomposeMatrix(x.t), { op: x.op }));
+          const rest = cwmDecomposeMatrix(sm.rest);
+          const dec = sm.out.map((x) => {
+            const d = cwmDecomposeMatrix(x.t);
+            return {
+              tx: d.tx - rest.tx,
+              ty: d.ty - rest.ty,
+              rot: d.rot - rest.rot,
+              sx: d.sx / (rest.sx || 1),
+              sy: d.sy / (rest.sy || 1),
+              op: x.op,
+            };
+          });
           const bw = plan.icon.rect.w;
           const bh = plan.icon.rect.h;
           /* The overlay clips to its rect, and the float's keyframes carry

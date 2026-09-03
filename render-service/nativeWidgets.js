@@ -2661,7 +2661,7 @@ const cellScrollHandler = {
  * with the strip's CSS float on the <img> folded in as a chain level. */
 const CWM_MIN_SAMPLES = 12;
 const CWM_MAX_SAMPLES = 48;
-const CWM_VERSION = "4"; /* 4: icon box = the float's whole sweep */
+const CWM_VERSION = "5"; /* 5: icon layers padded to the float's sweep */
 
 function cwmSampleCount(cycleMs) {
   return Math.max(CWM_MIN_SAMPLES, Math.min(CWM_MAX_SAMPLES, Math.round(cycleMs / 40)));
@@ -2927,16 +2927,15 @@ async function cwmBuild(page, frame, o, key, ctx) {
           const dec = sm.out.map((x) => Object.assign(cwmDecomposeMatrix(x.t), { op: x.op }));
           const bw = plan.icon.rect.w;
           const bh = plan.icon.rect.h;
-          const c = [bw / 2, bh / 2];
-          const tr = cwmTracksFromSamples(dec, Math.round(sm.total), Math.max(0, Math.round(fp.delayMs)), c);
           /* The overlay clips to its rect, and the float's keyframes carry
            * the icon's whole placement - the cloudy badge slides 30px to
            * centre itself, lifts 4px and grows 10% - so the resting box
            * held only half the cloud (Dave, 2026-09-02: "cut in half").
-           * The rect is the union of every sampled pose; the resting box
-           * sits inside it at (px, py), baked into the chain's translation
-           * (scale/rotation centres are in the group's own space, so they
-           * stay at the resting box's centre). */
+           * The rect is the union of every sampled pose. The device sizes
+           * every layer image to the rect, so the layer images are PADDED
+           * to that box below (the resting box at (px, py) inside it),
+           * never stretched: a 60x32 image in a 93x38 box came out 1.5x
+           * too big and out of place (Dave, later that night). */
           let ux0 = 0, uy0 = 0, ux1 = bw, uy1 = bh;
           for (const s of dec) {
             const hw = (bw * Math.abs(s.sx || 1)) / 2;
@@ -2952,26 +2951,43 @@ async function cwmBuild(page, frame, o, key, ctx) {
             uy1 = Math.max(uy1, cy + ey);
           }
           ux0 = Math.floor(ux0); uy0 = Math.floor(uy0); ux1 = Math.ceil(ux1); uy1 = Math.ceil(uy1);
-          const px = -ux0;
-          const py = -uy0;
-          if (px || py) {
-            const r2 = (v) => Math.round(v * 100) / 100;
-            const trans = tr.find((t) => t.prop === "translation");
-            if (trans) trans.values = trans.values.map((v) => [r2(v[0] + px), r2(v[1] + py)]);
-            else tr.push({ prop: "translation", cycleMs: Math.round(sm.total), delayMs: 0, keys: [0, 1], values: [[px, py], [px, py]] });
-          }
           sweep = { x: ux0, y: uy0, w: ux1 - ux0, h: uy1 - uy0 };
+          /* the float scales/rotates about the resting box's centre, which
+           * sits at (-sweep.x, -sweep.y) inside the padded image */
+          const c = [bw / 2 - sweep.x, bh / 2 - sweep.y];
+          const tr = cwmTracksFromSamples(dec, Math.round(sm.total), Math.max(0, Math.round(fp.delayMs)), c);
           if (tr.length) chain = [{ tracks: tr }];
+        }
+        const padX = -sweep.x;
+        const padY = -sweep.y;
+        const padNeeded = padX || padY || sweep.w !== plan.icon.rect.w || sweep.h !== plan.icon.rect.h;
+        const padded = async (L, idx) => {
+          if (!padNeeded) return L.file;
+          const buf = await sharp({
+            create: { width: sweep.w, height: sweep.h, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+          })
+            .composite([{ input: pathHandlers.join(ctx.outDir, L.file), left: padX, top: padY }])
+            .png()
+            .toBuffer();
+          const name = "overlay_cwm_" + key + "_i" + idx + "_" + crypto.createHash("md5").update(buf).digest("hex").slice(0, 8) + ".png";
+          fsHandlers.writeFileSync(pathHandlers.join(ctx.outDir, name), buf);
+          return name;
+        };
+        /* centres of the icon's own motions move with the padding; its
+         * translations are deltas and do not */
+        const shifted = (t) => (t.center ? { ...t, center: [t.center[0] + padX, t.center[1] + padY] } : t);
+        const layersOut = [];
+        for (let li = 0; li < meta.layers.length; li++) {
+          const L = meta.layers[li];
+          const out = { file: await padded(L, li), tracks: (L.tracks || []).map(shifted) };
+          if (L.opacity !== undefined && L.opacity !== null) out.opacity = L.opacity;
+          const ch = (L.chain || []).map((lvl) => ({ tracks: (lvl.tracks || []).map(shifted) })).concat(chain || []);
+          if (ch.length) out.chain = ch;
+          layersOut.push(out);
         }
         icon = {
           rect: { x: plan.icon.rect.x - o.rect.x + sweep.x, y: plan.icon.rect.y - o.rect.y + sweep.y, w: sweep.w, h: sweep.h },
-          layers: meta.layers.map((L) => {
-            const out = { file: L.file, tracks: L.tracks || [] };
-            if (L.opacity !== undefined && L.opacity !== null) out.opacity = L.opacity;
-            const ch = (L.chain || []).concat(chain || []);
-            if (ch.length) out.chain = ch;
-            return out;
-          }),
+          layers: layersOut,
         };
       }
     } catch (e) {

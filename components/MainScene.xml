@@ -19,11 +19,21 @@
         <Rectangle id="bg" color="0x000000FF" width="1920" height="1080" />
 
         <!-- Mirrors the Tizen pairing screen: logo, heading, code, setup line -->
-        <LayoutGroup id="pairingGroup" translation="[960, 250]" layoutDirection="vert" horizAlignment="center" itemSpacings="[70, 45, 110]">
+        <!-- Sizes are in the 1920x1080 design space (the group is scaled
+             to the device): the code is what a user has to read across the
+             room and type, so it is the largest thing on the screen. The
+             system fonts drew it at ~20px on a 720p box (Dave, 2026-09-03). -->
+        <LayoutGroup id="pairingGroup" translation="[960, 230]" layoutDirection="vert" horizAlignment="center" itemSpacings="[70, 36, 90]">
             <Poster id="logo" uri="pkg:/images/logo.png" width="560" height="136" />
-            <Label id="headingLabel" text="Display Device Code" font="font:LargeBoldSystemFont" color="0xFFFFFFFF" />
-            <Label id="codeLabel" text="" font="font:LargeSystemFont" color="0xFFFFFFFF" />
-            <Label id="instructionsLabel" text="" font="font:MediumSystemFont" color="0xCCCCCCFF" />
+            <Label id="headingLabel" text="Display Device Code" color="0xFFFFFFFF">
+                <Font role="font" uri="pkg:/fonts/SourceSansPro-Bold.otf" size="40" />
+            </Label>
+            <Label id="codeLabel" text="" color="0xFFFFFFFF">
+                <Font role="font" uri="pkg:/fonts/SourceSansPro-Bold.otf" size="72" />
+            </Label>
+            <Label id="instructionsLabel" text="" color="0xCCCCCCFF">
+                <Font role="font" uri="pkg:/fonts/SourceSansPro-Regular.otf" size="28" />
+            </Label>
         </LayoutGroup>
 
         <!-- A/B buffered page slots: each slot = page image + that page's

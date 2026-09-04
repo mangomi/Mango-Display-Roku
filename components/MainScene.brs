@@ -75,10 +75,21 @@ sub init()
     print "[Mango] scene "; m.sceneW; "x"; m.sceneH; " ("; res.name; ")"
     m.top.findNode("bg").width = m.sceneW
     m.top.findNode("bg").height = m.sceneH
-    ' the pairing screen was laid out for FHD: shrink it as one unit
+    ' The pairing screen is laid out in the 1920x1080 design space. It is
+    ' NOT scaled as a group - that rendered the text at design size and
+    ' resampled it, and 72px letters shrunk by 2/3 came out smeared (Dave,
+    ' 2026-09-03). Every size is converted to this scene's pixels instead,
+    ' so the labels rasterise on the pixels they are shown on.
     k = m.sceneW / 1920
-    m.pairingGroup.scale = [k, k]
-    m.pairingGroup.translation = [960 * k, 250 * k]
+    m.pairingGroup.translation = [960 * k, 230 * k]
+    m.pairingGroup.itemSpacings = [Int(70 * k), Int(36 * k), Int(90 * k)]
+    logo = m.top.findNode("logo")
+    logo.width = Int(560 * k)
+    logo.height = Int(136 * k)
+    for each pair in [["headingLabel", 40], ["codeLabel", 72], ["instructionsLabel", 28]]
+        lbl = m.top.findNode(pair[0])
+        if lbl <> invalid and lbl.font <> invalid then lbl.font.size = Int(pair[1] * k)
+    end for
     ' the manifest's coordinate space and how it sits on this screen
     m.stage = m.top.findNode("stage")
     m.canvasW = m.sceneW
@@ -104,6 +115,12 @@ sub init()
     m.fontBase = ""
     m.fontsReady = true
     m.fontTask = invalid
+    ' fonts confirmed present in cachefs (file -> true); read by every
+    ' overlay through rokuFontPath. The render thread cannot ask the file
+    ' system itself (roFileSystem is MAIN/TASK-only - creating it here
+    ' crashed the scene at first paint, 2026-09-03), so FontTask does and
+    ' the answer is kept on the global node.
+    m.global.addFields({ fontsReady: {} })
     m.pages = invalid
     m.latestPages = invalid
     m.pageIndex = 0
@@ -343,21 +360,23 @@ sub ensureFonts(pages as object)
             if pg.overlays <> invalid then collectFonts(pg.overlays, files, 0)
         end for
     end if
-    missing = []
-    fs = CreateObject("roFileSystem")
+    have = m.global.fontsReady
+    needed = []
+    missing = 0
     for each f in files
-        if not fs.Exists(rokuFontCachePath(f)) then missing.push(f)
+        needed.push(f)
+        if have = invalid or have[f] <> true then missing = missing + 1
     end for
-    if missing.Count() = 0 or m.fontBase = ""
+    if missing = 0 or m.fontBase = ""
         m.fontsReady = true
         return
     end if
     if m.fontTask <> invalid then m.fontTask.control = "stop"
     m.fontsReady = false
-    print "[Mango] fonts to fetch: "; missing.Count()
+    print "[Mango] fonts to check: "; needed.Count(); " ("; missing; " not yet known)"
     t = CreateObject("roSGNode", "FontTask")
     t.base = m.fontBase
-    t.files = missing
+    t.files = needed
     t.observeField("done", "onFontsDone")
     m.fontTask = t
     t.control = "RUN"
@@ -384,6 +403,19 @@ sub collectFonts(node as dynamic, files as object, depth as integer)
 end sub
 
 sub onFontsDone()
+    t = m.fontTask
+    if t <> invalid and t.ready <> invalid
+        have = m.global.fontsReady
+        if have = invalid then have = {}
+        merged = {}
+        for each k in have
+            merged[k] = have[k]
+        end for
+        for each f in t.ready
+            merged[f] = true
+        end for
+        m.global.fontsReady = merged
+    end if
     m.fontsReady = true
     m.fontTask = invalid
     maybeApplyPages()

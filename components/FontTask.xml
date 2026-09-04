@@ -7,6 +7,8 @@
     <interface>
         <field id="base" type="string" />
         <field id="files" type="array" />
+        <!-- every file of `files` that is in cachefs when the run ends -->
+        <field id="ready" type="array" />
         <field id="done" type="boolean" value="false" />
     </interface>
     <script type="text/brightscript" uri="pkg:/components/FontTask.brs" />

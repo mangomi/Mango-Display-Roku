@@ -82,11 +82,15 @@ function rokuFontCachePath(file as string) as string
     return "cachefs:/mmfont_" + file.Replace("/", "_")
 end function
 
+' Render-thread safe: roFileSystem is a MAIN/TASK-only component (creating
+' it in a SceneGraph component crashed the scene at first paint,
+' 2026-09-03), so the set of fonts known to be in cachefs lives on the
+' global node - FontTask checks and fetches, MainScene records the result
+' in m.global.fontsReady, everyone else just looks it up.
 function rokuFontPath(family as dynamic) as string
     f = rokuFontFile(family)
     if f = "" then return ""
-    p = rokuFontCachePath(f)
-    fs = CreateObject("roFileSystem")
-    if fs.Exists(p) then return p
-    return ""
+    have = m.global.fontsReady
+    if have = invalid or have[f] <> true then return ""
+    return rokuFontCachePath(f)
 end function

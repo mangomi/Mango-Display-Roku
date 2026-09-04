@@ -7,9 +7,13 @@ sub fetchFonts()
     base = m.top.base
     files = m.top.files
     if files = invalid then files = []
+    ready = []
     for each f in files
         dest = rokuFontCachePath(f)
-        if fs.Exists(dest) then continue for
+        if fs.Exists(dest)
+            ready.push(f)
+            continue for
+        end if
         req = CreateObject("roUrlTransfer")
         req.SetCertificatesFile("common:/certs/ca-bundle.crt")
         req.InitClientCertificates()
@@ -27,11 +31,13 @@ sub fetchFonts()
             end if
         end if
         if ok
+            ready.push(f)
             print "[Mango] font fetched: "; f
         else
             fs.Delete(tmp)
             print "[Mango] font fetch failed: "; f; " (falls back to Source Sans Pro)"
         end if
     end for
+    m.top.ready = ready
     m.top.done = true
 end sub

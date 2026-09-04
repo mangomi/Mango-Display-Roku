@@ -1,7 +1,7 @@
 title=Mango Display
 major_version=1
 minor_version=0
-build_version=00002
+build_version=00003
 mm_icon_focus_fhd=pkg:/images/icon_fhd.png
 mm_icon_focus_hd=pkg:/images/icon_hd.png
 mm_icon_focus_sd=pkg:/images/icon_sd.png

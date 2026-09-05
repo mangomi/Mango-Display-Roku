@@ -50,6 +50,10 @@ const DEVICE_DRAWN = new Set(["clock", "countdown", "gif"]);
 // deleted + blank page pruned, new page created, background flags):
 // page indexes shifted, so every page recaptures
 const DISPLAY_WIDE = new Set(["gesture", "overlay", "orientation", "structural"]);
+/* longest a single render may hold the fleet's render slot: pages plus
+ * sprite filming on a cold container run to ~60s; a hung browser call
+ * runs forever */
+const CAPTURE_HOLD_MS = 240000;
 
 /* A live portal costs real memory (~a browser tab per display) and holds
  * the display's socket, so it runs ONLY while a TV is actually watching.
@@ -588,9 +592,21 @@ class PaintedWorker extends DisplayWorker {
      * the widget a gesture touched, and background updates have no
      * gesture, so it fell back to the middle of the screen. */
     if (this.renderRank >= 3) this.setBusy(true, reason);
+    const tWait = Date.now();
     const release = await this.gate.acquire();
+    if (Date.now() - tWait > 15000) {
+      this.log("waited " + Math.round((Date.now() - tWait) / 1000) + "s for the render slot (" + reason + ")");
+    }
     const t0 = Date.now();
-    try {
+    /* The render slot is shared by every display on this task. A capture
+     * that never returns holds it forever and every other display stops
+     * publishing: on 2026-09-05 the Apple TV's browser page crashed, the
+     * next capture hung on the dead page, and for 40 minutes no display
+     * on the fleet got a new page - a tester's new Roku sat on the
+     * pairing screen with a claimed display behind it. So the work runs
+     * against a deadline, and a capture that misses it, or dies with the
+     * browser, gives the slot back and gets a fresh portal. */
+    const work = async () => {
       /* Staged publish: when one page is what the user is (about to be)
        * looking at, capture and publish IT first - the manifest's
        * pageMeta comes from the fresh capture so page counts are right
@@ -660,12 +676,39 @@ class PaintedWorker extends DisplayWorker {
           this.log("filmed sprites for page " + index + " in " + (Date.now() - f0) + "ms");
         }
       }
+    };
+    let deadlineTimer = null;
+    const deadline = new Promise((_, reject) => {
+      deadlineTimer = setTimeout(
+        () => reject(new Error("capture held the render slot for " + CAPTURE_HOLD_MS / 1000 + "s")),
+        CAPTURE_HOLD_MS,
+      );
+    });
+    const running = work();
+    running.catch(() => {}); /* a late failure after the deadline won is logged below, not unhandled */
+    let dead = false;
+    try {
+      await Promise.race([running, deadline]);
     } catch (e) {
       this.log("capture FAILED:", e.message);
+      dead = /Target crashed|Target closed|has been closed|browser has disconnected|held the render slot/i.test(e.message || "");
+    }
+    clearTimeout(deadlineTimer);
+    if (dead) {
+      /* closing the browser makes every hung call inside reject, so the
+       * old work cannot come back later and publish over a fresh portal */
+      this.log("portal is dead or stuck - closing it and starting over");
+      if (this.portal) await this.portal.close("capture failed").catch(() => {});
+      this.filmPages = new Set();
     }
     release();
     this.rendering = false;
     this.abortRender = false;
+    if (dead) {
+      this.openPortal()
+        .then(() => this.queueCapture(null, "portal restart"))
+        .catch((e) => this.log("portal restart failed:", e.message));
+    }
     if (!aborted) this.clearBusySoon();
     if (this.pendingRender) {
       this.pendingRender = false;

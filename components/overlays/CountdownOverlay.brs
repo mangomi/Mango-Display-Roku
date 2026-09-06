@@ -27,14 +27,25 @@ end sub
 
 function makeLabel(el as object) as object
     lbl = m.top.createChild("Label")
-    lbl.translation = [el.rect.x, el.rect.y]
-    lbl.width = el.rect.w
-    lbl.height = el.rect.h
-    lbl.vertAlign = "center"
     align = "center"
     if el.align = "left" or el.align = "start" then align = "left"
     if el.align = "right" or el.align = "end" then align = "right"
+    ' The portal's box is exactly as wide as the number it holds, measured
+    ' with sub-pixel advances; the Roku rasterizes with whole-pixel
+    ' advances and its own hinting, so the same digits can come out a
+    ' pixel or two wider than the box. A Label of that exact width then
+    ' ellipsizes them to "..." (tester, 2026-09-05). Give the label a
+    ' font-size of slack on the aligned side(s) and never ellipsize.
+    pad = Int(el.fontSizePx)
+    x = el.rect.x
+    if align = "center" then x = x - pad / 2
+    if align = "right" then x = x - pad
+    lbl.translation = [x, el.rect.y]
+    lbl.width = el.rect.w + pad
+    lbl.height = el.rect.h
+    lbl.vertAlign = "center"
     lbl.horizAlign = align
+    lbl.ellipsisText = ""
     lbl.color = el.color.Replace("#", "0x")
     fnt = CreateObject("roSGNode", "Font")
     ' the user's chosen family from the bundled catalog; unknown or

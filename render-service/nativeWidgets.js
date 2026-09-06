@@ -1716,6 +1716,7 @@ function csKey(o, outScale) {
         Math.round(o.rect.h * outScale),
         Math.round(o.innerHeight),
         Math.round(o.durationMs),
+        o.styleSig || "",
         layoutTag(outScale),
       ].join("|"),
     )
@@ -1772,6 +1773,7 @@ function csStripKey(o, outScale) {
         Math.round(o.rect.h * outScale),
         Math.round(o.innerHeight),
         o.boxSig || "",
+        o.styleSig || "",
         layoutTag(outScale),
       ].join("|"),
     )
@@ -1851,6 +1853,7 @@ async function csCaptureStrips(page, frame, items, ctx) {
     delete o.speed;
     delete o._slices;
     delete o.boxSig;
+    delete o.styleSig;
   };
   /* the same checkbox art the static targets use */
   const sprites = await generateCheckboxSprites(ctx.outDir);
@@ -2401,6 +2404,28 @@ const cellScrollHandler = {
         const boxSig = [...win.querySelectorAll("input.todocheckbox")]
           .map((b) => (b.checked ? "1" : "0"))
           .join("");
+        /* how the rows are drawn, as a signature: the cache key is
+         * otherwise all geometry, so a format change that keeps the
+         * geometry - centred to left-aligned, another font, another
+         * colour - matched the old strip and the device kept showing it
+         * (tester, 2026-09-05). The first rows' computed text styles and
+         * their containers' flex alignment cover every format knob that
+         * moves pixels without moving the box. */
+        const styleSig = (() => {
+          const parts = [];
+          const nodes = [c.content, ...c.content.querySelectorAll("*")].slice(0, 24);
+          for (const n of nodes) {
+            const cs = getComputedStyle(n);
+            parts.push(
+              [
+                cs.textAlign, cs.justifyContent, cs.alignItems, cs.fontFamily, cs.fontSize,
+                cs.fontWeight, cs.fontStyle, cs.color, cs.textTransform, cs.letterSpacing,
+                cs.textDecorationLine, cs.opacity,
+              ].join(","),
+            );
+          }
+          return parts.join(";");
+        })();
         out.push({
           type: "cellScroll",
           idx: i,
@@ -2408,6 +2433,7 @@ const cellScrollHandler = {
           date: c.date || null,
           widgetSettingId: c.widgetId || null,
           boxSig,
+          styleSig,
           rect: { x: r.x, y: r.y, w: r.width, h: winH },
           boxHeight: c.boxHeight,
           innerHeight: c.innerHeight,
@@ -2551,6 +2577,8 @@ const cellScrollHandler = {
       delete o.innerHeight;
       delete o.durationMs;
       delete o.speed;
+      delete o.boxSig;
+      delete o.styleSig;
     };
 
     const hits = live.map((o) => csCachedSheet(o, ctx.outDir, ctx.outScale));

@@ -229,6 +229,44 @@ class DisplayWorker {
 
   // Tear down everything owned. Safe to call once; the worker object must
   // not be reused afterwards.
+  /* The display was reset in the webapp: publish one manifest that says
+   * so - the device drops to its pairing screen with the code it already
+   * has - then stop. The fleet forgets a stopped worker on the device's
+   * next poll, and the backend, which no longer knows the code, refuses
+   * a new one until the display is claimed again. */
+  async unpair() {
+    if (this.unpairing || this.stopped) return;
+    this.unpairing = true;
+    fs.writeFileSync(
+      path.join(this.dir, "display.json"),
+      JSON.stringify(
+        {
+          schema: 1,
+          canvas: { width: this.display.canvasW, height: this.display.canvasH },
+          rotation: this.display.rotation || 0,
+          paired: false,
+          version: this.version + 1,
+          updateReason: "reset",
+          pages: [],
+        },
+        null,
+        1,
+      ),
+    );
+    const announce = () => {
+      this.version = this.version + 1;
+      this.lastPublishAt = Date.now();
+      try {
+        fs.writeFileSync(this.versionFile(), String(this.version));
+      } catch (e) {}
+      this.log("display.json: unpaired (display reset); version ->", this.version);
+      this.flushWaiters();
+    };
+    if (r2Enabled()) await this.pushToR2("display reset", false).then(announce, announce);
+    else announce();
+    await this.stop("display reset");
+  }
+
   async stop(why) {
     if (this.stopped) return;
     this.stopped = true;

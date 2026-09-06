@@ -240,7 +240,11 @@ async function startWorker(cfg) {
 // sockets fighting over the identity.
 async function getOrCreateWorker(id) {
   const existing = workers.get(id.device);
-  if (existing) {
+  if (existing && existing.stopped) {
+    /* a worker that unpaired itself (display reset) is done; the next
+     * poll gets a fresh look at the backend record */
+    workers.delete(id.device);
+  } else if (existing) {
     existing.lastSeen = Date.now();
     return existing;
   }

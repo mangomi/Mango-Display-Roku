@@ -365,6 +365,16 @@ class PaintedWorker extends DisplayWorker {
   onPortalChange(message) {
     this.lastSignalAt = Date.now();
     const type = message.widgetType;
+    /* The backend's reset deletes the display and tells the portal
+     * (socket resetDevice); the portal's handler only toasts, and in
+     * painted mode also raises this signal. Until 2026-09-05 nothing
+     * here listened, so a reset display kept rendering until the
+     * channel was relaunched. */
+    if (message.source === "socket" && type === "reset") {
+      this.log("change: socket/reset - the display was reset, sending the device back to pairing");
+      this.unpair().catch((e) => this.log("unpair failed:", e.message));
+      return;
+    }
     if (type && DEVICE_DRAWN.has(type)) {
       this.log("change: " + message.source + "/" + type + " - device draws this, no capture");
       return;

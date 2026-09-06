@@ -68,6 +68,11 @@ rotation      0 | 90 | 270 - degrees CLOCKWISE, as the viewer sees it,
               CSS-rotated iframe, which a headless capture cannot see
               into; rendering the plain page portrait and turning it on
               the device keeps every rect in the portal's own space.)
+paired        false when the display was reset in the webapp: the
+              manifest carries no pages and the client must return to
+              its pairing screen with the device code it already has
+              (the code stays valid; the user adds the display again).
+              Absent means paired.
 updateReason  "auto" for background refreshes (startup, scheduled,
               midnight, data), "edit" when a user changed something.
               Clients use this to decide whether to show a progress

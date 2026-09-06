@@ -238,6 +238,14 @@ end sub
 sub onVersionChange()
     m.lastVersionSeconds = CreateObject("roDateTime").AsSeconds()
     man = m.versionTask.manifest
+    ' the display was reset in the webapp: back to the pairing screen with
+    ' the code this box already has, so it can simply be added again
+    if man <> invalid and man.paired = false
+        print "[Mango] display was reset - back to pairing"
+        if m.task <> invalid then m.task.control = "STOP"
+        startPairing()
+        return
+    end if
     if man = invalid or man.pages = invalid or man.pages.Count() = 0 then return
     print "[Mango] display.json: "; man.pages.Count(); " page(s)"
     applyCanvas(man)

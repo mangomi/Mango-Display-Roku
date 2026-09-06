@@ -71,6 +71,24 @@ off there, not deleted here.
   until then tvOS keeps receiving sheets. Reference:
   `components/overlays/MotionOverlay.brs`.
 
+## REQUIRED — display reset (`paired: false`, 2026-09-05)
+
+**Manifest:** a new top-level `paired` field. `false` means the display
+was reset in the webapp: the manifest carries no pages, and the client
+must return to its pairing screen with the device code it already has
+(the code stays valid; the user adds the display again and the normal
+flow resumes). Absent means paired. See MANIFEST.md.
+
+**What the server does:** on the portal's `socket/reset` signal (portal
+PR: painted-reset-signal) the worker publishes that manifest, stops, and
+is forgotten by the fleet; a new worker starts only once the backend
+vouches for the code again.
+
+**What the client must do (Roku reference: MainScene `onVersionChange`
+-> `startPairing`):** check `paired` BEFORE the pages check; stop the
+version poll, show the pairing screen with the existing code, and start
+the pairing poll against the backend as at first launch.
+
 ## VERIFY — server behavior changed; client likely fine as built
 
 - [ ] **Rotating weather-icon layers now arrive as `gif` frame sheets**

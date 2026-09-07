@@ -476,7 +476,7 @@ hand-over each and not one failed poll.
 |---|---|---|
 | Scale-out / scale-in | target tracking on `ECSServiceAverageMemoryUtilization` 70% and `ECSServiceAverageCPUUtilization` 65% | ECS follows whichever asks for more tasks. Built-in metrics, no custom metric. |
 | Task range | min 1, **max 14** | The $500/month limit: one on-demand task (~$89) + 13 Spot tasks (~$27–30 each) + the ALB/logs floor. Recompute if the task size changes. |
-| Cooldowns | scale-out 120 s, scale-in 900 s | A task takes ~1 min to become healthy; evenings move many TVs at once. |
+| Cooldowns | scale-out 120 s, scale-in 300 s | A task takes ~1 min to become healthy. Target tracking removes ONE task per scale-in cooldown at low load (measured: 14→13→12 at 15-min steps), so 15 min meant hours of idle Spot tasks after a peak; 5 min drains a peak in about an hour. |
 | Claim refusal | memory ≥ 85%, CPU ≥ 70% for 30 s, ≥ 4 portals booting, or 20 claims/min | `REFUSE_MEM_FRACTION`, `REFUSE_CPU_FRACTION`, `REFUSE_CPU_SUSTAIN_MS`, `MAX_BOOTING`, `MAX_CLAIMS_PER_MIN` |
 | Lease | 90 s, renew 30 s | `OWNERSHIP_LEASE_MS`, `OWNERSHIP_RENEW_MS` |
 | Capacity | `FARGATE` base 1 weight 1, `FARGATE_SPOT` weight 4 | One task can never be reclaimed; the rest are ~70% off. |

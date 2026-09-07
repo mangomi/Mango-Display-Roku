@@ -438,6 +438,35 @@ function forwardTo(addr, req, res, attempt = 1) {
   });
 }
 
+/* Admission: usage lags a burst. A fresh task claimed 89 displays in
+ * ninety seconds before its CPU sample said anything, then sat at 100%
+ * with 89 browsers booting (phase 1, 2026-09-07). So besides the usage
+ * thresholds a task takes new displays only while few are still
+ * booting, and only so many a minute. */
+const MAX_BOOTING = parseInt(env("MAX_BOOTING", "4"), 10);
+const MAX_CLAIMS_PER_MIN = parseInt(env("MAX_CLAIMS_PER_MIN", "20"), 10);
+const claimTimes = [];
+function bootingCount() {
+  let n = 0;
+  for (const w of workers.values()) {
+    if (w.stopped) continue;
+    /* a painted worker with no ready portal is still booting; the old
+     * pipeline's workers have no portal at all and never count */
+    if ("portal" in w && (!w.portal || !w.portal.ready)) n++;
+  }
+  return n;
+}
+function admission() {
+  const r = usage.refusal();
+  if (r) return r;
+  const booting = bootingCount();
+  if (booting >= MAX_BOOTING) return booting + " portal(s) still booting";
+  const now = Date.now();
+  while (claimTimes.length && now - claimTimes[0] > 60000) claimTimes.shift();
+  if (claimTimes.length >= MAX_CLAIMS_PER_MIN) return "claim rate (" + claimTimes.length + "/min)";
+  return null;
+}
+
 /* Decide who serves this display: us, another task (forward), or nobody
  * yet (claim). Returns { own: true } | { forward: addr } | { retry: why }. */
 async function route(id, req) {
@@ -463,7 +492,7 @@ async function route(id, req) {
     return { forward: row.taskAddr };
   }
   if (hop) return { retry: "forwarded to a task that does not own the display" };
-  const refusal = usage.refusal();
+  const refusal = admission();
   if (refusal) {
     log("refusing " + device + " - " + refusal);
     return { retry: "task full (" + refusal + ")" };
@@ -475,6 +504,7 @@ async function route(id, req) {
     return { retry: "ownership store unreachable" };
   }
   if (won) {
+    claimTimes.push(Date.now());
     log("claimed " + device + " (" + ownership.count() + " owned)");
     return { own: true };
   }
@@ -515,6 +545,7 @@ function healthReport() {
     lastPublishAgoMs: lastPublish ? now - lastPublish : null,
     wanting,
     usage: usage.snapshot(),
+    admission: { booting: bootingCount(), claimsLastMinute: claimTimes.filter((t) => now - t <= 60000).length, refusing: admission() },
     ownership: own,
     reasons: [storeDown ? "ownership store failing" : null, wedged ? "watched displays not publishing" : null].filter(Boolean),
   };
@@ -673,7 +704,7 @@ async function publishMetrics() {
       data.push({ MetricName: "OwnedDisplays", Dimensions: dims(withTask), Value: owned, Unit: "Count" });
       data.push({ MetricName: "WatchedDisplays", Dimensions: dims(withTask), Value: h.watched, Unit: "Count" });
       data.push({ MetricName: "OpenPortals", Dimensions: dims(withTask), Value: h.portals, Unit: "Count" });
-      data.push({ MetricName: "Refusing", Dimensions: dims(withTask), Value: snap.refusing ? 1 : 0, Unit: "Count" });
+      data.push({ MetricName: "Refusing", Dimensions: dims(withTask), Value: admission() ? 1 : 0, Unit: "Count" });
       data.push({ MetricName: "UnhealthyWorkers", Dimensions: dims(withTask), Value: h.unhealthyWorkers, Unit: "Count" });
     }
     await cloudwatch.client.send(new cloudwatch.PutMetricDataCommand({ Namespace: METRIC_NAMESPACE, MetricData: data }));

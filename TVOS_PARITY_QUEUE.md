@@ -11,13 +11,13 @@ off there, not deleted here.
 
 ## REQUIRED — new client behavior
 
-- [ ] **Fonts come from the CDN** (`fontBase` in display.json,
+- [x] **Fonts come from the CDN** (`fontBase` in display.json,
   2026-09-03): the Roku no longer bundles the Google Fonts (4MB package
   limit). Fetch `<fontBase>gf/<File>.ttf` for every `fontFamily` a
   manifest names (fontMap.json has the family -> file map) into a local
   cache before building labels; fall back to the bundled Source Sans Pro.
 
-- [ ] **Night mode** (`night: true` in display.json, 2026-09-03): pages
+- [x] **Night mode** (`night: true` in display.json, 2026-09-03): pages
   arrive as fully transparent PNGs with a single `motion` overlay (the
   badge). Play a black looping video FULL SCREEN beneath the page layer
   (Roku reuses its keep-alive clip: MainScene `applyNight`), hide any
@@ -25,7 +25,7 @@ off there, not deleted here.
   absent, restore the backdrop and the hidden keep-alive player. A black
   image is NOT equivalent: TVs only dim their backlight for video.
 
-- [ ] **`scroll` overlay type — natively scrolled calendar cells / lists**
+- [x] **`scroll` overlay type — natively scrolled calendar cells / lists**
   (Roku `ScrollOverlay`, commit `37f3826`). For Roku the server no longer
   films scrolling cell content into a `gif` sprite sheet; it captures it
   ONCE as a tall transparent strip and the device animates it. Fields:
@@ -41,7 +41,7 @@ off there, not deleted here.
   added there — ship the client first, then flip the list. Reference:
   `components/overlays/ScrollOverlay.brs`; schema in MANIFEST.md.
 
-- [ ] **`manifest.showPage` — jump to the page being edited**
+- [x] **`manifest.showPage` — jump to the page being edited**
   (Roku commits `b0c3f90`, `29daa64`). A layout edit in the webapp now
   navigates the portal to the edited page, and the published
   `display.json` carries a top-level `showPage` (integer page index)
@@ -53,7 +53,7 @@ off there, not deleted here.
   idempotent (only jump when different). Roku reference:
   `components/MainScene.brs` `maybeApplyPages`.
 
-- [ ] **`motion` overlay type — natively animated weather icons**
+- [x] **`motion` overlay type — natively animated weather icons**
   (Roku `MotionOverlay`; server `3665bd4` widget icons, `9272ebe` calendar
   strips; deployed to test 2026-09-02). For platforms in
   `NATIVE_WEATHER_PREFIXES` (`render-service/capture.js`, currently `RK`)
@@ -91,7 +91,7 @@ the pairing poll against the backend as at first launch.
 
 ## VERIFY — server behavior changed; client likely fine as built
 
-- [ ] **Rotating weather-icon layers now arrive as `gif` frame sheets**
+- [x] **Rotating weather-icon layers now arrive as `gif` frame sheets**
   (2026-09-02, `WXM_VERSION` 4): a sunny / partly-cloudy / sun-rain icon
   is emitted as up to three overlays at the same rect - `motion` (layers
   below), `gif` (the rays, 90 frames in a cols x rows grid, `frameW/H` =
@@ -100,22 +100,22 @@ the pairing poll against the backend as at first launch.
   overlays in list order and already plays `gif` sheets, nothing to do;
   check that the sheet's `cols`/`rows` grid (not a single column) is
   honoured and that frames are stretched to `frameW x frameH`.
-- [ ] **Two popup entries can share one sprite sheet** (firework runs
+- [x] **Two popup entries can share one sprite sheet** (firework runs
   two concurrent players, `8d01b6d`): the effects array may contain
   multiple `popup` entries whose `stripFile` is the same file with
   different `dwellMsRange`. One player node per ENTRY, fetch/decode
   the shared sheet once.
-- [ ] **Layout edits now arrive fast and page-targeted** (`5fcdbe5`,
+- [x] **Layout edits now arrive fast and page-targeted** (`5fcdbe5`,
   `d0c5763`, `ea6d385`): no client change — they land as ordinary
   version bumps (~4s after a webapp edit) — but expect much more
   frequent single-page updates than the old restart-display cadence.
-- [ ] **`imageOnly` may be promoted to full** when an interaction
+- [x] **`imageOnly` may be promoted to full** when an interaction
   changes a page's overlay set (`4e88eb6`, e.g. calendar scrolled off
   the 10-day weather window): the client must rebuild that page's
   overlays on a full manifest even mid-gesture. If the tvOS gesture
   path assumes swipe answers are always imageOnly, revisit.
 
-- [ ] **Staged publishes arrive as two manifests seconds apart**
+- [x] **Staged publishes arrive as two manifests seconds apart**
   (`dbf5b6e`): a user-driven multi-page render publishes the priority
   page first (with `showPage`), then everything again moments later.
   Verify the client applies consecutive versions gracefully - and that
@@ -123,7 +123,7 @@ the pairing poll against the backend as at first launch.
   stage two N+1) doesn't reset rotation state or crash an
   out-of-range current page.
 
-- [ ] **Remote double-click timing** (`<latest>`): if the tvOS client
+- [x] **Remote double-click timing** (`<latest>`): if the tvOS client
   implements an arrow/button double-press gesture, match the Roku's
   corrected rule - a press is only a "hold" once it has glided a
   visible distance (4 steps), not on its first glide tick, and the
@@ -216,7 +216,7 @@ layout.
 
 ## REQUIRED — catch-up 2026-09-03 → 2026-09-07 (Roku channel 1.0 build 4, production live)
 
-- [ ] **Countdown value labels: never ellipsize** (Roku `7fdc46c`,
+- [x] **Countdown value labels: never ellipsize** (Roku `7fdc46c`,
   `CountdownOverlay.brs` `makeLabel`). The portal's element rect is
   exactly as wide as the number, measured with sub-pixel advances; a
   native label of that exact width truncates to "..." when the
@@ -228,7 +228,7 @@ layout.
   wider frame). Applies to `day`/`hour`/`minute`/`second` and their
   captions alike.
 
-- [ ] **Fonts: fetch before applying, gate on readiness** (Roku
+- [x] **Fonts: fetch before applying, gate on readiness** (Roku
   `050c1d8`, refines the fonts entry above). The Roku's FontTask checks
   its cache for every family the incoming manifest names, downloads
   the missing ones, and reports `ready`; the scene keeps a
@@ -237,17 +237,17 @@ layout.
   access is task-thread only on Roku; on tvOS just do it off the main
   thread. Family → file map: `source/fontMap.brs` (`gf/<File>.ttf`).
 
-- [ ] **Pairing screen at native size** (Roku `050c1d8`): heading 40,
+- [x] **Pairing screen at native size** (Roku `050c1d8`): heading 40,
   code 72, instructions 28 in a 1920-wide design space, converted to
   the scene's own pixels (no group scaling — a scaled group blurs the
   text). Instructions read `"Setup at " + setupHost + " using any
   browser"` from the environment config. Roku reference: MainScene
   pairing labels with `Int(size * k)`.
 
-- [ ] **Spinner centred on the scene, not on 1920x1080** (Roku
+- [x] **Spinner centred on the scene, not on 1920x1080** (Roku
   `4b5d2a1`): follows the canvas/scene size from the resolution entry.
 
-- [ ] **Environments and the production channel** (Roku `package.sh`
+- [x] **Environments and the production channel** (Roku `package.sh`
   `prod`, `source/env.brs`; production render service live 2026-09-07):
   the build carries an environment config —
 
@@ -265,7 +265,7 @@ layout.
   built this way. tvOS: mirror with a build configuration / scheme,
   never a runtime switch.
 
-- [ ] **Poll semantics under the fleet** (server `2a56f82`..`1e39144`,
+- [x] **Poll semantics under the fleet** (server `2a56f82`..`1e39144`,
   no manifest change): `/wait`, `/version` and `/interact` may answer
   **503 with `Retry-After: 5`** and a JSON `{error, retry: true}`
   while a display is being handed between tasks or every task is full.
@@ -277,11 +277,11 @@ layout.
 
 ## UPCOMING — decided, not yet built (post-production list, OPS_RUNBOOK §5)
 
-- [ ] **Poll backoff with jitter + launch delay**: on failed waits back
+- [x] **Poll backoff with jitter + launch delay**: on failed waits back
   off 5 → 10 → 20 → 40 s up to 2 min with random spread, reset on
   success; on an app launch after a crash wait a random 0–30 s before
   the first poll. Both clients, next builds.
-- [ ] **Memory guard**: when the platform reports low memory, stop
+- [x] **Memory guard**: when the platform reports low memory, stop
   loading new scroll strips (show those cells from the page image) and
   report the level in the poll (`mem=` already exists on Roku).
 
@@ -322,6 +322,5 @@ layout.
   and production infrastructure: nothing for the client beyond the
   environment table above.
 
-*Baseline context: tvOS parity marker sits at Roku `56392b2`; this
-queue covers everything after it. Last updated: 2026-09-07 (channel
+*Baseline context: tvOS parity marker moved to Roku `91828ec` on 2026-09-07 (tvOS catch-up commits); items above are ticked by the tvOS session as they land. Last updated: 2026-09-07 (channel
 1.0 build 4 / production live; Roku `live-portal` head `3b94f35`).*

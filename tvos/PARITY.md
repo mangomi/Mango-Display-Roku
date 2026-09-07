@@ -1,6 +1,6 @@
 # tvOS ↔ Roku parity marker
 
-**Behavior parity as of Roku commit `367a1de`** (branch `live-portal`;
+**Behavior parity as of Roku commit `91828ec`** (branch `live-portal`;
 docs-only commits since `cfc6c1a`, which is the Roku client state this
 port was written against).
 
@@ -250,6 +250,70 @@ only: slideshow as a placed widget, brightness<1 photo dim, slide/flip
 photo swaps, and the celebration finale (fires the first time a whole
 list completes on-device). Phase C (hardware, trackpad pointer, soak)
 is next.
+
+## Roku 1.0 build 4 / production catch-up (2026-09-07)
+
+Everything in `TVOS_PARITY_QUEUE.md` up to Roku `91828ec` (channel 1.0
+build 4, production live), ported in two commits:
+
+- **Countdown labels never ellipsize** (7fdc46c): a font-size of slack
+  on the aligned side(s) + `fixedSize` (overflow, never "...").
+- **Pairing screen at native design sizes** (050c1d8): Source Sans Pro
+  40/72/28 in the 1920 space, converted per screen, never group-scaled.
+- **Fleet 503 + Retry-After**: a failed wait, re-polled after the hint.
+- **Display reset** (9eadb53): `paired:false` (page-less manifest,
+  accepted by the parser for that case alone) → pairing screen with the
+  existing code, pairing poll restarted, no relaunch.
+- **CDN fonts** (cd80449/050c1d8): `fontBase`, families → files via
+  fontMap.json, missing files fetched into Caches/fonts and registered
+  before pages apply (`fontsReady` gate). DELIBERATE DIVERGENCE: tvOS
+  keeps the bundled catalog (no 4MB limit here), so the fetch only ever
+  runs for a family added to the portal after this build.
+- **Night mode** (456ec95): black VIDEO (the shared media/silent_loop.mp4,
+  bundled by folder reference) full screen under the transparent page.
+- **Canvas at the device's own resolution + rotation** (92ead67,
+  1702ee8, 71399e1): `canvas` and `rotation` from display.json;
+  `CanvasSpace` scales by the long side, centres on the screen centre
+  and turns the WHOLE stage clockwise (SwiftUI's positive rotation is
+  already the viewer's clockwise - no sign flip, unlike SceneGraph);
+  effects spawn against `canvasW/H` injected into their configs;
+  pointer starts at the canvas centre, clamps to canvas bounds, and
+  arrows remap for 90/270; celebration finale bands and the spinner
+  default follow the canvas. Regression-checked on the FHD landscape
+  display (identical render). Portrait: see the verification note.
+- **`scroll` overlays + checkboxes riding the strip** (37f3826,
+  6ce70f4, 0eb3117, 986c5de): `ScrollStripState` (shared with the
+  interaction layer) drives an analytic linear loop from fromY to toY
+  over durationMs inside the clipped window, segments stacked, boxes
+  drawn INSIDE the strip; the interaction layer aims at strip boxes at
+  their live rect while their row is in the window, holds the strip
+  only while a box is aimed at, ticks through the ordinary interact
+  call with the held-override rule, and clears a page's boxes the
+  moment its transition starts. Under memory pressure no NEW strip is
+  loaded (the memory guard).
+- **`motion` overlays** (3665bd4, 9272ebe, aec3b94): layered PNGs with
+  rotation/translation/scale/opacity keyframe tracks, delays, holds,
+  infinite loops, nested `chain` groups, drawn in a clipped Canvas every
+  frame in overlay-list order (so the rotating-ray `gif` sandwich
+  between two `motion` entries paints correctly).
+- **Poll backoff with jitter + post-kill launch delay** (OPS_RUNBOOK
+  §5): failed waits back off 5→10→20→40→80→120s ±25%, reset on
+  success; a launch whose previous run ended "killed" waits a random
+  0–30s before its first poll.
+- **Production build configuration**: `MangoDisplayTV Prod` scheme /
+  `Production` configuration defines `MANGO_PROD`; Env.swift then
+  carries api.mangomirror.com, app.mangodisplay.com and
+  roku-control.mangodisplay.com (host-header routed - hostname only).
+  Debug and Release stay on TEST. Verified: the Production binary
+  embeds only the production control host. NEVER install a Production
+  build on the test rig - it would register the code on production.
+
+Pending server-side coordination: `scroll` and `motion` reach a device
+only when its prefix is in `NATIVE_SCROLL_PREFIXES` /
+`NATIVE_WEATHER_PREFIXES` (`render-service/capture.js`, currently
+`["RK"]`). The client is ready; ask the server-side agent to add `"ATV"`
+and verify against the live display afterwards. Until then tvOS keeps
+receiving the `gif` sheets, which still play.
 
 ## Spike-only conveniences to revisit
 

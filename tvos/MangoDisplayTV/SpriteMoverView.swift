@@ -32,14 +32,17 @@ struct SpriteMoverView: View {
             Canvas { ctx, _ in
                 guard let base = sheet else { return }
                 let t = tl.date.timeIntervalSince(epoch)
+                // bounce inside the CANVAS, whatever its shape
+                let cw = JSON.double(cfg["canvasW"]) ?? 1920
+                let ch = JSON.double(cfg["canvasH"]) ?? 1080
                 let (x, dirX) = Self.axis(start: JSON.double(cfg["startX"]) ?? 0,
                                           dir: JSON.double(cfg["startDirX"]) ?? 1,
                                           speed: JSON.double(cfg["speedX"]) ?? 120,
-                                          maxV: 1920 - frameW, t: t)
+                                          maxV: cw - frameW, t: t)
                 let (y, dirY) = Self.axis(start: JSON.double(cfg["startY"]) ?? 50,
                                           dir: JSON.double(cfg["startDirY"]) ?? 1,
                                           speed: JSON.double(cfg["speedY"]) ?? 30,
-                                          maxV: 1080 - frameH, t: t)
+                                          maxV: ch - frameH, t: t)
                 var c = ctx
                 c.translateBy(x: x, y: y)
                 if JSON.truthy(cfg["rotateOnTurn"]) {

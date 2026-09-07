@@ -44,8 +44,9 @@ struct ParticleEffectView: View {
                     let f = min(1, max(0, tl.date.timeIntervalSince(p.start) / p.duration))
                     let t = p.startProgress + f * p.remaining
                     let h = p.size * p.aspect
-                    let travel = 1080 + h * 2
-                    let y = p.down ? -h + travel * t : 1080 + h - travel * t
+                    let canvasH = JSON.double(cfg["canvasH"]) ?? 1080
+                    let travel = canvasH + h * 2
+                    let y = p.down ? -h + travel * t : canvasH + h - travel * t
                     let x = p.startX + p.amp * sin(t * p.fullDuration * (2 * .pi / p.period) + p.phase)
                     let scale = (1 + (p.growth - 1) * p.startProgress)
                         + ((p.growth) - (1 + (p.growth - 1) * p.startProgress)) * f
@@ -123,7 +124,8 @@ struct ParticleEffectView: View {
         let size = pick("sizeRange", 30, 70)
         let aspect = defs[idx].aspect
         let speed = pick("speedRange", 12, 42)
-        let travel = 1080 + size * aspect * 2
+        // travel edge to edge of the CANVAS (a portrait display is taller)
+        let travel = (JSON.double(cfg["canvasH"]) ?? 1080) + size * aspect * 2
         let fullDuration = max(4, travel / speed)
         let remaining = max(0.15, 1 - progress)
         let fadeInPx = JSON.double(cfg["fadeInPx"]) ?? 100
@@ -134,7 +136,7 @@ struct ParticleEffectView: View {
             duration: fullDuration * remaining,
             startProgress: progress,
             remaining: remaining,
-            startX: Double.random(in: 0...1920),
+            startX: Double.random(in: 0...(JSON.double(cfg["canvasW"]) ?? 1920)),
             amp: pick("driftAmplitudeRange", 20, 60),
             period: pick("driftPeriodRange", 4.2, 12.6),
             fullDuration: fullDuration,

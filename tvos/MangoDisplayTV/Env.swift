@@ -2,20 +2,31 @@
 //
 // The Roku channel compiles its environment in via package.sh, and the
 // checked-in copy is ALWAYS the test one so a naive build can never touch
-// production. Same posture here: this file targets TEST; production will
-// arrive as a dedicated build configuration defining the MANGO_PROD
-// compilation condition, and until the prod fleet + DNS exist
-// (roku-control.mangodisplay.com is not stood up yet, APPLE_TV.md §1)
-// asking for prod is a compile error rather than a silent misroute.
+// production; `./package.sh prod` regenerates it for that build alone.
+// Same posture here, as a build configuration rather than a runtime
+// switch: Debug and Release target TEST; only the "Production" build
+// configuration (its own scheme, used to archive) defines the MANGO_PROD
+// compilation condition and gets the production hosts. Nothing at
+// runtime can flip it.
 //
 // Codes registered on one backend can only be claimed from the matching
 // webapp, and the control endpoint must serve the same environment the
-// device paired against.
+// device paired against. The two control names share one load balancer
+// that routes by HOST HEADER - the hostname is the contract, never the
+// balancer's address or an IP (anything else answers 404).
 
 import Foundation
 
 #if MANGO_PROD
-#error("No production environment is wired up yet: the prod control fleet/DNS does not exist (APPLE_TV.md §1). Build without MANGO_PROD.")
+enum Env {
+    static let name = "production"
+    /// Device-facing API version v1.0.5 - what Tizen and the Roku speak
+    /// (Dave's decision 2026-08-26; the webapp itself is on v1.0.16).
+    static let apiBase = URL(string: "https://api.mangomirror.com/v1.0.5/")!
+    static let setupHost = "app.mangodisplay.com"
+    /// production render service, live 2026-09-07
+    static let controlBase = URL(string: "https://roku-control.mangodisplay.com")!
+}
 #else
 enum Env {
     static let name = "test"

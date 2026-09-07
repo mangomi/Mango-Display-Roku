@@ -85,6 +85,13 @@ struct DisplayManifest {
     /// plays a black VIDEO full screen underneath (TVs dim their
     /// backlight for video, not for a black picture)
     let night: Bool
+    /// the coordinate space of every rect: the display's OWN resolution
+    /// (1280x720, 1920x1080, ...), swapped for a rotated display; nil on
+    /// old manifests (assume the screen)
+    let canvas: CGSize?
+    /// 0 | 90 | 270, degrees CLOCKWISE as the viewer sees it, to turn the
+    /// whole canvas upright on this screen (portrait displays)
+    let rotation: Int
     let pages: [Page]
 
     init?(_ dict: [String: Any]) {
@@ -103,5 +110,11 @@ struct DisplayManifest {
         showPage = JSON.int(dict["showPage"])
         fontBase = JSON.str(dict["fontBase"])
         night = JSON.truthy(dict["night"])
+        if let c = JSON.obj(dict["canvas"]), let w = JSON.double(c["width"]), let h = JSON.double(c["height"]), w > 0, h > 0 {
+            canvas = CGSize(width: w, height: h)
+        } else {
+            canvas = nil
+        }
+        rotation = JSON.int(dict["rotation"]) ?? 0
     }
 }

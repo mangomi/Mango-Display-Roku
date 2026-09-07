@@ -32,6 +32,19 @@ final class DisplayController: ObservableObject {
     @Published private(set) var celebrationBursts: [CelebrationBurstSpec] = []
     /// night mode: a black video plays full screen under the page layer
     @Published private(set) var night = false
+
+    /// The manifest's coordinate space and how it sits on this screen
+    /// (MainScene applyCanvas): the display's own resolution, turned as
+    /// ONE unit for a rotated display. Everything drawn in canvas space -
+    /// slots, overlays, effects, pointer, celebrations - goes through
+    /// CanvasSpace, which applies this. Default: the FHD screen, 1:1.
+    struct CanvasGeometry: Equatable {
+        var width: Double = 1920
+        var height: Double = 1080
+        var rotation: Int = 0
+        var center: CGPoint { CGPoint(x: width / 2, y: height / 2) }
+    }
+    @Published private(set) var canvas = CanvasGeometry()
     /// the remote pointer, checkboxes and gesture routing
     let interaction = InteractionController()
 
@@ -60,13 +73,17 @@ final class DisplayController: ObservableObject {
         let type: String
         let raw: [String: Any]
         let assetBase: String
+        /// a `scroll` overlay's live strip: shared with the interaction
+        /// layer so checkboxes riding it can be aimed at where they are
+        /// right now, and the strip held while one is aimed at
+        var strip: ScrollStripState? = nil
     }
 
     /// manifest overlay types this client can draw (Roku's
     /// overlayRegistry); unknown types are skipped, same as a registry
     /// miss. `background` renders BELOW the page image (layered pages -
     /// the image is a transparent PNG then).
-    private static let overTypes: Set<String> = ["clock", "countdown", "gif", "slideshow"]
+    private static let overTypes: Set<String> = ["clock", "countdown", "gif", "slideshow", "scroll", "motion"]
     private static let underTypes: Set<String> = ["background"]
     /// types whose position survives page rotations (Roku overlayState)
     private static let statefulTypes: Set<String> = ["slideshow", "background"]
@@ -111,6 +128,11 @@ final class DisplayController: ObservableObject {
     private var fontBase = ""                      // where the catalog fonts are served from
     private var fontsReady = true                  // gate: pages apply only with their faces present
     private var fontTask: Task<Void, Never>?
+    private var failStreak = 0                     // consecutive failed waits, drives the backoff
+    /// After a memory warning: stop loading new scroll strips (those
+    /// cells show from the page image instead) - the post-production
+    /// memory guard (OPS_RUNBOOK §5), alongside mem=low on the poll.
+    @Published private(set) var lowMemory = false
 
     func start() {
         guard runTask == nil else { return }
@@ -163,7 +185,10 @@ final class DisplayController: ObservableObject {
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.memLevel = "low" }
+            Task { @MainActor in
+                self?.memLevel = "low"
+                self?.lowMemory = true
+            }
         }
         runTask = Task { await run() }
     }
@@ -259,6 +284,15 @@ final class DisplayController: ObservableObject {
         // lifecycle/MetricKit reporting is parity-phase work.)
         var launchPending = true
         var loggedReply = false
+        // A launch after a crash/kill waits a random 0-30s before its
+        // first poll, so a fleet-wide restart does not stampede the
+        // service (OPS_RUNBOOK §5 post-production list). Clean exits and
+        // first-ever launches poll at once.
+        if launchExitQuery.contains("lastexit=killed") {
+            let delay = Double.random(in: 0...30)
+            NSLog("[Mango] launch after kill - first poll in %.0fs", delay)
+            try? await Task.sleep(for: .seconds(delay))
+        }
         while !Task.isCancelled {
             // the exit reason only matters alongside the launch announcement
             let launch = launchPending ? "&launch=1" + launchExitQuery : ""
@@ -266,6 +300,7 @@ final class DisplayController: ObservableObject {
             // server holds up to 50s; give it 55 then re-arm
             if let reply = await getJSON(url, timeout: 55) {
                 launchPending = false
+                failStreak = 0
                 if !loggedReply {
                     loggedReply = true
                     NSLog("[Mango] control reply: version=%@ busy=%@", JSON.str(reply["version"]), JSON.str(reply["busy"]))
@@ -307,8 +342,14 @@ final class DisplayController: ObservableObject {
                     NSLog("[Mango] heartbeat found version: %d", ver)
                     if let man = await fetchManifest(ver) { apply(man) }
                 }
-                // a 503's Retry-After wins over the fixed 5s when longer
-                try? await Task.sleep(for: .seconds(max(5, retryAfterHint)))
+                // Backoff with jitter (OPS_RUNBOOK §5): 5 -> 10 -> 20 -> 40
+                // -> 80 -> 120s, +/-25% random spread so a fleet never
+                // re-polls in lockstep, reset by the next success. A 503's
+                // Retry-After still wins when longer.
+                failStreak += 1
+                let base = min(120.0, 5.0 * pow(2.0, Double(failStreak - 1)))
+                let jittered = base * Double.random(in: 0.75...1.25)
+                try? await Task.sleep(for: .seconds(max(jittered, retryAfterHint)))
             }
             try? await Task.sleep(for: .milliseconds(250))
         }
@@ -372,6 +413,7 @@ final class DisplayController: ObservableObject {
             return
         }
         NSLog("[Mango] display.json: %d page(s)", man.pages.count)
+        applyCanvas(man)
         applyNight(man.night)
         if !man.fontBase.isEmpty { fontBase = man.fontBase }
         ensureFonts(man.pages)
@@ -380,6 +422,22 @@ final class DisplayController: ObservableObject {
         interaction.gestures = man.gestures
         latestManifest = man
         maybeApplyPages()
+    }
+
+    /// canvas + rotation from the manifest (MainScene.applyCanvas). A
+    /// change rebuilds the effects on this apply: they spawn against the
+    /// canvas bounds, which ride in on their configs (canvasW/H).
+    private func applyCanvas(_ man: DisplayManifest) {
+        var g = CanvasGeometry(width: Double(screenW), height: Double(screenH), rotation: 0)
+        if let c = man.canvas { g.width = c.width; g.height = c.height }
+        g.rotation = man.rotation
+        guard g != canvas else { return }
+        canvas = g
+        NSLog("[Mango] canvas %dx%d rotation %d", Int(g.width), Int(g.height), g.rotation)
+        interaction.canvasW = g.width
+        interaction.canvasH = g.height
+        interaction.rotation = g.rotation
+        effectsKey = ""
     }
 
     /// Night mode (MainScene.applyNight): the service publishes transparent
@@ -446,7 +504,12 @@ final class DisplayController: ObservableObject {
         effectAssetURLs = EffectUtil.assetStrings(of: list, assetBase: assetBase)
         let items: [OverlayItem] = list.enumerated().compactMap { (i, e) in
             guard let type = e["type"] as? String else { return nil }
-            return OverlayItem(id: "fx\(i)_\(type)", type: type, raw: e, assetBase: assetBase)
+            // effects spawn against the CANVAS bounds, not the screen
+            // (the Roku scene injects these into every effect config)
+            var raw = e
+            raw["canvasW"] = canvas.width
+            raw["canvasH"] = canvas.height
+            return OverlayItem(id: "fx\(i)_\(type)", type: type, raw: raw, assetBase: assetBase)
         }
         // a CHANGED effect set must re-fetch its art before the new views
         // load: the service regenerates effect sprites under fixed
@@ -485,6 +548,19 @@ final class DisplayController: ObservableObject {
             for ov in pg.overlays {
                 if let strip = ov["stripFile"] as? String, !strip.isEmpty {
                     keep.insert(assetBase + strip)
+                }
+                // scroll strips: every segment + the checkbox sprites;
+                // motion icons: every layer PNG
+                for seg in JSON.arr(ov["segments"]) ?? [] {
+                    if let f = JSON.obj(seg)?["file"] as? String, !f.isEmpty { keep.insert(assetBase + f) }
+                }
+                if let sprites = JSON.obj(ov["sprites"]) {
+                    for k in ["empty", "checked"] {
+                        if let f = sprites[k] as? String, !f.isEmpty { keep.insert(assetBase + f) }
+                    }
+                }
+                for layer in JSON.arr(ov["layers"]) ?? [] {
+                    if let f = JSON.obj(layer)?["file"] as? String, !f.isEmpty { keep.insert(assetBase + f) }
                 }
             }
             // checkbox sprite pair rides in the targets block
@@ -565,12 +641,16 @@ final class DisplayController: ObservableObject {
                let resume = overlayState[key] {
                 raw["startIndex"] = resume
             }
+            // a page background's default rect is the whole canvas
+            raw["canvasW"] = canvas.width
+            raw["canvasH"] = canvas.height
             // ids stay stable for an unchanged overlay set, so SwiftUI
             // keeps view identity across slot rebuilds of the same page
-            let item = OverlayItem(
+            var item = OverlayItem(
                 id: "\(i)_\(type)_\(JSON.str(ov["widgetSettingId"]))_\(JSON.str(ov["page"]))",
                 type: type, raw: raw, assetBase: assetBase
             )
+            if type == "scroll" { item.strip = ScrollStripState(raw) }
             if Self.underTypes.contains(type) {
                 under.append(item)
             } else if Self.overTypes.contains(type) {
@@ -601,6 +681,14 @@ final class DisplayController: ObservableObject {
         (slot.over, slot.under) = builtOverlays(pg)
         slot.overlaysKey = pg.overlaysKey
         if animated, !slots.isEmpty {
+            // The page's checkboxes are drawn by the interaction layer,
+            // which sits outside the slots - so they neither ride the
+            // slide nor get cleared by it, and would sit on screen over
+            // the incoming page until it finalizes. Clear them the moment
+            // the transition starts (Roku 986c5de); the new page's set
+            // arrives with finalize exactly as before.
+            interaction.setTargets(nil, regions: [], pageIndex: index)
+            interaction.setStripOverlays([])
             if pg.transition == "flip" {
                 startFlip(slot, pg: pg, index: index)
             } else {
@@ -630,6 +718,10 @@ final class DisplayController: ObservableObject {
     /// parity: local overrides carry the truth through imageOnly renders).
     private func applyInteractive(_ pg: Page, index: Int) {
         interaction.setTargets(pg.targets, regions: pg.regions, pageIndex: index)
+        // checkboxes inside scrolling lists ride their strips: hand the
+        // page's scroll overlays over so they can be aimed at and ticked
+        // where they are RIGHT NOW (Roku 6ce70f4)
+        interaction.setStripOverlays(slots.last?.over.compactMap { $0.strip } ?? [])
     }
 
     /// Roku has no 3D transforms and approximates the card flip as a
@@ -694,7 +786,7 @@ final class DisplayController: ObservableObject {
         for i in 0..<6 {
             let side = i % 2
             var x = Double.random(in: 0...1) * 380 + 190          // left band ~190-570
-            if side == 1 { x = 1920 - x }
+            if side == 1 { x = canvas.width - x }                 // right band, canvas-relative
             let y = Double.random(in: 0...1) * 430 + 55           // upper half
             spawnBurst(x: x, y: y, size: 560, delayMs: Double(i) * 210)
         }

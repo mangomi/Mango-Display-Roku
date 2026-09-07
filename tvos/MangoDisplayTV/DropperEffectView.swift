@@ -61,11 +61,13 @@ struct DropperEffectView: View {
         .task(id: JSON.str(cfg["stripFile"])) {
             let count = max(1, JSON.int(cfg["count"]) ?? 6)
             let legDur = max(0.1, maxY / max(1, speed))
-            let spacing = 1920.0 / Double(count)
+            // spread across the CANVAS width (portrait: fewer, closer threads)
+            let cw = JSON.double(cfg["canvasW"]) ?? 1920
+            let spacing = cw / Double(count)
             epoch = Date()
             spiders = (0..<count).map { i in
                 var baseX = spacing * Double(i) + spacing / 2 + (Double.random(in: 0...1) - 0.5) * spacing * 0.4
-                baseX = min(1860, max(60, baseX))
+                baseX = min(cw - 60, max(60, baseX))
                 return Spider(baseX: baseX, cycleOffset: Double.random(in: 0..<1) * legDur)
             }
             if let strip = cfg["stripFile"] as? String,

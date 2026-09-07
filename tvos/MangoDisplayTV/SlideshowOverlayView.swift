@@ -77,7 +77,9 @@ struct SlideshowOverlayView: View {
            let w = JSON.double(r["w"]), let h = JSON.double(r["h"]) {
             return CGRect(x: x, y: y, width: w, height: h)
         }
-        return CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        return CGRect(x: 0, y: 0,
+                      width: JSON.double(cfg["canvasW"]) ?? 1920,
+                      height: JSON.double(cfg["canvasH"]) ?? 1080)
     }
 
     private func transitionFor(firstReveal: Bool) -> AnyTransition {

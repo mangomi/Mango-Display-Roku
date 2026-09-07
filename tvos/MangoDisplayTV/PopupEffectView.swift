@@ -92,8 +92,11 @@ struct PopupEffectView: View {
             }
             let frameW = JSON.double(meta["frameW"]) ?? 0
             let frameH = JSON.double(meta["frameH"]) ?? 0
-            let pos = CGPoint(x: Double.random(in: 0...max(0, 1920 - frameW)),
-                              y: Double.random(in: 0...max(0, 1080 - frameH)))
+            // anywhere inside the CANVAS (a portrait display is narrow and tall)
+            let cw = JSON.double(cfg["canvasW"]) ?? 1920
+            let ch = JSON.double(cfg["canvasH"]) ?? 1080
+            let pos = CGPoint(x: Double.random(in: 0...max(0, cw - frameW)),
+                              y: Double.random(in: 0...max(0, ch - frameH)))
             let popD = popMs / 1000
             current = Current(sheet: sheet, meta: meta, pos: pos,
                               phase: .popIn, phaseStart: Date(), popDuration: popD)

@@ -27,11 +27,26 @@ final class InteractionController: ObservableObject {
         let uid = UUID()
         var id: String { uid.uuidString }
         let taskId: String        // payload.id as string, "" when absent
-        var rect: CGRect
+        var rect: CGRect          // canvas rect (static targets)
         var checked: Bool
         let widget: String
         let project: String
         let kind: String
+        /// a checkbox riding a scroll strip: its on-screen rect is computed
+        /// live from the strip's position (Roku stripItems/itemRect)
+        var strip: ScrollStripState? = nil
+        var boxIndex: Int = -1
+
+        /// the item's rect on the canvas right now
+        @MainActor var liveRect: CGRect {
+            if let strip, boxIndex >= 0 { return strip.canvasRect(ofBox: boxIndex) }
+            return rect
+        }
+        /// a strip item can only be aimed at while its row is in the window
+        @MainActor var visible: Bool {
+            if let strip, boxIndex >= 0 { return strip.boxVisible(boxIndex) }
+            return true
+        }
     }
 
     struct Region {
@@ -53,6 +68,15 @@ final class InteractionController: ObservableObject {
     var assetBase = ""
     var pageIndex = 0
     var gestures: [String: Any] = [:]
+    /// the canvas the pointer lives in (MainScene applyCanvas): bounds
+    /// for clamping and the start position; rotation remaps the viewer's
+    /// arrows onto canvas axes
+    var canvasW = 1920.0
+    var canvasH = 1080.0
+    var rotation = 0
+    /// checkboxes riding scroll strips, aimed at where they are right now
+    private var stripItems: [TargetItem] = []
+    private var strips: [ScrollStripState] = []
     var pageTurn: ((Int) -> Void)?
     var busyAt: ((CGPoint) -> Void)?
     var celebrate: ((String, CGPoint) -> Void)?
@@ -134,6 +158,40 @@ final class InteractionController: ObservableObject {
         NSLog("[Mango] targets: %d box(es), %d held locally", boxes.count, overrides.count)
         updateHighlight()
         renderReturned()
+    }
+
+    // MARK: - checkboxes that ride a scroll strip (Roku onStripOverlays)
+
+    /// A scrolling list's checkboxes are drawn by its ScrollOverlayView,
+    /// inside the moving strip. They are items like any other for aiming
+    /// and ticking, except that their on-screen rect is computed live.
+    func setStripOverlays(_ list: [ScrollStripState]) {
+        strips = list
+        stripItems = []
+        for strip in list {
+            for (i, b) in strip.boxes.enumerated() {
+                var checked = b.manifestChecked
+                if !b.taskId.isEmpty { checked = resolveChecked(b.taskId, fromManifest: checked) }
+                if i < strip.checked.count { strip.checked[i] = checked }
+                stripItems.append(TargetItem(
+                    taskId: b.taskId, rect: .zero, checked: checked,
+                    widget: b.widget, project: b.project, kind: b.kind,
+                    strip: strip, boxIndex: i))
+            }
+        }
+        if !stripItems.isEmpty { NSLog("[Mango] strip checkboxes: %d", stripItems.count) }
+        updateHighlight()
+    }
+
+    /// Hold a strip only while the pointer is ON one of its checkboxes -
+    /// the box stands still to be ticked - and let it run again the moment
+    /// the pointer leaves that box, not when the pointer hides (Dave,
+    /// 2026-09-02; Roku 0eb3117).
+    private func pauseStrips(for hit: TargetItem?) {
+        for s in strips {
+            let over = hit?.strip === s
+            if s.paused != over { s.paused = over }
+        }
     }
 
     /// the render came back, so an in-flight gesture is done with
@@ -265,10 +323,10 @@ final class InteractionController: ObservableObject {
     // MARK: - pointer
 
     private func showPointer() {
-        // always the middle of the screen: predictable, not wherever it
+        // always the middle of the canvas: predictable, not wherever it
         // was last left
         if !pointerActive {
-            pointer = CGPoint(x: 960, y: 540)
+            pointer = CGPoint(x: canvasW / 2, y: canvasH / 2)
         }
         pointerActive = true
         updateHighlight()
@@ -294,19 +352,30 @@ final class InteractionController: ObservableObject {
         highlightRect = nil
         warmSent = false
         stopHold()
+        pauseStrips(for: nil)
     }
 
     private func movePointer(_ key: String) {
+        // A rotated display: the canvas is turned on screen, so the
+        // viewer's arrows must map onto canvas axes. 90 = clockwise:
+        // canvas +x runs down the screen and canvas +y runs left; 270
+        // the reverse. (InteractionLayer.movePointer)
+        var k = key
+        if rotation == 90 {
+            k = ["up": "left", "down": "right", "left": "down", "right": "up"][key] ?? key
+        } else if rotation == 270 {
+            k = ["up": "right", "down": "left", "left": "up", "right": "down"][key] ?? key
+        }
         var p = pointer
-        switch key {
+        switch k {
         case "up": p.y -= 10
         case "down": p.y += 10
         case "left": p.x -= 10
         case "right": p.x += 10
         default: return
         }
-        p.x = min(1908, max(12, p.x))
-        p.y = min(1068, max(12, p.y))
+        p.x = min(canvasW - 12, max(12, p.x))
+        p.y = min(canvasH - 12, max(12, p.y))
         pointer = p
         updateHighlight()
     }
@@ -315,10 +384,26 @@ final class InteractionController: ObservableObject {
         regions.first { $0.rect.contains(pointer) }
     }
 
+    /// page-level targets first, then the strip riders (Roku allItems)
+    private enum Hit { case page(Int), strip(Int) }
+
     /// small forgiveness margin - the portal hits the exact point, but
     /// its checkbox has a label around it that ours doesn't
-    private func itemIndexUnderPointer() -> Int? {
-        boxes.firstIndex { $0.rect.insetBy(dx: -12, dy: -12).contains(pointer) }
+    private func hitUnderPointer() -> Hit? {
+        if let i = boxes.firstIndex(where: { $0.rect.insetBy(dx: -12, dy: -12).contains(pointer) }) {
+            return .page(i)
+        }
+        if let i = stripItems.firstIndex(where: { $0.visible && $0.liveRect.insetBy(dx: -12, dy: -12).contains(pointer) }) {
+            return .strip(i)
+        }
+        return nil
+    }
+
+    private func item(_ hit: Hit) -> TargetItem {
+        switch hit {
+        case .page(let i): return boxes[i]
+        case .strip(let i): return stripItems[i]
+        }
     }
 
     /// Outline whatever the pointer is over - without this the pointer
@@ -328,10 +413,12 @@ final class InteractionController: ObservableObject {
             highlightRect = nil
             return
         }
+        let hit = hitUnderPointer()
+        pauseStrips(for: hit.map(item))
         if let reg = regionUnderPointer() {
             highlightRect = reg.rect
-        } else if let i = itemIndexUnderPointer() {
-            highlightRect = boxes[i].rect.insetBy(dx: -10, dy: -10)
+        } else if let hit {
+            highlightRect = item(hit).liveRect.insetBy(dx: -10, dy: -10)
         } else {
             highlightRect = nil
         }
@@ -342,7 +429,7 @@ final class InteractionController: ObservableObject {
     /// Is every box in this task's LIST now checked? Todos group per
     /// project inside a widget (the portal's own rule), chores per widget.
     private func listComplete(_ hit: TargetItem) -> Bool {
-        for it in boxes where it.widget == hit.widget {
+        for it in boxes + stripItems where it.widget == hit.widget {
             if hit.kind != "todo" || it.project == hit.project {
                 if !it.checked { return false }
             }
@@ -352,22 +439,29 @@ final class InteractionController: ObservableObject {
 
     private func activateUnderPointer() {
         NSLog("[Mango] OK at %d,%d", Int(pointer.x), Int(pointer.y))
-        guard let i = itemIndexUnderPointer() else { return }
+        guard let h = hitUnderPointer() else { return }
         // tick now, ask later: the press paints locally and that state
         // is held across refreshes until the render agrees with it
-        boxes[i].checked.toggle()
-        let hit = boxes[i]
+        switch h {
+        case .page(let i): boxes[i].checked.toggle()
+        case .strip(let i):
+            stripItems[i].checked.toggle()
+            if let s = stripItems[i].strip, stripItems[i].boxIndex < s.checked.count {
+                s.checked[stripItems[i].boxIndex] = stripItems[i].checked
+            }
+        }
+        let hit = item(h)
         if !hit.taskId.isEmpty {
             overrides[hit.taskId] = (hit.checked, Date())
         }
         NSLog("[Mango] tick %@ -> %@", hit.taskId, hit.checked ? "true" : "false")
+        let hr = hit.liveRect
         // celebrate exactly like the portal: a burst at the box for a
         // check-off, the full-display finale when its whole list is done
         if hit.checked {
-            celebrate?(listComplete(hit) ? "finale" : "burst",
-                       CGPoint(x: hit.rect.midX, y: hit.rect.midY))
+            celebrate?(listComplete(hit) ? "finale" : "burst", CGPoint(x: hr.midX, y: hr.midY))
         }
-        sendAction("tap", x: hit.rect.midX, y: hit.rect.midY, id: hit.taskId)
+        sendAction("tap", x: hr.midX, y: hr.midY, id: hit.taskId)
     }
 
     // MARK: - service channel

@@ -47,7 +47,7 @@ struct DisplayView: View {
                     ProgressView()
                         .scaleEffect(2)
                         .tint(.white)
-                        .position(controller.busyAt ?? CGPoint(x: 960, y: 540))
+                        .position(controller.busyAt ?? controller.canvas.center)
                 }
             }
             // confetti on top of everything, like the portal's canvas at
@@ -88,37 +88,50 @@ struct RotateFx: ViewModifier {
     }
 }
 
-/// Composes content in CANVAS coordinates (1920x1080) and scales it to
-/// the screen as one unit. Slots and the effect layer both live in this
-/// space - the 1:1 mapping on this simulator is a coincidence nothing
-/// here relies on (MANIFEST.md).
+/// Composes content in CANVAS coordinates - the manifest's own space,
+/// the display's resolution, portrait when rotated - and puts it on the
+/// screen as ONE unit (MainScene applyCanvas + the `stage` group):
+/// scaled by the long side (a portrait canvas is the landscape one
+/// turned, so its long side is still the screen's width), centred on the
+/// screen centre, and turned by `rotation` clockwise about that centre.
+/// Nothing inside is rotated individually. The 1:1 mapping on an FHD
+/// screen with a 1920x1080 canvas is a coincidence nothing relies on.
 struct CanvasSpace<Content: View>: View {
+    @EnvironmentObject var controller: DisplayController
     @ViewBuilder let content: Content
 
     var body: some View {
         GeometryReader { geo in
-            let scale = min(geo.size.width / 1920, geo.size.height / 1080)
+            let c = controller.canvas
+            let long = max(c.width, c.height)
+            let scale = max(geo.size.width, geo.size.height) / max(1, long)
+            let turned = c.rotation == 90 || c.rotation == 270
+            // SwiftUI's positive rotation is clockwise on screen, the
+            // manifest's "clockwise as the viewer sees it" - no sign flip
+            // (Roku negates because SceneGraph's positive is CCW)
+            let angle = Angle.degrees(turned ? (c.rotation == 90 ? 90 : -90) : 0)
             ZStack(alignment: .topLeading) { content }
-                .frame(width: 1920, height: 1080)
-                .scaleEffect(scale, anchor: .topLeading)
-                .offset(x: (geo.size.width - 1920 * scale) / 2,
-                        y: (geo.size.height - 1080 * scale) / 2)
+                .frame(width: c.width, height: c.height)
+                .scaleEffect(scale)
+                .rotationEffect(angle)
+                .position(x: geo.size.width / 2, y: geo.size.height / 2)
         }
     }
 }
 
 private struct SlotView: View {
     let slot: DisplayController.PageSlot
+    @EnvironmentObject var controller: DisplayController
 
     var body: some View {
         CanvasSpace {
             // draw order is the contract: under-layers, then the page
-            // image (transparent PNG for layered pages), then the live
-            // widgets the service hid from the capture
+            // image (transparent PNG for layered pages, exactly
+            // canvas-sized), then the live widgets the service hid
             ForEach(slot.under) { OverlayItemView(item: $0) }
             Image(uiImage: slot.image)
                 .resizable()
-                .frame(width: 1920, height: 1080)
+                .frame(width: controller.canvas.width, height: controller.canvas.height)
             ForEach(slot.over) { OverlayItemView(item: $0) }
         }
     }
@@ -142,6 +155,12 @@ private struct OverlayItemView: View {
             SlideshowOverlayView(cfg: item.raw) { [weak controller] idx in
                 controller?.recordOverlayState(item.raw, index: idx)
             }
+        case "scroll":
+            if let strip = item.strip {
+                ScrollOverlayView(strip: strip, assetBase: item.assetBase)
+            }
+        case "motion":
+            MotionOverlayView(cfg: item.raw, assetBase: item.assetBase)
         default:
             EmptyView()
         }

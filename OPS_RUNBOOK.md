@@ -491,7 +491,7 @@ is published per task and per service for dashboards and alarms only.
 
 ### Load and ownership testing
 
-`tools/sim-devices.js` is the device simulator: N pretend TVs polling
+`render-service/sim-devices.js` is the device simulator: N pretend TVs polling
 `/wait` exactly like the channel, reporting owners, hand-overs, gaps
 and every 503 by reason. It pairs with `SIM_DISPLAYS=1` on the service,
 which maps `SIM*` ids onto the "claude test" layout in designer mode
@@ -501,7 +501,7 @@ on a laptop against the real test table:
 ```
 VERSION_PORT=8191 TASK_ID=laptop-A TASK_ADDR=127.0.0.1:8191 OWNERSHIP=dynamo \
   OWNERSHIP_TABLE=roku-display-owner-test SIM_DISPLAYS=1 node render-service/fleet.js
-node tools/sim-devices.js --base http://127.0.0.1:8191,http://127.0.0.1:8192,http://127.0.0.1:8193 --count 24 --ramp 40
+node render-service/sim-devices.js --base http://127.0.0.1:8191,http://127.0.0.1:8192,http://127.0.0.1:8193 --count 24 --ramp 40
 ```
 
 Exit code 2 from the simulator means a double owner was seen.

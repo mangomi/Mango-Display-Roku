@@ -1,6 +1,10 @@
 /*
  * The fleet manager: many displays, one service.
  *
+ * Deployed by Jenkins: Roku-Staging-Service on every push to
+ * test-release-auto-deploy, Roku-Production-Service on every push to
+ * prod-release-auto-deploy (OPS_RUNBOOK.md section 7).
+ *
  * Every control-channel request carries the display's identity
  * (device/major/minor/w/h - the device knows all of it after pairing), so
  * ANY request can bring a display's worker into existence. That is the

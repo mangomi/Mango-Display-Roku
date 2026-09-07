@@ -100,56 +100,61 @@ Everything is tagged `Project=Roku` for cost tracking. Keep that up.
 
 ---
 
-## 4. Building production (step by step)
+## 4. Production (built 2026-09-07, shared cluster and balancer)
 
-Prerequisite: an ACM certificate for `roku-control.mangodisplay.com`
-(DNS validation), and the two DNS records in §5.
+Decision: production is a SECOND SERVICE on the same cluster and the same
+load balancer, split by host header. Shared: cluster `roku-render`, ALB
+`roku-control` + cert + :443 listener, ECR, CodeBuild, the asset bucket
+and CloudFront. Everything else is duplicated and carries `-prod` in its
+name and the tag `Environment=prod` (test resources are tagged
+`Environment=test`; their names predate the split).
 
-1. **Cluster + logs**
-   ```
-   aws ecs create-cluster --cluster-name roku-render-prod \
-     --tags key=Project,value=Roku
-   aws logs create-log-group --log-group-name /ecs/roku-render-prod
-   aws ecs put-cluster-capacity-providers --cluster roku-render-prod \
-     --capacity-providers FARGATE FARGATE_SPOT \
-     --default-capacity-provider-strategy capacityProvider=FARGATE,weight=1,base=1
-   ```
-2. **Secret** — new prefix secret, 32 random bytes:
-   ```
-   aws secretsmanager create-secret --name roku-asset-prefix-secret-prod \
-     --secret-string "$(openssl rand -hex 32)" --tags Key=Project,Value=Roku
-   ```
-3. **IAM** — mirror the test roles:
-   - task role `roku-render-prod-task`: `s3:PutObject`/`s3:DeleteObject`
-     on `arn:aws:s3:::mango-roku-assets/prod/*`
-   - execution role `roku-render-prod-execution`: ECR pull, CloudWatch
-     logs, `secretsmanager:GetSecretValue` on the prod secret only
-4. **Task definition** — from `deploy/taskdef-prod.json` in this repo
-   (see §7). Environment differs from test only in:
-   `MANGO_API_BASE`, `MANGO_PORTAL_BASE`, `MANGO_SOCKET_BASE`,
-   `ASSET_ROOT=prod`, the prod secret ARN, and **no
-   `PORTAL_PREVIEW_DIR`** (prod portal must have painted mode natively).
-5. **ALB** `roku-control-prod`, internet-facing, HTTPS:443 with the ACM
-   cert, target group `roku-control-prod-tg` (type `ip`, port 8080,
-   health check `/health`), HTTP:80 → redirect to HTTPS.
-6. **Service**
-   ```
-   aws ecs create-service --cluster roku-render-prod \
-     --service-name roku-render-prod --task-definition roku-render-prod \
-     --desired-count 1 \
-     --capacity-provider-strategy capacityProvider=FARGATE,weight=1,base=1 \
-     --network-configuration "awsvpcConfiguration={subnets=[...],securityGroups=[...],assignPublicIp=ENABLED}" \
-     --load-balancers "targetGroupArn=...,containerName=render,containerPort=8080" \
-     --tags key=Project,value=Roku
-   ```
-   No NAT gateway: the VPC routes `0.0.0.0/0` through its internet
-   gateway, so public-IP tasks reach the portal, API and S3 directly.
-7. **Alarms** — §8.
-8. **Channel prod build** — `./package.sh prod` (API v1.0.5 is the
-   default; `PROD_API_VERSION` overrides). The checked-in `env.brs` is
-   always the test one; the prod build regenerates it and restores it.
+| Thing | Production value |
+|---|---|
+| ECS service | `roku-render-prod` (cluster `roku-render`) |
+| Task definition | `roku-render-prod` — 2 vCPU / 8 GB, 40 GB ephemeral, `RENDER_CONCURRENCY=2`, image pinned to an immutable tag (`prod-20260907` = the tested `ownership9`) |
+| Environment | `MANGO_API_BASE=https://api.mangomirror.com/v1.0.5/` (**API version still Dave's call**), `MANGO_PORTAL_BASE=https://portal.mangodisplay.com/`, `MANGO_SOCKET_BASE=wss://socket.mangomirror.com/connection/`, `ASSET_ROOT=prod`, `OWNERSHIP=dynamo`, `OWNERSHIP_TABLE=roku-display-owner-prod`, `SERVICE_NAME=roku-render-prod`, `PAINTED_DISPLAYS=RK,ATV`. **No `SIM_DISPLAYS`** (the service refuses to start with it on this API base). |
+| Roles | task `roku-render-prod-task` (S3 `prod/*`, the prod owner table, metrics namespace), execution `roku-render-prod-execution` (ECR/logs + the prod prefix secret only) |
+| Prefix secret | `roku-asset-prefix-secret-prod` |
+| Ownership table | DynamoDB `roku-display-owner-prod`, TTL on `ttl` |
+| Log group | `/ecs/roku-render-prod`, 14-day retention |
+| Target group | `roku-control-prod-tg` (ip, 8091, `/healthz`, 10 s timeout, dereg 60 s) |
+| Routing | :443 listener host rules: `roku-control-test.mangodisplay.com` → `roku-control-tg`, `roku-control.mangodisplay.com` → `roku-control-prod-tg`; default → 404 |
+| Capacity | `FARGATE` base 1 weight 1 + `FARGATE_SPOT` weight 4 |
+| Auto-scaling | 1–14 tasks, memory 70% / CPU 65%, cooldowns 120 s / 300 s |
+| Alarms | `roku-render-prod-{task-ceiling,refusing,unhealthy-workers,unhealthy-hosts,owner-table-errors}` |
+| Budget | shared "Roku render service" ($500 on tag Project=Roku; covers test too) |
+| Channel | `./package.sh prod` (API v1.0.5 default; `PROD_API_VERSION` overrides), controlBase `roku-control.mangodisplay.com` |
 
----
+### Build order (what was run, in order)
+
+1. Retag the tested image immutably:
+   `aws ecr put-image --image-tag prod-YYYYMMDD --image-manifest "$(aws ecr batch-get-image --repository-name mango-display-render --image-ids imageTag=<tested tag> --query 'images[0].imageManifest' --output text)"`
+2. Table, log group, secret, roles, target group (names above; all tagged).
+3. Task definition from `taskdef-prod.json` (the test one with the prod column swapped in — keep it in `deploy/` once it exists in the repo).
+4. **Listener rules** (host header → target group) — the target group must
+   be attached to the balancer through a rule BEFORE `create-service`
+   will accept it.
+5. `create-service` with the capacity strategy, health-check grace 60 s,
+   circuit breaker + rollback, `--propagate-tags SERVICE`.
+6. Scaling target + the two target-tracking policies; the five alarms.
+7. Verify: banner logs `*** PRODUCTION ***`; `/healthz` via the prod host.
+
+### Blocking dependencies before a prod task serves a display
+
+- Portal painted mode (PR #68, #72, #74) promoted to `prod-release-auto-deploy`.
+- Webapp PR #142 promoted to prod.
+- Device API version confirmed by Dave, and prod `saveMirror` verified.
+- A signed prod channel package (needs a Roku that is NOT Dave's test
+  box, or a window where his display can be re-paired against prod).
+
+### Promotion flow
+
+Test tracks whatever tag its task definition names; prod only ever
+moves to an immutable `prod-YYYYMMDD` tag of an image that proved out on
+test. Register a new `roku-render-prod` revision on that tag and
+`update-service --force-new-deployment`. The two services never share a
+deploy.
 
 ## 5. DNS (WordPress.com panel — no automation)
 

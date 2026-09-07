@@ -1,680 +1,188 @@
-# Mango Display TV platform — operations runbook
+# Mango Display TV platform — runbook
 
-Audience: whoever operates the render fleet and ships releases. Covers
-the render service (AWS), the Roku channel, and the Apple TV app.
+For whoever operates the render fleet and ships releases. Short on
+purpose: the why, the history and every measurement live in
+`OPS_RUNBOOK_DETAIL.md`. Other docs: `INFRA.md` (AWS inventory),
+`LIVE_PORTAL.md` (architecture), `MANIFEST.md` (device contract),
+`APPLE_TV.md`, `TVOS_PARITY_QUEUE.md`.
 
-Companion docs: `INFRA.md` (how test was built, and why),
-`LIVE_PORTAL.md` (architecture and its scars), `MANIFEST.md` (the
-device contract), `APPLE_TV.md` (tvOS port), `TVOS_PARITY_QUEUE.md`
-(client changes pending).
-
----
-
-## 1. The system in one page
-
-TVs are thin clients. They do not run a browser and cannot render the
-portal. Instead:
-
-1. The **render service** (Node + headless Chromium, on ECS Fargate)
-   opens the user's real portal page for each watched display.
-2. The portal announces when it has finished drawing; the service
-   screenshots each page, extracts "native widget" instructions
-   (clock, countdown, effects, tap targets), and uploads images +
-   `display.json` to S3, served by CloudFront.
-3. The TV **long-polls** `/wait`; when the version bumps it fetches the
-   manifest, swaps page images, and animates the native layers itself.
-4. User gestures on the TV go back through `/interact`, which drives
-   the live portal and publishes a fresh capture.
-
-### Golden rules — violating these breaks displays
-
-1. **ONE portal per display, ONE socket per display.** The backend
-   closes duplicate sockets for the same device id. The display
-   ownership layer (§9, `render-service/ownership.js`) is what lets
-   several tasks run: each display is leased to exactly one task and
-   the others forward to it. **Never run more than one task with
-   `OWNERSHIP=off`** — that is the single-task mode and two of them
-   fight over every socket.
-2. **The portal is the only source of "ready to screenshot".** Never
-   add timers or heuristics on the service or device side to guess
-   when a render is done.
-3. **Painted mode must be present in the portal the service loads.**
-   Test has it (portal PR #68 merged and deployed 2026-09-02; the
-   pre-merge shim is retired). Prod must have it natively before a prod
-   fleet exists. `PORTAL_PREVIEW_DIR` / `PORTAL_PATCH_DIR` are emergency
-   levers only — a pinned file MASKS the deployed one while set.
+**If you change how something is deployed, change this file in the same
+commit.**
 
 ---
 
-## 2. Environment inventory
+## 1. What runs where
 
-### Test (live today)
+TVs are thin clients. The **render service** (Node + headless Chromium
+on ECS Fargate) keeps each watched display's real portal page open,
+screenshots it when the portal says it has redrawn, and publishes page
+images + `display.json` to S3/CloudFront. The TV long-polls `/wait`,
+fetches the manifest when the version changes, and animates clock,
+GIFs, scroll strips and weather natively. Gestures come back via
+`/interact`.
 
-| Thing | Value |
-|---|---|
-| ECS cluster / service | `roku-render` / `roku-render` |
-| Task definition | `roku-render` (ARM64, 1 vCPU / 2 GB, `RENDER_CONCURRENCY=1` — dropped back after the 2026-09-07 tests; the density runs used 2 vCPU / 8 GB, revision 17) |
-| Capacity | `FARGATE` base 1 weight 1 + `FARGATE_SPOT` weight 4 (one on-demand task, Spot above it) |
-| Auto-scaling | 1–14 tasks; target tracking on average memory 70% and CPU 65% (policies `roku-render-memory-70`, `roku-render-cpu-65`) |
-| Ownership table | DynamoDB `roku-display-owner-test` (TTL on `ttl`) |
-| Health check | `/healthz` (503 when the ownership store fails or watched displays stop publishing) |
-| Synthetic displays | `SIM_DISPLAYS=1` (test only — the service refuses to start with it on a prod API base) |
-| Control endpoint | `roku-control-test.mangodisplay.com` → ALB `roku-control` |
-| Target group | `roku-control-tg` |
-| Log group | `/ecs/roku-render` |
-| Assets | bucket `mango-roku-assets`, prefix `test/` |
-| CDN | CloudFront `ERYTMHZUWUXMT` → `rokuassets.mangodisplay.com` (plan: Pro) |
-| Prefix secret | `roku-asset-prefix-secret` |
-| Build | S3 `roku-render-build-945710099949` → CodeBuild `roku-render-build` → ECR |
-| Painted gate | `PAINTED_DISPLAYS=RK,ATV` (prefix match: every Roku and Apple TV) |
+Golden rules:
 
-### Production (to be built — §4)
+1. **One portal per display, one socket per display.** The ownership
+   layer (§4) leases each display to exactly one task. Never run more
+   than one task with `OWNERSHIP=off`.
+2. **The portal is the only source of "ready to screenshot".** No
+   timers or heuristics on either side.
+3. **The portal the service loads must have painted mode.** Test and
+   prod both do (verified 2026-09-07). `PORTAL_PREVIEW_DIR` /
+   `PORTAL_PATCH_DIR` are dev levers only — never on a task definition.
 
-| Thing | Planned value |
-|---|---|
-| ECS cluster / service | `roku-render-prod` / `roku-render-prod` |
-| Task definition | `roku-render-prod` (ARM64, start 1 vCPU / 4 GB) |
-| Capacity | `FARGATE` base 1 (on-demand — see §9), Spot only for extra tasks later |
-| Control endpoint | `roku-control.mangodisplay.com` → ALB `roku-control-prod` |
-| Log group | `/ecs/roku-render-prod` |
-| Assets | same bucket + CloudFront, prefix `prod/` |
-| Prefix secret | **its own** secret — must NOT share test's, or prod and test displays derive the same asset prefixes |
-| API version | `v1.0.5` (decided 2026-08-26; baked into `package.sh prod`) |
-
-Everything is tagged `Project=Roku` for cost tracking. Keep that up.
-
----
-
-## 3. Blocking dependencies before prod serves a display
-
-1. **Portal PR #68** (painted mode) merged to `test-release-auto-deploy`,
-   deployed, soaked — then promoted to `prod-release-auto-deploy`. The
-   prod fleet cannot work against a prod portal without painted mode.
-2. **Webapp PR #142** (Roku/Apple TV unsupported options) promoted to
-   prod, so prod users cannot enable options their TV cannot do.
-3. **Roku repo pushed to GitHub.** As of 2026-08-28, 73 commits exist
-   only on the developer machine; `origin` has `main` only. Jenkins
-   cannot deploy what is not pushed.
-4. Roku channel store submission / tvOS TestFlight — separate track,
-   see §10.
-
----
-
-## 4. Production (built 2026-09-07, shared cluster and balancer)
-
-Decision: production is a SECOND SERVICE on the same cluster and the same
-load balancer, split by host header. Shared: cluster `roku-render`, ALB
-`roku-control` + cert + :443 listener, ECR, CodeBuild, the asset bucket
-and CloudFront. Everything else is duplicated and carries `-prod` in its
-name and the tag `Environment=prod` (test resources are tagged
-`Environment=test`; their names predate the split).
-
-| Thing | Production value |
-|---|---|
-| ECS service | `roku-render-prod` (cluster `roku-render`) |
-| Task definition | `roku-render-prod` — 2 vCPU / 8 GB, 40 GB ephemeral, `RENDER_CONCURRENCY=2`, image pinned to an immutable tag (`prod-20260907` = the tested `ownership9`) |
-| Environment | `MANGO_API_BASE=https://api.mangomirror.com/v1.0.5/` (**API version still Dave's call**), `MANGO_PORTAL_BASE=https://portal.mangodisplay.com/`, `MANGO_SOCKET_BASE=wss://socket.mangomirror.com/connection/`, `ASSET_ROOT=prod`, `OWNERSHIP=dynamo`, `OWNERSHIP_TABLE=roku-display-owner-prod`, `SERVICE_NAME=roku-render-prod`, `PAINTED_DISPLAYS=RK,ATV`. **No `SIM_DISPLAYS`** (the service refuses to start with it on this API base). |
-| Roles | task `roku-render-prod-task` (S3 `prod/*`, the prod owner table, metrics namespace), execution `roku-render-prod-execution` (ECR/logs + the prod prefix secret only) |
-| Prefix secret | `roku-asset-prefix-secret-prod` |
-| Ownership table | DynamoDB `roku-display-owner-prod`, TTL on `ttl` |
-| Log group | `/ecs/roku-render-prod`, 14-day retention |
-| Target group | `roku-control-prod-tg` (ip, 8091, `/healthz`, 10 s timeout, dereg 60 s) |
-| Routing | :443 listener host rules: `roku-control-test.mangodisplay.com` → `roku-control-tg`, `roku-control.mangodisplay.com` → `roku-control-prod-tg`; default → 404 |
-| Capacity | `FARGATE` base 1 weight 1 + `FARGATE_SPOT` weight 4 |
-| Auto-scaling | 1–14 tasks, memory 70% / CPU 65%, cooldowns 120 s / 300 s |
-| Alarms | `roku-render-prod-{task-ceiling,refusing,unhealthy-workers,unhealthy-hosts,owner-table-errors}` |
-| Budget | shared "Roku render service" ($500 on tag Project=Roku; covers test too) |
-| Channel | `./package.sh prod` (API v1.0.5 default; `PROD_API_VERSION` overrides), controlBase `roku-control.mangodisplay.com` |
-
-**Status 2026-09-07 21:50 UTC: built and running** — `roku-render-prod`
-desired 1, healthy on `https://roku-control.mangodisplay.com/healthz`,
-banner `*** PRODUCTION ***`, zero displays. Fonts appear under
-`prod/fonts/` at the first display's first publish (publishFonts runs
-then, not at boot). The `:443` default action is a fixed 404; only the
-two host rules route.
-
-### Build order (what was run, in order)
-
-1. Retag the tested image immutably:
-   `aws ecr put-image --image-tag prod-YYYYMMDD --image-manifest "$(aws ecr batch-get-image --repository-name mango-display-render --image-ids imageTag=<tested tag> --query 'images[0].imageManifest' --output text)"`
-2. Table, log group, secret, roles, target group (names above; all tagged).
-3. Task definition from `taskdef-prod.json` (the test one with the prod column swapped in — keep it in `deploy/` once it exists in the repo).
-4. **Listener rules** (host header → target group) — the target group must
-   be attached to the balancer through a rule BEFORE `create-service`
-   will accept it.
-5. `create-service` with the capacity strategy, health-check grace 60 s,
-   circuit breaker + rollback, `--propagate-tags SERVICE`.
-6. Scaling target + the two target-tracking policies; the five alarms.
-7. Verify: banner logs `*** PRODUCTION ***`; `/healthz` via the prod host.
-
-### Blocking dependencies before a prod task serves a display
-
-- Portal painted mode (PR #68, #72, #74) promoted to `prod-release-auto-deploy`.
-- Webapp PR #142 promoted to prod.
-- Device API version confirmed by Dave, and prod `saveMirror` verified.
-- A signed prod channel package (needs a Roku that is NOT Dave's test
-  box, or a window where his display can be re-paired against prod).
-
-### Promotion flow
-
-Test tracks whatever tag its task definition names; prod only ever
-moves to an immutable `prod-YYYYMMDD` tag of an image that proved out on
-test. Register a new `roku-render-prod` revision on that tag and
-`update-service --force-new-deployment`. The two services never share a
-deploy.
-
-## 5. DNS (WordPress.com panel — no automation)
-
-Records needed for production:
-
-| Type | Name | Value |
+| | Test | Production |
 |---|---|---|
-| CNAME | (ACM gives it) `_<hash>.roku-control` | `_<hash>.acm-validations.aws` |
-| CNAME | `roku-control` | the ALB's DNS name |
+| Control endpoint | `roku-control-test.mangodisplay.com` | `roku-control.mangodisplay.com` |
+| ECS service (cluster `roku-render`) | `roku-render` | `roku-render-prod` |
+| Task definition | `roku-render` (1 vCPU / 2 GB, image `latest`) | `roku-render-prod` (2 vCPU / 8 GB, image `prod-<sha>`) |
+| API / portal / socket | `testapi` / `testportal` / `testsocket` (v1.0.5) | `api` / `portal` / `socket` (v1.0.5) |
+| Assets | `mango-roku-assets/test/` | `mango-roku-assets/prod/` — both via `rokuassets.mangodisplay.com` |
+| Ownership table | `roku-display-owner-test` | `roku-display-owner-prod` |
+| Log group | `/ecs/roku-render` | `/ecs/roku-render-prod` |
+| Target group / health | `roku-control-tg` / `/healthz` | `roku-control-prod-tg` / `/healthz` |
+| Capacity | `FARGATE` base 1 + `FARGATE_SPOT` weight 4 | same |
+| Auto-scaling | 1–14 tasks, memory 70 % / CPU 65 % | same |
+| Alarms | `roku-render-test-*` | `roku-render-prod-*` |
+| Tags | `Project=Roku`, `Environment=test` | `Project=Roku`, `Environment=prod` |
+| Channel build | `./package.sh` | `./package.sh prod` (setup at `app.mangodisplay.com`) |
 
-Leave the ACM validation record in place forever — it is what lets the
-certificate auto-renew. Already live for assets:
-`rokuassets` → `d1qjms2klzrc83.cloudfront.net` plus its validation
-record. Test's `roku-control-test` already points at ALB `roku-control`.
-
----
-
-## 6. Costs
-
-| Item | Test (today) | Prod at ~100 screens |
-|---|---|---|
-| Fargate task | ~$9 (Spot, 1 vCPU/2 GB) | $68-89 (on-demand, 2 vCPU/8-16 GB) |
-| ALB | ~$17 | ~$17 |
-| Logs / ECR / Secrets / S3 requests | ~$3 | ~$7 |
-| Assets (S3 + CloudFront) | shared $15 Pro plan, covers both | — |
-| **Total** | **~$29** | **~$92-113** |
-
-All-in at ~100 prod screens (test + prod + the shared CloudFront plan):
-**~$136-157/month**, or ~$120-140 with a 1-year Compute Savings Plan.
-That is roughly **$1.00-1.15 per screen per month**.
-
-**Do not confuse this with the density test's $0.13-0.20/display.** That
-figure is the MARGINAL cost of one more display (RAM + compute) and is
-still accurate. At 100 screens the FIXED floor dominates - two ALBs and
-a task sized with headroom cost the same at 10 screens as at 100. The
-fully-loaded average falls with scale: ~$1.10/screen at 100,
-~$0.41 at 500, ~$0.37 at 1,000.
-
-Structural note: the ALB is not optional. The device long-poll holds a
-connection ~50s and API Gateway's ~30s timeout cannot carry it, so
-~$17 per environment is a floor until the ownership/sentinel work
-changes the shape.
-
-**Cost attribution:** ECS task costs only inherit tags when the service
-sets `propagateTags` - a service tagged `Project=Roku` whose tasks are
-untagged puts all its Fargate spend in "untagged" (this was the case
-until 2026-08-31). The test service is now set to `SERVICE`; **do the
-same when creating the prod service**:
-```
-aws ecs update-service --cluster <c> --service <s> --propagate-tags SERVICE
-```
-Tags attach only to tasks launched AFTER the change, so it takes effect
-on the next deployment.
-
-Prod growth (measured ~181 MB per watched display, plus an 80 MB floor):
-~100 displays on 2 vCPU/16 GB ≈ **$89/mo (~$0.89/display)**;
-~300 displays on 4 vCPU/30 GB ≈ **$178/mo (~$0.59/display)**.
-A 1-year Compute Savings Plan sized to the on-demand base task takes
-~20–30% off that baseline once the fleet's floor is known.
-
-Note: displays only cost while **watched**. The portal closes after
-3 minutes without a device poll, and the worker is evicted after 30.
-
-### Asset retention and cleanup
-
-Two layers keep the bucket from growing forever:
-
-1. **Lifecycle rules on `mango-roku-assets`** (applied 2026-08-28):
-   objects untouched for **60 days** expire, and incomplete multipart
-   uploads abort after 7 days. This is the churned-display case — a
-   user who tries the product and stops. It is safe because any display
-   still in use re-uploads its whole set whenever its worker restarts
-   (every deploy, and after 30 minutes idle), refreshing the clock.
-   **Do not shorten this window without thought**: sprite sheets can
-   sit unchanged for a long time on a lightly-used display, and
-   deleting one that is still referenced leaves a blank patch on
-   someone's wall (CloudFront serves it from cache for a while, then
-   404s).
-2. **In-process reaping.** Each worker lists its display's prefix at
-   startup and prunes content-addressed sprite art that the current
-   manifest no longer references. Only `overlay_wxc_*` / `overlay_gif_*`
-   names are ever deleted — manifests and page images keep stable names
-   and are never reaped — and pre-existing objects are only judged
-   against a COMPLETE publish, never a staged single-page one.
-   Log lines: `N existing object(s) known for reaping`, `N stale
-   removed`. First run pruned 60 orphans across two displays.
-
-Storage is not a meaningful cost (10,000 displays ≈ $2–3/month). The
-reasons this matters are hygiene on active displays and **data
-retention**: these images are households' calendars, chores with
-children's names, and family photos. The 60-day window is the figure
-to quote in app-store privacy disclosures.
+Shared: the balancer `roku-control` (host rules split the two names;
+anything else gets a 404), the cluster, ECR `mango-display-render`,
+CodeBuild `roku-render-build`, the bucket and CloudFront, the AWS Budget
+"Roku render service" ($500/month on the `Project=Roku` tag, alerts at
+$250 and $400 to Dave).
 
 ---
 
-## 7. Deployment
+## 2. Deploying
 
-### 7.1 Branch model (matches webapp and portal repos)
+### Branches
 
 | Branch | Deploys |
 |---|---|
-| feature branch → PR | nothing; CI checks only |
+| feature → PR | nothing |
 | `test-release-auto-deploy` | test fleet, automatically |
-| `prod-release-auto-deploy` | prod fleet, automatically |
-| `main` | nothing — merged a few days AFTER a prod deploy has soaked |
+| `prod-release-auto-deploy` | production fleet, automatically |
+| `live-portal` | development trunk for the TV platform |
+| `main` | nothing; updated days after a prod release has soaked |
 
-Protect `prod-release-auto-deploy` so only release owners can merge.
-`main` is the "this has survived production" marker, not a development
-branch: it deliberately lags, and is updated once a prod release has
-run clean for a few days (Dave's convention across all repos).
+Habit: merge into `test-release-auto-deploy` first, watch the staging
+build and the test fleet, then merge the same commit into
+`prod-release-auto-deploy`.
 
-**Live for the render service** (created 2026-08-31): Jenkins job
-`Roku-Staging-Service` builds and deploys on every push to
-`test-release-auto-deploy` in `mangomi/Mango-Display-Roku`. See §7.2.
+### Jenkins jobs (https://jenkins.mangomirror.com)
 
-### 7.2 Jenkins jobs (path-filtered — one repo, three artifacts)
-
-| Job | Triggers on | Result |
+| Job | Trigger | What it does |
 |---|---|---|
-| **`Roku-Staging-Service`** (BUILT 2026-08-31) | a push to `test-release-auto-deploy` that touches `render-service/`, `fonts/` or `buildspec.yml` | auto-deploy of the render service to the test fleet |
-| **`Roku-Production-Service`** (BUILT 2026-09-07) | a push to `prod-release-auto-deploy` touching the same paths | builds the image under an immutable `prod-<sha>` tag, registers a `roku-render-prod` task-definition revision on it (everything else copied from the current revision), rolls `roku-render-prod`, smoke-tests `https://roku-control.mangodisplay.com/healthz`. Same Slack notifications as staging. |
+| `Roku-Staging-Service` | push to `test-release-auto-deploy` touching `render-service/`, `fonts/` or `buildspec.yml` | syntax gate → package server code → S3 → CodeBuild (tags `v1`/`latest`) → `update-service --force-new-deployment` → smoke `/version` |
+| `Roku-Production-Service` | same paths on `prod-release-auto-deploy` | same, but the image is tagged `prod-<sha8>`, a `roku-render-prod` task-definition revision is registered on it, the service is rolled to that revision, smoke `/healthz` |
 
-**Path filtering:** the job's Git SCM carries *included regions*
-(`render-service/.*`, `fonts/.*`, `buildspec\.yml`). The GitHub hook
-wakes Jenkins to poll, and polling honours those regions — so a push
-that only touches `tvos/`, the Roku channel (`components/`, `source/`,
-`images/`, `media/`, `manifest`) or documentation triggers **no build
-and no fleet restart**. A manual *Build Now* always builds, regardless,
-which is the escape hatch for a forced redeploy.
-| `roku-channel` | `manifest`, `components/**`, `source/**`, `images/**`, `media/**`, `fonts/**`, `package.sh` | signed channel zip as a build artifact; store submission stays manual |
-| `tvos-app` | `tvos/**` | archive; optional TestFlight upload; App Store release manual |
+A push that only touches the channel, tvOS or docs builds nothing.
+*Build Now* always builds. Slack gets start/success/failure. About five
+minutes end to end; households see nothing (new task before old, cached
+pages, one-second hand-over).
 
-`fonts/**` deliberately triggers two jobs — a font change affects both
-the service image and the channel bundle.
+**Never pin the TEST task definition to an immutable tag** — the staging
+job deploys whatever image the current revision names, so it must stay
+on `latest`.
 
-**Service pipeline steps** (Jenkins orchestrates the existing
-CodeBuild rather than building Docker itself: the image is ARM64 and
-CodeBuild builds arm64 natively):
-
-1. checkout
-2. CI gates: `node --check` on every JS file; `render-service/test/`
-   suites; fail if `render-service/portal-preview/` or `portal-patch/`
-   reappears (both retired 2026-09-02)
-3. package the deploy zip with the repo's packaging script (same logic
-   humans use — do not hand-type the exclusion list)
-4. upload to S3 → `codebuild start-build` tagged with the git SHA →
-   wait
-5. register a task-definition revision from `deploy/taskdef-<env>.json`
-   with the new image
-6. `ecs update-service` → wait for `services-stable`
-7. smoke test: portal boots and one capture publishes, else fail
-
-**Prod job difference (as built):** the same source is rebuilt by
-CodeBuild under an immutable `prod-<sha>` tag and the task definition
-is pinned to it, so every production revision names exactly the image
-it runs and rollback is "update-service to the previous revision".
-(The original idea of re-tagging the image the test job built was not
-done: the staging job pushes the mutable `v1`/`latest` tags with no
-SHA, so there is nothing to look up by commit. Deterministic Docker
-builds from the same commit make this equivalent in practice.)
-
-**Staging note (2026-09-07):** the staging job rolls the service with
-`--force-new-deployment` and no task definition, so it deploys
-whatever image the test service's current revision names. That revision
-must therefore point at the mutable `latest` tag the job pushes; the
-density tests had pinned it to `ownership9` and it was moved back to
-`latest` (same digest) the same day. Never pin the TEST task definition
-to an immutable tag, or Jenkins deploys will silently change nothing.
-
-**Branches:** `prod-release-auto-deploy` was created 2026-09-07 from
-`live-portal` (= the code running on both fleets). `test-release-auto-deploy`
-lags `live-portal`; pushing `live-portal` to it triggers a staging deploy
-of the same code.
-
-**Jenkins IAM** — IAM user `jenkins`, inline policies
-`roku-staging-service-deploy` (CodeBuild start/watch, update/describe
-the test service) and `roku-prod-service-deploy` (2026-09-07: CodeBuild
-start/watch; ECR describe/get/put; `ecs:RegisterTaskDefinition`,
-`ecs:DescribeTaskDefinition`, **`ecs:TagResource`** — the prod task
-definition carries tags and registration fails without it; `iam:PassRole`
-on the two prod roles only; update/describe `roku-render-prod` only).
-S3 upload rides the user's existing S3 access.
-
-### 7.3 Manual deploy (until Jenkins exists)
+### Rollback (production)
 
 ```
-cd Mango-Display-Roku
-zip -qr /tmp/source.zip buildspec.yml render-service fonts \
-  -x "render-service/node_modules/*" "render-service/display_p*" \
-     "render-service/overlay_*" "render-service/effect_*" \
-     "render-service/ui_check_*" "render-service/*.manifest.json" \
-     "render-service/display.json" "render-service/display.jpg" \
-     "render-service/.version" "render-service/.asset-prefix" \
-     "render-service/calendar-override.json" "render-service/displays/*"
-aws s3 cp /tmp/source.zip s3://roku-render-build-945710099949/source.zip
-aws codebuild start-build --project-name roku-render-build
-# wait for SUCCEEDED, then:
-aws ecs update-service --cluster roku-render --service roku-render --force-new-deployment
-```
-
-Deploys restart the fleet: TVs keep showing cached pages and portals
-reopen on the next poll. Expect ~60–90 s.
-
-### 7.3b What a deployment does to a watching user
-
-Settings: `minimumHealthyPercent 100`, `maximumPercent 200`, target-group
-deregistration delay 60s. ECS starts the NEW task before stopping the
-old, so there is never zero capacity.
-
-What the user sees: **essentially nothing.**
-
-- The display never blanks - page images are on CloudFront and already
-  cached on the device.
-- No spinner: a deploy's render is "startup"/background (rank 1), and
-  the spinner is reserved for user-driven work.
-- Clock, countdowns, weather and effect animations keep running; they
-  are native on the device and independent of the server.
-- Worst case the display is a minute or two stale, then refreshes.
-
-What genuinely drops:
-
-- **The display's WebSocket**, for ~15-30s, while the old portal closes
-  and the new one boots. No data is lost: the new portal loads current
-  state from the API on boot, so anything pushed during the gap appears
-  in the first render after.
-- **An interaction mid-deploy** may be slow or need a retry if it lands
-  on a task whose portal has not opened yet.
-
-Two caveats:
-
-- **Brief double-socket window.** While the new task is live and the old
-  is draining, both can hold a portal for the same display, and the
-  backend closes one of the two sockets. It resolves as the old task
-  exits; the 60s deregistration delay bounds it.
-- **Cold sprite cache.** A fresh container (deploy OR Spot interruption)
-  has no filmed sheets. Filming used to block the first publish for
-  40-90s; since 2026-09-01 both the calendar cells and the widget icons
-  defer it - the page publishes immediately and the animations arrive a
-  few seconds later.
-
-**The deployment circuit breaker is ENABLED on test (2026-09-01) and
-must be enabled on production too.** With it on, ECS gives up on a
-deployment whose tasks keep failing to start or stay healthy and rolls
-back to the last good task definition on its own, instead of leaving a
-broken deploy up until someone notices. Jenkins still fails the build,
-so you get both the automatic recovery and the alert:
-```
-aws ecs update-service --cluster <c> --service <s> \
-  --deployment-configuration \
-  "deploymentCircuitBreaker={enable=true,rollback=true},minimumHealthyPercent=100,maximumPercent=200"
-```
-
-### 7.4 Rollback
-
-```
-# list revisions, pick the previous one
 aws ecs list-task-definitions --family-prefix roku-render-prod --sort DESC
-aws ecs update-service --cluster roku-render-prod --service roku-render-prod \
-  --task-definition roku-render-prod:<N-1> --force-new-deployment
+aws ecs update-service --cluster roku-render --service roku-render-prod \
+  --task-definition roku-render-prod:<previous> --force-new-deployment
 ```
-~90 seconds. Keep an ECR lifecycle policy retaining the last ~20 images
-so rollback targets still exist.
+
+About 90 seconds. Every production revision names the exact image it
+ran, so any earlier revision is a valid target.
+
+### Roku channel
+
+Not in Jenkins. `./package.sh` (test) or `./package.sh prod`, sideload
+the zip on a Roku that holds the signing key, sign with `plugin_package`,
+download the `.pkg`, upload in the Roku dashboard. Signed packages and
+the recovery steps: `signing/CREDENTIALS.md`. Bump `build_version` in
+`manifest` before every upload.
+
+### Manual service deploy (escape hatch)
+
+`OPS_RUNBOOK_DETAIL.md` §7.3 has the zip → S3 → CodeBuild → ECS
+commands the jobs automate.
 
 ---
 
-## 8. Monitoring and alarms
+## 3. Watching it
 
-Create in both environments (prod at minimum):
+Alarms (both environments; production ones prefixed `roku-render-prod-`):
 
-| Alarm | Threshold | Meaning / action |
-|---|---|---|
-| `RunningTaskCount` | at the scaling maximum (14) for 15 min | The $500 spend limit is engaged; fleet has outgrown it — raise `--max-capacity` (and the budget) if the growth is real |
-| `Refusing` (custom, per task) | 1 for 10 min | A task is full and scaling has not caught up — check memory/CPU, task count, and whether the maximum binds |
-| `UnhealthyWorkers` (custom) | > 0 for 15 min | A display's portal will not open after three tries — read that display's log (`portal open failed`, `portal console before the failure`) |
-| Target group `UnHealthyHostCount` | > 0 for 5 min | `/healthz` is failing: ownership store down or nothing publishing — ECS replaces the task; if it repeats, the cause is upstream |
-| DynamoDB `ThrottledRequests` / `SystemErrors` on the owner table | any | Claims and renewals failing; leases will lapse and displays hand over needlessly |
-| ALB `HTTPCode_Target_5XX_Count` | > 10 in 5 min | Service erroring; check logs |
-| AWS Budget "Roku render service" | $250 and $400 (of the $500 limit) | Growth notice — email to Dave |
-| Deployment failure (EventBridge `ECS Deployment State Change` = FAILED) | any | Roll back (§7.4) |
-
-Route to email/SNS the team actually reads. **Alerting is what makes
-capacity management calm** — resizing is a two-minute planned action if
-you get warned, and an outage if you do not.
-
-Useful log greps (`/ecs/roku-render*`):
-- `claimed <device>` / `ownership: lost` / `released every row` — the ownership layer at work
-- `refusing <device>` — a task declined a new display (full)
-- `UNHANDLED REJECTION (contained)` — a worker bug that would have restarted the whole task before 2026-09-07
-- `live portal ready` — a display's portal booted
-- `captured page(s) ... (reason)` — every render, with why
-- `preempting in-flight render` — a user edit jumped the queue
-- `[portal error]` — errors from inside the portal page
-
----
-
-## 9. Capacity, scaling, and growth
-
-### Decision (2026-09-06/07, Dave)
-
-**Scale out on ECS auto-scaling with the display ownership layer.**
-One ECS service, any number of tasks, scaled by ECS on the service's
-real memory and CPU. A hard spend limit of **$500/month**, enforced as a
-**14-task maximum**. Stay on Fargate: one on-demand base task, Fargate
-Spot for every task above it. No EC2, no instances. Nobody adds or
-removes tasks by hand.
-
-(This replaces the 2026-08-29 single-task / vertical-scaling decision.
-The reasoning there was right about the constraint; ownership is what
-removes it.)
-
-### How ownership works (`render-service/ownership.js`, `fleet.js`)
-
-1. A device's poll lands on any task via the load balancer.
-2. The task looks the display up in the ownership table (DynamoDB
-   `roku-display-owner-<env>`, key `deviceId`).
-3. If this task owns it: serve. If another task owns it: **forward** the
-   request to that task's private address (`taskAddr`) and relay the
-   reply — the device never sees the hop. If nobody owns it: **claim**
-   with a conditional write, unless this task is refusing.
-4. Ownership is a **lease**: 90 s, renewed every 30 s. A task that dies
-   stops renewing and its displays become claimable within 90 s. A task
-   that stops cleanly (deploy, scale-in, Spot reclaim) **releases its
-   rows first**, so the hand-over takes one poll, not one lease.
-5. A task **refuses** new claims (`admission()` in fleet.js) when its
-   own memory passes 85% or its CPU has held above 70% for 30 s
-   (`usage.js`), while 4 or more of its portals are still booting, or
-   after 20 claims in the last minute. The device gets a 503 with
-   `Retry-After: 5`, re-polls, and lands on a less loaded task. The
-   booting/rate limits exist because usage lags: a fresh task once took
-   89 displays in ninety seconds before its CPU sample moved.
-
-Every reply carries `x-mm-owner: <taskId>`; the simulator uses it to
-prove no display ever has two owners.
-
-Measured in the phase 0–3 drills (2026-09-07, ~600,000 polls, zero
-double owners): sudden death → every display re-claimed 85–125 s after
-the kill; clean shutdown, deploy and real Fargate Spot reclaims → rows
-released within 1 s, displays re-claimed in 8–75 s where a task had
-room (up to ~6 min when the whole fleet was refusing at the ceiling).
-A rolling deploy of 14 tasks under load cost the polling devices one
-hand-over each and not one failed poll.
-
-### Scaling settings
-
-| Setting | Value | Why |
-|---|---|---|
-| Scale-out / scale-in | target tracking on `ECSServiceAverageMemoryUtilization` 70% and `ECSServiceAverageCPUUtilization` 65% | ECS follows whichever asks for more tasks. Built-in metrics, no custom metric. |
-| Task range | min 1, **max 14** | The $500/month limit: one on-demand task (~$89) + 13 Spot tasks (~$27–30 each) + the ALB/logs floor. Recompute if the task size changes. |
-| Cooldowns | scale-out 120 s, scale-in 300 s | A task takes ~1 min to become healthy. Target tracking removes ONE task per scale-in cooldown at low load (measured: 14→13→12 at 15-min steps), so 15 min meant hours of idle Spot tasks after a peak; 5 min drains a peak in about an hour. |
-| Claim refusal | memory ≥ 85%, CPU ≥ 70% for 30 s, ≥ 4 portals booting, or 20 claims/min | `REFUSE_MEM_FRACTION`, `REFUSE_CPU_FRACTION`, `REFUSE_CPU_SUSTAIN_MS`, `MAX_BOOTING`, `MAX_CLAIMS_PER_MIN` |
-| Lease | 90 s, renew 30 s | `OWNERSHIP_LEASE_MS`, `OWNERSHIP_RENEW_MS` |
-| Capacity | `FARGATE` base 1 weight 1, `FARGATE_SPOT` weight 4 | One task can never be reclaimed; the rest are ~70% off. |
-| Deregistration delay | 60 s | Lets an in-flight 50 s long-poll finish before a draining task goes. |
-
-A display count is deliberately **not** the scaling signal: a one-page
-clock and a five-page calendar wall are different loads. `OwnedDisplays`
-is published per task and per service for dashboards and alarms only.
-
-### Environment variables (fleet)
-
-| Variable | Meaning |
+| Alarm | Means |
 |---|---|
-| `OWNERSHIP` | `off` (single task, the default), `memory` (one process, tests), `dynamo` (the fleet) |
-| `OWNERSHIP_TABLE` | the DynamoDB table |
-| `TASK_ID`, `TASK_ADDR` | overrides; on Fargate both come from the task metadata endpoint |
-| `SIM_DISPLAYS=1` | accept synthetic `SIM*` displays (test only; refuses to start on a prod API base) |
-| `SERVICE_NAME` | metric dimension (`roku-render-test` / `roku-render-prod`) |
-| `RENDER_CONCURRENCY` | render slots per task (2 on the 2 vCPU task) |
-| `MAX_BOOTING`, `MAX_CLAIMS_PER_MIN` | admission control (4, 20) |
-| `HEALTH_STALE_MS` | `/healthz` fails when watched displays have asked for captures and nothing published for this long (15 min) |
+| `task-ceiling` | at the 14-task spend limit for 15 min — raise `--max-capacity` and the budget if the growth is real |
+| `refusing` | a task refused new displays for 10 min — scaling is not keeping up, or the maximum binds |
+| `unhealthy-workers` | a display's portal will not open after three tries — read that display's log |
+| `unhealthy-hosts` | a task is failing `/healthz` — ECS replaces it; if it repeats, the cause is upstream |
+| `owner-table-errors` | DynamoDB errors on the owner table |
+| Budget $250 / $400 | growth notice (email) |
 
-### Load and ownership testing
+`/healthz` on either hostname returns the answering task's id, usage,
+owned displays and admission state. Useful log greps: `claimed`,
+`ownership: lost`, `released every row`, `refusing`, `live portal
+ready`, `captured page(s)`, `portal open failed`, `UNHANDLED REJECTION`.
 
-`render-service/sim-devices.js` is the device simulator: N pretend TVs polling
-`/wait` exactly like the channel, reporting owners, hand-overs, gaps
-and every 503 by reason. It pairs with `SIM_DISPLAYS=1` on the service,
-which maps `SIM*` ids onto the "claude test" layout in designer mode
-(no socket, so hundreds coexist). Phase 0 runs three service processes
-on a laptop against the real test table:
+Quick triage:
 
-```
-VERSION_PORT=8191 TASK_ID=laptop-A TASK_ADDR=127.0.0.1:8191 OWNERSHIP=dynamo \
-  OWNERSHIP_TABLE=roku-display-owner-test SIM_DISPLAYS=1 node render-service/fleet.js
-node render-service/sim-devices.js --base http://127.0.0.1:8191,http://127.0.0.1:8192,http://127.0.0.1:8193 --count 24 --ramp 40
-```
+- **A display stopped updating:** `RunningTaskCount` first, then grep
+  the device id; no `live portal ready` → portal boot failed, look for
+  `[portal error]` and `portal console before the failure`. The TV
+  keeps cached pages throughout.
+- **`[portal error] 403`:** benign display-scoped API calls; ignore
+  unless captures fail.
+- **Spot capacity gone for a long stretch:** move the service to
+  `capacityProvider=FARGATE,weight=1,base=1` temporarily.
 
-Exit code 2 from the simulator means a double owner was seen.
+---
 
-For the cluster, run it as a throwaway task from the same image (task
-definition `roku-sim`, 0.25 vCPU / 0.5 GB, Spot; the soak in phase 4
-ran 100 synthetic devices from it):
+## 4. Scaling and ownership (the essentials)
 
-```
-aws ecs run-task --cluster roku-render --task-definition roku-sim --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[<subnet>],securityGroups=[sg-0cef8da8f496529ed],assignPublicIp=ENABLED}" \
-  --capacity-provider-strategy capacityProvider=FARGATE_SPOT,weight=1 --tags key=Project,value=Roku
-```
+- Each display is **leased** to one task in DynamoDB (90 s lease,
+  renewed every 30 s). A poll landing on another task is **forwarded**
+  to the owner; an unowned display is **claimed** unless the task is
+  refusing (memory ≥ 85 %, CPU ≥ 70 % for 30 s, 4+ portals booting, or
+  20 claims in the last minute). Clean shutdowns release rows; sudden
+  deaths recover within a lease.
+- ECS scales on real memory/CPU. **Capacity is CPU-bound: about 20
+  watched displays per 2 vCPU task** (measured 2026-09-07); 14 tasks ≈
+  250. The idle-repaint guard in the service and portal PR #74 lower
+  idle CPU per portal, which is the lever — re-measure with the
+  simulator after each such change.
+- Simulator: `SIM_DISPLAYS=1` on a **test** task accepts `SIM*` device
+  ids; `render-service/sim-devices.js` polls as N devices (task
+  definition `roku-sim` runs it on the cluster). Exit code 2 = a double
+  owner was seen.
+- Knobs (env): `OWNERSHIP`, `OWNERSHIP_TABLE`, `RENDER_CONCURRENCY`,
+  `REFUSE_*`, `MAX_BOOTING`, `MAX_CLAIMS_PER_MIN`, `HEALTH_STALE_MS`.
 
-Stop it with `aws ecs stop-task`; its displays evict from the fleet
-after 30 idle minutes.
+Full design, drill results and numbers: `OPS_RUNBOOK_DETAIL.md` §9.
 
-### Capacity (per task, 2 vCPU / 8 GB) — measured 2026-09-07
+---
 
-**CPU binds long before memory.** An idle live portal costs ~150–165 MB
-and, before the idle-repaint guard, ~5% of the task's 2 vCPU: 16–22
-portals put a task at 83–100% CPU with memory at 35–41% of 8 GB. So a
-task held **~18–20 watched displays** and 14 tasks ≈ **~250**, not the
-1,000 the plan assumed from the 2026-08-24 memory-only test.
+## 5. Post-production to-do
 
-Where the CPU goes (one idle portal on a laptop, ~30% of a core): the
-six weather-icon SVG `<img>`s animate themselves and Chromium repaints
-them at frame rate (~half); timers/rAF/CSS animations ~5%; the rest is
-image/marquee repainting. The service now hides the SVG icons while a
-portal is idle (`html.mm-idle`, lifted for every capture — the device
-draws them natively anyway). The remaining idle repaint is a **portal
-PR**: in painted mode nothing should repaint between changes. Each
-halving of idle CPU doubles displays per task and halves the cost per
-display, which is the lever that reaches the 50-cent target.
+Reviewed with Dave 2026-09-07. Revisit after the first weeks of
+production; none blocked launch.
 
-Re-measure after every such change: the simulator ramp (below) gives
-the number in ten minutes.
-
-### Auto-scaling timing (measured)
-
-Target tracking needs three 1-minute datapoints past the target, then
-provisions: the first scale-out came ~5 min after CPU crossed the
-target, then one task per minute. Admission control is what keeps the
-tasks healthy in that window; devices past capacity retry every 5 s
-until a task has room. Scale-in follows the 15-minute cooldown.
-
-Four real Fargate Spot interruptions landed during the ramp; each task
-released its rows within a second of the warning.
-
-### Startup after a restart or deploy
-
-Every display of a dead task re-claims within a lease, then re-renders.
-With one render slot per vCPU those renders queue: measured on a laptop,
-the last of 10 displays behind one slot waited ~5 minutes for its first
-capture. TVs show cached pages meanwhile (no spinner — a service
-restart is not an app launch). At scale this is why `RENDER_CONCURRENCY`
-tracks vCPUs and why the 15-minute scale-in cooldown exists.
-
-## 10. Three artifacts, three release cadences
-
-| Artifact | Version identity | Release tag | Ships via |
+| # | Item | Where | Why |
 |---|---|---|---|
-| render service | image tag = git SHA | `service-<semver>` | Jenkins → ECS (continuous) |
-| Roku channel | `manifest` `major.minor.build` | `roku-channel-<x.y.z>` | Roku dashboard, store review |
-| Apple TV app | bundle version | `tvos-<x.y.z>` | App Store Connect / TestFlight |
-
-**The service will always be ahead of the TVs.** That is the design.
-It stays safe on one rule:
-
-> New manifest fields must be **ignorable by older clients**. A TV that
-> does not know a field must behave as it did before, not break.
-
-If a genuinely breaking change is ever needed, the escape hatch exists:
-every device sends its channel version in the poll (`major`/`minor`), so
-the service can serve an older manifest shape to older clients.
-
-`TVOS_PARITY_QUEUE.md` tracks client-side work the service has gotten
-ahead of; `tvos/PARITY.md` records which Roku commit the tvOS app
-matches. Update both when porting.
-
-Beta/staged rollout: Roku beta channels take up to 20 testers and
-**expire after 120 days**; TestFlight allows 10,000 external testers
-with builds expiring after 90 days.
-
----
-
-## 11. Troubleshooting
-
-**A display stopped updating.**
-Check `RunningTaskCount` first (Spot interruption or crash), then grep
-the log for the device id. `live portal ready` missing → the portal
-failed to boot; look for `[portal error]`. The TV keeps showing cached
-pages throughout, which is why this is rarely urgent.
-
-**Everything is slow after an edit.**
-Look at the render reasons in the log. A background render (`scheduled`,
-`midnight`) in flight used to make edits wait; user edits now preempt
-(`preempting in-flight render`). If you see repeated `midnight`
-captures at odd hours, the portal's day-rollover guard has regressed.
-
-**Images look stale / wrong art.**
-Sprite sheets are content-hashed; a regenerated sheet gets a NEW
-filename by design. If art is stale, something is serving an old
-manifest — check the CloudFront cache headers (page images are
-`no-cache`, sheets are 1-year immutable) and the version in
-`display.json`.
-
-**A portal change didn't reach displays.**
-If `PORTAL_PREVIEW_DIR` or `PORTAL_PATCH_DIR` is set on the task
-definition, the service is serving its own copy of the named file(s) and
-masking the deployed portal. Neither should be set (§1, rule 3); drop it
-with a new task-definition revision.
-
-**`[portal error] 403` lines.**
-Known benign class: display-scoped API calls the portal makes that the
-render session is not authorised for. Rendering is unaffected. Do not
-chase unless captures are actually failing.
-
-**Spot interruption (test).**
-Two-minute warning, task dies, ECS restarts it when capacity frees.
-Displays ride it out on cached pages. If capacity is unavailable for a
-long stretch, temporarily switch the service to `FARGATE`:
-```
-aws ecs update-service --cluster roku-render --service roku-render \
-  --capacity-provider-strategy capacityProvider=FARGATE,weight=1,base=1 \
-  --force-new-deployment
-```
-
----
-
-*Written 2026-08-28. Keep this current: if you change how something is
-deployed, change it here in the same commit.*
+| 1 | Channel backoff with jitter and a launch delay | channel (next beta build) | hundreds of Rokus retrying every 5 s after a restart is rude to the service |
+| 2 | Cache pruning on the task disk | service | strips and sheets accumulate; a deploy clears it today, a long-lived task would not |
+| 3 | Persisted display records | service | a backend outage must never block a display the service has not seen since its last restart |
+| 4 | Canary display after every portal/service deploy, with an alarm | infra + portal | a portal change that breaks painted mode should page, not wait for a customer |
+| 5 | Portrait "never signalled ready" | portal/service | reproducible with a portrait layout in designer mode; same error a tester's portrait Roku logged — root cause before selling portrait |
+| 6 | Promote portal PR #74 (no marquee animation in painted mode) | portal | halves idle CPU per portal → doubles displays per task |
+| 7 | Shared weather-icon library filmed once | service + channel | removes per-display icon filming and the idle SVG repainting for good |
+| 8 | Confirm the idle-repaint guard's effect on Fargate | test | measured 2× on a Mac; a 20-minute simulator run settles it |
+| 9 | Move the signing password out of git history | repo | Dave deferred; do before the repo is shared more widely |
+| 10 | Rename test resources with `-test` if the tags are not enough | infra | recreate of the test service; runbook + Jenkins update |

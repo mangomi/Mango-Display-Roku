@@ -144,7 +144,7 @@ Two traps already hit, both fixed in the Dockerfile:
   connections for the same display. Since 2026-09-07 the fleet leases
   each display to exactly one task (DynamoDB `roku-display-owner-<env>`,
   `render-service/ownership.js`) and other tasks forward to the owner,
-  so the service scales out under ECS auto-scaling (OPS_RUNBOOK §9).
+  so the service scales out under ECS auto-scaling (OPS_RUNBOOK_DETAIL.md §9).
   With `OWNERSHIP=off` it is the old single-task mode: never run two.
 - **Asset prefixes are derived, not stored** —
   HMAC(secret, deviceId), where the secret is `ASSET_PREFIX_SECRET` or,

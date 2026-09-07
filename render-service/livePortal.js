@@ -385,6 +385,7 @@ class LivePortal {
       { id: "mm-capture-hygiene", css: nw.effectHideCss() },
       { id: "mm-weather-settle", css: nw.weatherSettleCss() },
       { id: "mm-scroll-park", css: nw.scrollParkCss() },
+      { id: "mm-idle-repaint", css: nw.idleRepaintCss() },
     ];
     await this.page.addInitScript((list) => {
       const add = () => {
@@ -394,6 +395,8 @@ class LivePortal {
           s.textContent = t.css;
           document.head.appendChild(s);
         }
+        /* idle until a capture says otherwise (capture.js toggles it) */
+        document.documentElement.classList.add("mm-idle");
       };
       if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", add);
       else add();

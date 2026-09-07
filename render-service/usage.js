@@ -20,8 +20,12 @@ const os = require("os");
 const http = require("http");
 
 const REFUSE_MEM = parseFloat(process.env.REFUSE_MEM_FRACTION || "0.85");
-const REFUSE_CPU = parseFloat(process.env.REFUSE_CPU_FRACTION || "0.80");
-const REFUSE_CPU_SUSTAIN_MS = parseInt(process.env.REFUSE_CPU_SUSTAIN_MS || "60000", 10);
+/* CPU binds long before memory: ~30 portals saturate 2 vCPU while memory
+ * sits at a third (phase 1). Refuse earlier than the 80%/60s first
+ * proposed, so a burst of claims cannot push a task to 100% before the
+ * next sample - at 100% even the health check fails. */
+const REFUSE_CPU = parseFloat(process.env.REFUSE_CPU_FRACTION || "0.70");
+const REFUSE_CPU_SUSTAIN_MS = parseInt(process.env.REFUSE_CPU_SUSTAIN_MS || "30000", 10);
 const SAMPLE_MS = 15000;
 
 function readFirst(paths) {

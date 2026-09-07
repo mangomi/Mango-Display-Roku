@@ -692,6 +692,18 @@ server.keepAliveTimeout = 125000;
 server.headersTimeout = 130000;
 server.requestTimeout = 300000;
 
+/* Under load the task's CPU is all Chromium. The fleet process answers
+ * the balancer's health check and every device poll, and at 100% CPU
+ * with 34 portals it was starved enough to fail /healthz - the balancer
+ * deregistered a healthy-in-every-other-way task and ECS replaced it
+ * (phase 1, 2026-09-07). Schedule this process ahead of the browsers. */
+try {
+  require("os").setPriority(process.pid, -10);
+  log("process priority raised (nice -10)");
+} catch (e) {
+  log("could not raise process priority:", e.message);
+}
+
 server.listen(PORT, "0.0.0.0", async () => {
   await resolveIdentity();
   await usage.init().catch((e) => log("usage sampler failed to init:", e.message));

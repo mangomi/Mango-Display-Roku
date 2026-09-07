@@ -130,6 +130,16 @@ class LivePortal {
       ],
     });
 
+    /* The fleet process must stay responsive while the task's CPU is
+     * all browsers (health checks, polls). Raising its own priority
+     * needs a capability Fargate does not grant, but LOWERING the
+     * browser's is always allowed - and renderer processes forked later
+     * inherit it. Done before the first page so every child gets it. */
+    try {
+      const proc = this.browser.process();
+      if (proc && proc.pid) require("os").setPriority(proc.pid, 10);
+    } catch (e) {}
+
     const canvasW = this.opts.canvasW || 1920;
     const canvasH = this.opts.canvasH || 1080;
     const pageOpts = {

@@ -336,11 +336,14 @@ to an immutable tag, or Jenkins deploys will silently change nothing.
 lags `live-portal`; pushing `live-portal` to it triggers a staging deploy
 of the same code.
 
-**Jenkins IAM** (dedicated user/role, nothing broader): `s3:PutObject`
-on the build bucket; `codebuild:StartBuild`/`BatchGetBuilds`;
-ECR describe/get/put for retagging; `ecs:RegisterTaskDefinition`,
-`ecs:UpdateService`, `ecs:DescribeServices`; `iam:PassRole` limited to
-the task and execution roles.
+**Jenkins IAM** — IAM user `jenkins`, inline policies
+`roku-staging-service-deploy` (CodeBuild start/watch, update/describe
+the test service) and `roku-prod-service-deploy` (2026-09-07: CodeBuild
+start/watch; ECR describe/get/put; `ecs:RegisterTaskDefinition`,
+`ecs:DescribeTaskDefinition`, **`ecs:TagResource`** — the prod task
+definition carries tags and registration fails without it; `iam:PassRole`
+on the two prod roles only; update/describe `roku-render-prod` only).
+S3 upload rides the user's existing S3 access.
 
 ### 7.3 Manual deploy (until Jenkins exists)
 

@@ -29,9 +29,12 @@ portal. Instead:
 ### Golden rules — violating these breaks displays
 
 1. **ONE portal per display, ONE socket per display.** The backend
-   closes duplicate sockets for the same device id. This is why the
-   service must run as a **single task** today (see §9). **Never set
-   `desiredCount` above 1** without the display→task router built.
+   closes duplicate sockets for the same device id. The display
+   ownership layer (§9, `render-service/ownership.js`) is what lets
+   several tasks run: each display is leased to exactly one task and
+   the others forward to it. **Never run more than one task with
+   `OWNERSHIP=off`** — that is the single-task mode and two of them
+   fight over every socket.
 2. **The portal is the only source of "ready to screenshot".** Never
    add timers or heuristics on the service or device side to guess
    when a render is done.
@@ -50,8 +53,12 @@ portal. Instead:
 | Thing | Value |
 |---|---|
 | ECS cluster / service | `roku-render` / `roku-render` |
-| Task definition | `roku-render` (ARM64, 1 vCPU / 2 GB) |
-| Capacity | `FARGATE_SPOT` weight 1, base 0 |
+| Task definition | `roku-render` (ARM64, 2 vCPU / 16 GB, 40 GB ephemeral) |
+| Capacity | `FARGATE` base 1 weight 1 + `FARGATE_SPOT` weight 4 (one on-demand task, Spot above it) |
+| Auto-scaling | 1–14 tasks; target tracking on average memory 70% and CPU 65% |
+| Ownership table | DynamoDB `roku-display-owner-test` (TTL on `ttl`) |
+| Health check | `/healthz` (503 when the ownership store fails or watched displays stop publishing) |
+| Synthetic displays | `SIM_DISPLAYS=1` (test only — the service refuses to start with it on a prod API base) |
 | Control endpoint | `roku-control-test.mangodisplay.com` → ALB `roku-control` |
 | Target group | `roku-control-tg` |
 | Log group | `/ecs/roku-render` |
@@ -392,10 +399,13 @@ Create in both environments (prod at minimum):
 
 | Alarm | Threshold | Meaning / action |
 |---|---|---|
-| `MemoryUtilization` (ECS service) | > 70% for 15 min | Approaching the display ceiling → auto-resizer steps up (§9) |
-| `RenderQueueDepth` (custom, §9) | sustained > 3 for 15 min | Renders are queuing; the auto-resizer should act — if it has not, resize manually |
-| `RunningTaskCount` | < 1 for 5 min | Fleet is down — check Spot interruption / task crash |
+| `RunningTaskCount` | at the scaling maximum (14) for 15 min | The $500 spend limit is engaged; fleet has outgrown it — raise `--max-capacity` (and the budget) if the growth is real |
+| `Refusing` (custom, per task) | 1 for 10 min | A task is full and scaling has not caught up — check memory/CPU, task count, and whether the maximum binds |
+| `UnhealthyWorkers` (custom) | > 0 for 15 min | A display's portal will not open after three tries — read that display's log (`portal open failed`, `portal console before the failure`) |
+| Target group `UnHealthyHostCount` | > 0 for 5 min | `/healthz` is failing: ownership store down or nothing publishing — ECS replaces the task; if it repeats, the cause is upstream |
+| DynamoDB `ThrottledRequests` / `SystemErrors` on the owner table | any | Claims and renewals failing; leases will lapse and displays hand over needlessly |
 | ALB `HTTPCode_Target_5XX_Count` | > 10 in 5 min | Service erroring; check logs |
+| AWS Budget "Roku render service" | $250 and $400 (of the $500 limit) | Growth notice — email to Dave |
 | Deployment failure (EventBridge `ECS Deployment State Change` = FAILED) | any | Roll back (§7.4) |
 
 Route to email/SNS the team actually reads. **Alerting is what makes
@@ -403,6 +413,9 @@ capacity management calm** — resizing is a two-minute planned action if
 you get warned, and an outage if you do not.
 
 Useful log greps (`/ecs/roku-render*`):
+- `claimed <device>` / `ownership: lost` / `released every row` — the ownership layer at work
+- `refusing <device>` — a task declined a new display (full)
+- `UNHANDLED REJECTION (contained)` — a worker bug that would have restarted the whole task before 2026-09-07
 - `live portal ready` — a display's portal booted
 - `captured page(s) ... (reason)` — every render, with why
 - `preempting in-flight render` — a user edit jumped the queue
@@ -412,137 +425,102 @@ Useful log greps (`/ecs/roku-render*`):
 
 ## 9. Capacity, scaling, and growth
 
-### Decision (2026-08-29)
+### Decision (2026-09-06/07, Dave)
 
-**Launch and grow on a SINGLE task with automated vertical scaling. Do
-not enable ECS target-tracking autoscaling.** Build the display
-ownership layer when the trigger signals below say so — expected in the
-low hundreds of concurrent displays. Ownership is *additive*: workers
-already isolate cleanly per display, so nothing shipped now has to be
-undone to add it.
+**Scale out on ECS auto-scaling with the display ownership layer.**
+One ECS service, any number of tasks, scaled by ECS on the service's
+real memory and CPU. A hard spend limit of **$500/month**, enforced as a
+**14-task maximum**. Stay on Fargate: one on-demand base task, Fargate
+Spot for every task above it. No EC2, no instances. Nobody adds or
+removes tasks by hand.
 
-### The hard constraint
+(This replaces the 2026-08-29 single-task / vertical-scaling decision.
+The reasoning there was right about the constraint; ownership is what
+removes it.)
 
-Each display's portal holds that display's backend socket, and the
-backend closes duplicates. The service therefore runs as ONE task.
+### How ownership works (`render-service/ownership.js`, `fleet.js`)
 
-> **Never raise `desiredCount` above 1** on the current architecture.
-> If memory or CPU is high, resize the task — do not add tasks.
+1. A device's poll lands on any task via the load balancer.
+2. The task looks the display up in the ownership table (DynamoDB
+   `roku-display-owner-<env>`, key `deviceId`).
+3. If this task owns it: serve. If another task owns it: **forward** the
+   request to that task's private address (`taskAddr`) and relay the
+   reply — the device never sees the hop. If nobody owns it: **claim**
+   with a conditional write, unless this task is refusing.
+4. Ownership is a **lease**: 90 s, renewed every 30 s. A task that dies
+   stops renewing and its displays become claimable within 90 s. A task
+   that stops cleanly (deploy, scale-in, Spot reclaim) **releases its
+   rows first**, so the hand-over takes one poll, not one lease.
+5. A task **refuses** new claims when its own memory passes 85% or its
+   CPU has held above 80% for a minute (`usage.js`). The device gets a
+   503 with `Retry-After: 5`, re-polls, and lands on a less loaded task.
 
-### Why not ECS target-tracking autoscaling
+Every reply carries `x-mm-owner: <taskId>`; the simulator uses it to
+prove no display ever has two owners.
 
-This gets proposed regularly because it is correct for stateless
-services. It is not correct for this one. With a second task behind the
-ALB:
+Measured in the phase 0–3 drills (2026-09-07): sudden death → every
+display re-claimed within ~90–120 s; clean shutdown → within one poll;
+zero double owners across thousands of polls.
 
-1. The TV's long-poll is round-robined to task B instead of task A.
-2. Task B has no worker for that display, so it creates one — which
-   opens a live portal, which opens the backend socket for that device.
-3. The backend allows one socket per display, so it closes task A's.
-4. Task A's portal is now deaf to change pushes, but still answers
-   polls with **its own version counter** and still publishes to **the
-   same S3 prefix**.
-5. The TV sees the version jump between two counters while the tasks
-   overwrite each other's page images.
+### Scaling settings
 
-Result: corrupted display state *and* doubled render cost. Two further
-reasons it would misbehave even setting that aside:
-
-- **Bursty CPU.** A capture pegs a core for 1–4 s, then idles for
-  minutes. Average CPU stays low and spikes hard, so a CPU target
-  either never fires or flaps.
-- **Sticky memory.** Memory is a floor that rises with watched displays
-  and that Chromium does not return quickly, so a memory target
-  ratchets out and rarely scales back in.
-- **Destructive scale-in.** Terminating a task kills the portals for
-  every display it owns; they freeze until their next poll lands
-  elsewhere and a fresh portal boots (15–30 s each).
-
-### Automated vertical scaling (the launch answer)
-
-An alarm fires → a small Lambda registers the next task-definition size
-and updates the service. Hands-off; the cost is a ~60–90 s rolling
-restart per resize, during which TVs show cached pages.
-
-Hysteresis is mandatory, or displays restart repeatedly:
-
-- scale **up** only after sustained pressure (e.g. memory > 70% or
-  queue depth > 3 for 15 minutes)
-- scale **down** only after hours of quiet (e.g. < 35% for 6 hours)
-- at most **one resize per hour**
-- raise `cpu`, `memory`, and `RENDER_CONCURRENCY` together
-
-### Capacity ladder
-
-Two limits apply at once — memory (~181 MB per watched display) and
-render slots (`RENDER_CONCURRENCY`, default **1**: the whole fleet
-renders one page at a time).
-
-| Task size | `RENDER_CONCURRENCY` | Realistic watched displays |
+| Setting | Value | Why |
 |---|---|---|
-| 1 vCPU / 4 GB | 1 | ~20 |
-| 2 vCPU / 8 GB | 2 | ~40 |
-| 2 vCPU / 16 GB | 2–3 | ~80 |
-| 4 vCPU / 30 GB | 4 | ~150 |
-| 8 vCPU / 60 GB | 6 | ~300 |
-| 16 vCPU / 120 GB (Fargate max) | 8–12 | ~550 (unverified) |
+| Scale-out / scale-in | target tracking on `ECSServiceAverageMemoryUtilization` 70% and `ECSServiceAverageCPUUtilization` 65% | ECS follows whichever asks for more tasks. Built-in metrics, no custom metric. |
+| Task range | min 1, **max 14** | The $500/month limit: one on-demand task (~$89) + 13 Spot tasks (~$27–30 each) + the ALB/logs floor. Recompute if the task size changes. |
+| Cooldowns | scale-out 120 s, scale-in 900 s | A task takes ~1 min to become healthy; evenings move many TVs at once. |
+| Claim refusal | memory ≥ 85%, or CPU ≥ 80% for 60 s | `REFUSE_MEM_FRACTION`, `REFUSE_CPU_FRACTION`, `REFUSE_CPU_SUSTAIN_MS` |
+| Lease | 90 s, renew 30 s | `OWNERSHIP_LEASE_MS`, `OWNERSHIP_RENEW_MS` |
+| Capacity | `FARGATE` base 1 weight 1, `FARGATE_SPOT` weight 4 | One task can never be reclaimed; the rest are ~70% off. |
+| Deregistration delay | 60 s | Lets an in-flight 50 s long-poll finish before a draining task goes. |
 
-### Metrics to emit (custom CloudWatch, namespace `MangoDisplay/Render`)
+A display count is deliberately **not** the scaling signal: a one-page
+clock and a five-page calendar wall are different loads. `OwnedDisplays`
+is published per task and per service for dashboards and alarms only.
 
-These are the honest signals — better than CPU/memory percentages both
-for alarms now and as the target metric for autoscaling later:
+### Environment variables (fleet)
 
-- `WatchedDisplays` — workers with a live portal
-- `RenderQueueDepth` — captures waiting on the gate
-- `RenderDurationMs` — p50 and p95
-- `EditToPublishMs` — signal received → manifest published
-- plus the standard ECS memory/CPU utilisation
+| Variable | Meaning |
+|---|---|
+| `OWNERSHIP` | `off` (single task, the default), `memory` (one process, tests), `dynamo` (the fleet) |
+| `OWNERSHIP_TABLE` | the DynamoDB table |
+| `TASK_ID`, `TASK_ADDR` | overrides; on Fargate both come from the task metadata endpoint |
+| `SIM_DISPLAYS=1` | accept synthetic `SIM*` displays (test only; refuses to start on a prod API base) |
+| `SERVICE_NAME` | metric dimension (`roku-render-test` / `roku-render-prod`) |
+| `RENDER_CONCURRENCY` | render slots per task (2 on the 2 vCPU task) |
 
-### When to build ownership — trigger signals
+### Load and ownership testing
 
-Whichever arrives first:
+`tools/sim-devices.js` is the device simulator: N pretend TVs polling
+`/wait` exactly like the channel, reporting owners, hand-overs, gaps
+and every 503 by reason. It pairs with `SIM_DISPLAYS=1` on the service,
+which maps `SIM*` ids onto the "claude test" layout in designer mode
+(no socket, so hundreds coexist). Phase 0 runs three service processes
+on a laptop against the real test table:
 
-- `RenderQueueDepth` sustained above ~3
-- Memory above 70% on a 60 GB+ task
-- `EditToPublishMs` p95 creeping past ~10 s
-- **Deploy restarts becoming customer-visible** — in practice this is
-  the one most likely to bind. At 20 displays a 90 s freeze is
-  invisible; at 300 paying customers it is an incident.
+```
+VERSION_PORT=8191 TASK_ID=laptop-A TASK_ADDR=127.0.0.1:8191 OWNERSHIP=dynamo \
+  OWNERSHIP_TABLE=roku-display-owner-test SIM_DISPLAYS=1 node render-service/fleet.js
+node tools/sim-devices.js --base http://127.0.0.1:8191,http://127.0.0.1:8192,http://127.0.0.1:8193 --count 24 --ramp 40
+```
 
-Estimates, with confidence labelled:
+Exit code 2 from the simulator means a double owner was seen.
 
-| Limit | Estimate | Basis |
-|---|---|---|
-| Memory | ~550 displays | measured to N=20, linear; ~19 MB/h/portal creep observed |
-| Render throughput | ~480–700 | arithmetic from measured capture times (~36 s of gate time per display per hour) |
-| Background CPU of many live portals | **unknown — could bind at 150–250** | **never measured above N=20** |
-| Blast radius | ~200–300 | judgement, not measurement |
+### Capacity ladder (per task, 2 vCPU / 16 GB)
 
-Note these are **concurrently watched** displays, not registered ones.
-If a third of the installed base has the TV on at peak, 300 concurrent
-≈ 900–1,000 registered displays.
+Memory ~181 MB per watched display (measured 2026-08-24, linear to 20)
+and 5–8% of a vCPU each while busy. About 80–100 watched displays per
+task before the refusal thresholds bind; 14 tasks ≈ 1,000–1,400 watched
+displays. Past that, raise the maximum (and the budget) — one command.
 
-### Load test before trusting the top of the ladder
+### Startup after a restart or deploy
 
-`render-service/phase0-harness.js` already stands up synthetic portals;
-extend it to drive renders (not just hold portals open) and run it at
-**50 and 150 displays**. That replaces the weakest guess above —
-background CPU — with a real number. Roughly a day's work, and it can
-run during the beta rather than blocking launch.
-
-### What ownership looks like when it is built
-
-- Each task claims displays with short leases in DynamoDB; only the
-  owner opens that display's portal and publishes.
-- Requests arriving at a non-owner are proxied or redirected.
-- On SIGTERM a task releases its leases so survivors take over
-  immediately instead of waiting for polls.
-- Only then enable target tracking — on `WatchedDisplays` per task, not
-  on CPU.
-
-It is also the first component of the cheaper "socket sentinel"
-architecture (see the cost brainstorm in project memory) and what gives
-the fleet real high availability.
+Every display of a dead task re-claims within a lease, then re-renders.
+With one render slot per vCPU those renders queue: measured on a laptop,
+the last of 10 displays behind one slot waited ~5 minutes for its first
+capture. TVs show cached pages meanwhile (no spinner — a service
+restart is not an app launch). At scale this is why `RENDER_CONCURRENCY`
+tracks vCPUs and why the 15-minute scale-in cooldown exists.
 
 ## 10. Three artifacts, three release cadences
 

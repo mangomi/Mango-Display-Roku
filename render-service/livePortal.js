@@ -106,7 +106,11 @@ class LivePortal {
        * never the rotation host" switch (parentController.js) - the same
        * flag its rotated iframe passes. A rotated display is rendered
        * unrotated at a portrait canvas; the device turns it. */
-      (this.opts.embed ? "&embed=true" : "")
+      (this.opts.embed ? "&embed=true" : "") +
+      /* designer=true: no socket, no TV takeover - the portal's own
+       * preview protections. Synthetic displays only (see simWorker.js):
+       * hundreds of copies of one layout can then coexist. */
+      (this.opts.designer ? "&designer=true&page=0" : "")
     );
   }
 
@@ -161,8 +165,13 @@ class LivePortal {
      * that never produce a signal (an API 500, an exception inside a
      * success callback) - errors and warnings only, so the log stays
      * quiet in health */
+    this.console = [];
     this.page.on("console", (m) => {
       const kind = m.type();
+      /* a short tail of everything, for the post-mortem of an open that
+       * never signalled ready */
+      this.console.push(kind + ": " + m.text().slice(0, 200));
+      if (this.console.length > 40) this.console.shift();
       if (kind === "error" || kind === "warning") {
         this.log("[portal " + kind + "]", m.text().slice(0, 300));
       }
@@ -553,6 +562,10 @@ class LivePortal {
     return { handled: true, kind: "calendar", direction: type };
   }
 
+  consoleTail() {
+    return (this.console || []).slice(-12);
+  }
+
   async close(why) {
     this.ready = false;
     const browser = this.browser;
@@ -562,6 +575,19 @@ class LivePortal {
     this.log("live portal closing (" + why + ")");
     try {
       await browser.close();
+    } catch (e) {}
+  }
+
+  /* close with a deadline, then the process signal: a browser whose
+   * close hangs is exactly the browser that failed to open */
+  async kill(why) {
+    const browser = this.browser;
+    const proc = browser && browser.process ? browser.process() : null;
+    const closed = this.close(why + ", killing");
+    const timeout = new Promise((r) => setTimeout(r, 5000));
+    await Promise.race([closed, timeout]);
+    try {
+      if (proc && proc.exitCode === null) proc.kill("SIGKILL");
     } catch (e) {}
   }
 }

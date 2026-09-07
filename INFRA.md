@@ -50,6 +50,12 @@ per-GB processing.
 | 20 | Listener | HTTPS :443 -> target group, `*.mangodisplay.com` ACM cert (shared with the main product — NOT ours to delete), TLS13-1-2-2021-06 | free |
 | 21 | Security group rule | port 443 from anywhere -> `sg-00d529710ca26dcc1` | free |
 | 22 | DNS | `roku-control` CNAME -> the ALB, in **WordPress.com** DNS (mangodisplay.com's host), added by Dave 2026-08-11 | free |
+| 23 | DynamoDB table | `roku-display-owner-test`, on-demand, TTL on `ttl`, tag Project=Roku (2026-09-07) | < $1/mo |
+| 24 | Inline policy `display-ownership` on `roku-render-task` | Get/Put/Update/Delete/Describe on `roku-display-owner-*`; `cloudwatch:PutMetricData` in namespace `MangoDisplay/Roku` | free |
+| 25 | Security group rule | 8091 from `roku-render-task-sg` to itself — task-to-task forwarding | free |
+| 26 | Service tag + capacity strategy | service tagged Project=Roku (tasks inherit); `FARGATE` base 1 + `FARGATE_SPOT` weight 4 | — |
+| 27 | Service auto-scaling | 1–14 tasks, target tracking memory 70% / CPU 65% | — |
+| 28 | AWS Budget | "Roku render service", $500/mo on tag Project=Roku, alerts at 50% and 80% to Dave | free |
 
 **Live at** `https://roku-control.mangodisplay.com`
 — the only address compiled into the channel, and it survives an ALB
@@ -130,11 +136,11 @@ Two traps already hit, both fixed in the Dockerfile:
   channel is a long poll held for ~50s and the client waits 55s; the
   default would sever it.
 - **One socket per display identity.** The backend closes duplicate
-  connections for the same display. The fleet manager guarantees one
-  worker per display *within* one task — which is why the service is
-  **single-task by design**. Scaling desired-count past 1 puts two
-  sockets on every display and they fight forever; scaling out needs a
-  partitioner in front, not a bigger number.
+  connections for the same display. Since 2026-09-07 the fleet leases
+  each display to exactly one task (DynamoDB `roku-display-owner-<env>`,
+  `render-service/ownership.js`) and other tasks forward to the owner,
+  so the service scales out under ECS auto-scaling (OPS_RUNBOOK §9).
+  With `OWNERSHIP=off` it is the old single-task mode: never run two.
 - **Asset prefixes are derived, not stored** —
   HMAC(secret, deviceId), where the secret is `ASSET_PREFIX_SECRET` or,
   failing that, the R2 secret key. They survive redeploys (the ephemeral

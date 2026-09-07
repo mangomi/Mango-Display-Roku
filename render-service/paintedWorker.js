@@ -281,12 +281,46 @@ class PaintedWorker extends DisplayWorker {
    * a poll and an /interact during a reopen, say - would each build a
    * portal, and two portals for one display means two backend sockets,
    * one of which the backend closes forever. */
+  /* "portal never signalled ready" hit four displays in one week (and a
+   * tester for 30 minutes on 2026-09-05) and the worker only ever retried
+   * on the next catch-up. Now a failed open is escalated: the browser is
+   * killed outright (a close that hangs is the usual shape), the next
+   * attempt waits 30s, then 2 min, then 10 min, and after three failures
+   * in a row the worker is marked unhealthy so /healthz and the
+   * UnhealthyWorkers metric can say so. The portal's last console lines
+   * are logged with the failure so the cause is in the log, not lost. */
   async openPortal() {
     if (this.portal && this.portal.ready) return this.portal;
     if (this.portalOpening) return this.portalOpening;
-    this.portalOpening = this.openPortalOnce().finally(() => {
-      this.portalOpening = null;
-    });
+    if (this.portalBlockedUntil && Date.now() < this.portalBlockedUntil) {
+      throw new Error("portal open backed off for " + Math.round((this.portalBlockedUntil - Date.now()) / 1000) + "s after " + this.portalFailures + " failure(s)");
+    }
+    this.portalOpening = this.openPortalOnce()
+      .then((p) => {
+        if (this.portalFailures) this.log("portal open recovered after " + this.portalFailures + " failure(s)");
+        this.portalFailures = 0;
+        this.portalBlockedUntil = 0;
+        this.unhealthy = false;
+        return p;
+      })
+      .catch(async (e) => {
+        this.portalFailures = (this.portalFailures || 0) + 1;
+        const stale = this.portal;
+        this.portal = null;
+        if (stale) {
+          const tail = stale.consoleTail ? stale.consoleTail() : [];
+          if (tail.length) this.log("portal console before the failure:", tail.join(" || ").slice(0, 1500));
+          await stale.kill("open failed").catch(() => {});
+        }
+        const backoff = [30000, 120000, 600000][Math.min(this.portalFailures - 1, 2)];
+        this.portalBlockedUntil = Date.now() + backoff;
+        if (this.portalFailures >= 3) this.unhealthy = true;
+        this.log("portal open failed (" + this.portalFailures + " in a row): " + e.message + " - next attempt in " + backoff / 1000 + "s" + (this.unhealthy ? " - worker UNHEALTHY" : ""));
+        throw e;
+      })
+      .finally(() => {
+        this.portalOpening = null;
+      });
     return this.portalOpening;
   }
 
@@ -522,6 +556,7 @@ class PaintedWorker extends DisplayWorker {
 
   /* A burst of signals should cost one capture, not one each. */
   queueCapture(pageIndex, reason) {
+    this.lastCaptureRequestAt = Date.now(); /* the health check compares this with lastPublishAt */
     const fresh = this.captureQueue.size === 0;
     if (pageIndex === null) this.captureQueue.add("*");
     else this.captureQueue.add(pageIndex);

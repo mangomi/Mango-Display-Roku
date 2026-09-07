@@ -53,7 +53,7 @@ portal. Instead:
 | Thing | Value |
 |---|---|
 | ECS cluster / service | `roku-render` / `roku-render` |
-| Task definition | `roku-render` (ARM64, 2 vCPU / 8 GB, 40 GB ephemeral, `RENDER_CONCURRENCY=2`) |
+| Task definition | `roku-render` (ARM64, 1 vCPU / 2 GB, `RENDER_CONCURRENCY=1` — dropped back after the 2026-09-07 tests; the density runs used 2 vCPU / 8 GB, revision 17) |
 | Capacity | `FARGATE` base 1 weight 1 + `FARGATE_SPOT` weight 4 (one on-demand task, Spot above it) |
 | Auto-scaling | 1–14 tasks; target tracking on average memory 70% and CPU 65% (policies `roku-render-memory-70`, `roku-render-cpu-65`) |
 | Ownership table | DynamoDB `roku-display-owner-test` (TTL on `ttl`) |

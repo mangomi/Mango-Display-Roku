@@ -53,9 +53,9 @@ portal. Instead:
 | Thing | Value |
 |---|---|
 | ECS cluster / service | `roku-render` / `roku-render` |
-| Task definition | `roku-render` (ARM64, 2 vCPU / 16 GB, 40 GB ephemeral) |
+| Task definition | `roku-render` (ARM64, 2 vCPU / 8 GB, 40 GB ephemeral, `RENDER_CONCURRENCY=2`) |
 | Capacity | `FARGATE` base 1 weight 1 + `FARGATE_SPOT` weight 4 (one on-demand task, Spot above it) |
-| Auto-scaling | 1–14 tasks; target tracking on average memory 70% and CPU 65% |
+| Auto-scaling | 1–14 tasks; target tracking on average memory 70% and CPU 65% (policies `roku-render-memory-70`, `roku-render-cpu-65`) |
 | Ownership table | DynamoDB `roku-display-owner-test` (TTL on `ttl`) |
 | Health check | `/healthz` (503 when the ownership store fails or watched displays stop publishing) |
 | Synthetic displays | `SIM_DISPLAYS=1` (test only — the service refuses to start with it on a prod API base) |
@@ -451,16 +451,24 @@ removes it.)
    stops renewing and its displays become claimable within 90 s. A task
    that stops cleanly (deploy, scale-in, Spot reclaim) **releases its
    rows first**, so the hand-over takes one poll, not one lease.
-5. A task **refuses** new claims when its own memory passes 85% or its
-   CPU has held above 80% for a minute (`usage.js`). The device gets a
-   503 with `Retry-After: 5`, re-polls, and lands on a less loaded task.
+5. A task **refuses** new claims (`admission()` in fleet.js) when its
+   own memory passes 85% or its CPU has held above 70% for 30 s
+   (`usage.js`), while 4 or more of its portals are still booting, or
+   after 20 claims in the last minute. The device gets a 503 with
+   `Retry-After: 5`, re-polls, and lands on a less loaded task. The
+   booting/rate limits exist because usage lags: a fresh task once took
+   89 displays in ninety seconds before its CPU sample moved.
 
 Every reply carries `x-mm-owner: <taskId>`; the simulator uses it to
 prove no display ever has two owners.
 
-Measured in the phase 0–3 drills (2026-09-07): sudden death → every
-display re-claimed within ~90–120 s; clean shutdown → within one poll;
-zero double owners across thousands of polls.
+Measured in the phase 0–3 drills (2026-09-07, ~600,000 polls, zero
+double owners): sudden death → every display re-claimed 85–125 s after
+the kill; clean shutdown, deploy and real Fargate Spot reclaims → rows
+released within 1 s, displays re-claimed in 8–75 s where a task had
+room (up to ~6 min when the whole fleet was refusing at the ceiling).
+A rolling deploy of 14 tasks under load cost the polling devices one
+hand-over each and not one failed poll.
 
 ### Scaling settings
 
@@ -469,7 +477,7 @@ zero double owners across thousands of polls.
 | Scale-out / scale-in | target tracking on `ECSServiceAverageMemoryUtilization` 70% and `ECSServiceAverageCPUUtilization` 65% | ECS follows whichever asks for more tasks. Built-in metrics, no custom metric. |
 | Task range | min 1, **max 14** | The $500/month limit: one on-demand task (~$89) + 13 Spot tasks (~$27–30 each) + the ALB/logs floor. Recompute if the task size changes. |
 | Cooldowns | scale-out 120 s, scale-in 900 s | A task takes ~1 min to become healthy; evenings move many TVs at once. |
-| Claim refusal | memory ≥ 85%, or CPU ≥ 80% for 60 s | `REFUSE_MEM_FRACTION`, `REFUSE_CPU_FRACTION`, `REFUSE_CPU_SUSTAIN_MS` |
+| Claim refusal | memory ≥ 85%, CPU ≥ 70% for 30 s, ≥ 4 portals booting, or 20 claims/min | `REFUSE_MEM_FRACTION`, `REFUSE_CPU_FRACTION`, `REFUSE_CPU_SUSTAIN_MS`, `MAX_BOOTING`, `MAX_CLAIMS_PER_MIN` |
 | Lease | 90 s, renew 30 s | `OWNERSHIP_LEASE_MS`, `OWNERSHIP_RENEW_MS` |
 | Capacity | `FARGATE` base 1 weight 1, `FARGATE_SPOT` weight 4 | One task can never be reclaimed; the rest are ~70% off. |
 | Deregistration delay | 60 s | Lets an in-flight 50 s long-poll finish before a draining task goes. |
@@ -488,6 +496,8 @@ is published per task and per service for dashboards and alarms only.
 | `SIM_DISPLAYS=1` | accept synthetic `SIM*` displays (test only; refuses to start on a prod API base) |
 | `SERVICE_NAME` | metric dimension (`roku-render-test` / `roku-render-prod`) |
 | `RENDER_CONCURRENCY` | render slots per task (2 on the 2 vCPU task) |
+| `MAX_BOOTING`, `MAX_CLAIMS_PER_MIN` | admission control (4, 20) |
+| `HEALTH_STALE_MS` | `/healthz` fails when watched displays have asked for captures and nothing published for this long (15 min) |
 
 ### Load and ownership testing
 
@@ -506,12 +516,50 @@ node render-service/sim-devices.js --base http://127.0.0.1:8191,http://127.0.0.1
 
 Exit code 2 from the simulator means a double owner was seen.
 
-### Capacity ladder (per task, 2 vCPU / 16 GB)
+For the cluster, run it as a throwaway task from the same image (task
+definition `roku-sim`, 0.25 vCPU / 0.5 GB, Spot; the soak in phase 4
+ran 100 synthetic devices from it):
 
-Memory ~181 MB per watched display (measured 2026-08-24, linear to 20)
-and 5–8% of a vCPU each while busy. About 80–100 watched displays per
-task before the refusal thresholds bind; 14 tasks ≈ 1,000–1,400 watched
-displays. Past that, raise the maximum (and the budget) — one command.
+```
+aws ecs run-task --cluster roku-render --task-definition roku-sim --launch-type FARGATE \
+  --network-configuration "awsvpcConfiguration={subnets=[<subnet>],securityGroups=[sg-0cef8da8f496529ed],assignPublicIp=ENABLED}" \
+  --capacity-provider-strategy capacityProvider=FARGATE_SPOT,weight=1 --tags key=Project,value=Roku
+```
+
+Stop it with `aws ecs stop-task`; its displays evict from the fleet
+after 30 idle minutes.
+
+### Capacity (per task, 2 vCPU / 8 GB) — measured 2026-09-07
+
+**CPU binds long before memory.** An idle live portal costs ~150–165 MB
+and, before the idle-repaint guard, ~5% of the task's 2 vCPU: 16–22
+portals put a task at 83–100% CPU with memory at 35–41% of 8 GB. So a
+task held **~18–20 watched displays** and 14 tasks ≈ **~250**, not the
+1,000 the plan assumed from the 2026-08-24 memory-only test.
+
+Where the CPU goes (one idle portal on a laptop, ~30% of a core): the
+six weather-icon SVG `<img>`s animate themselves and Chromium repaints
+them at frame rate (~half); timers/rAF/CSS animations ~5%; the rest is
+image/marquee repainting. The service now hides the SVG icons while a
+portal is idle (`html.mm-idle`, lifted for every capture — the device
+draws them natively anyway). The remaining idle repaint is a **portal
+PR**: in painted mode nothing should repaint between changes. Each
+halving of idle CPU doubles displays per task and halves the cost per
+display, which is the lever that reaches the 50-cent target.
+
+Re-measure after every such change: the simulator ramp (below) gives
+the number in ten minutes.
+
+### Auto-scaling timing (measured)
+
+Target tracking needs three 1-minute datapoints past the target, then
+provisions: the first scale-out came ~5 min after CPU crossed the
+target, then one task per minute. Admission control is what keeps the
+tasks healthy in that window; devices past capacity retry every 5 s
+until a task has room. Scale-in follows the 15-minute cooldown.
+
+Four real Fargate Spot interruptions landed during the ramp; each task
+released its rows within a second of the warning.
 
 ### Startup after a restart or deploy
 

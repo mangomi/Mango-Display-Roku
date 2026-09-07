@@ -80,6 +80,53 @@ function patchFiles(dir, base) {
   return out;
 }
 
+let reniceWarned = false;
+function reniceChromium(log) {
+  if (process.platform !== "linux") return 0;
+  const os = require("os");
+  let entries;
+  try {
+    entries = fs.readdirSync("/proc").filter((d) => /^\d+$/.test(d));
+  } catch (e) {
+    return 0;
+  }
+  const kids = new Map();
+  const comm = new Map();
+  for (const pid of entries) {
+    try {
+      const stat = fs.readFileSync("/proc/" + pid + "/stat", "utf8");
+      const close = stat.lastIndexOf(")");
+      const name = stat.slice(stat.indexOf("(") + 1, close);
+      const ppid = stat.slice(close + 2).split(" ")[1];
+      comm.set(pid, name);
+      if (!kids.has(ppid)) kids.set(ppid, []);
+      kids.get(ppid).push(pid);
+    } catch (e) {}
+  }
+  let n = 0;
+  const stack = [String(process.pid)];
+  while (stack.length) {
+    const p = stack.pop();
+    for (const k of kids.get(p) || []) {
+      stack.push(k);
+      if (/chrom/i.test(comm.get(k) || "")) {
+        try {
+          if (os.getPriority(parseInt(k, 10)) < 10) {
+            os.setPriority(parseInt(k, 10), 10);
+            n++;
+          }
+        } catch (e) {
+          if (!reniceWarned) {
+            reniceWarned = true;
+            log && log("could not renice chromium: " + e.message);
+          }
+        }
+      }
+    }
+  }
+  return n;
+}
+
 class LivePortal {
   /*
    * opts: { portalBase, major, minor, deviceId, outW, outH,
@@ -130,16 +177,6 @@ class LivePortal {
       ],
     });
 
-    /* The fleet process must stay responsive while the task's CPU is
-     * all browsers (health checks, polls). Raising its own priority
-     * needs a capability Fargate does not grant, but LOWERING the
-     * browser's is always allowed - and renderer processes forked later
-     * inherit it. Done before the first page so every child gets it. */
-    try {
-      const proc = this.browser.process();
-      if (proc && proc.pid) require("os").setPriority(proc.pid, 10);
-    } catch (e) {}
-
     const canvasW = this.opts.canvasW || 1920;
     const canvasH = this.opts.canvasH || 1080;
     const pageOpts = {
@@ -164,6 +201,15 @@ class LivePortal {
       delete pageOpts.timezoneId;
       this.page = await this.browser.newPage(pageOpts);
     }
+
+    /* The fleet process must stay responsive while the task's CPU is
+     * all browsers (health checks, polls). Raising its own priority
+     * needs a capability Fargate does not grant, but LOWERING the
+     * browsers' is always allowed. Playwright hides the browser's pid,
+     * so walk our own descendants in /proc (Linux only; a no-op
+     * elsewhere) and nice every Chromium we find - renderers included,
+     * since the page exists by now. */
+    reniceChromium(this.log);
 
     await this.installRoutes();
     await this.installPatches();

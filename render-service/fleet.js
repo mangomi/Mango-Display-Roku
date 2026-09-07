@@ -381,12 +381,18 @@ function respondRetry(res, why) {
 
 const FORWARDED_HEADER = "x-mm-forwarded-by";
 const FORWARD_TIMEOUT_MS = 60000; /* a /wait is held up to 50s by the owner */
+/* Task-to-task connections are pooled. Node 20's default agent keeps
+ * sockets alive too, but with the SERVER's 5s idle close (below) a
+ * reused socket died under the request - "socket hang up" on 1 in ~50
+ * forwarded long-polls in phase 1. Explicit agent, explicit retry. */
+const forwardAgent = new http.Agent({ keepAlive: true, maxSockets: 1024, timeout: FORWARD_TIMEOUT_MS + 5000 });
 
 /* Hand a device's request to the task that owns its display, byte for
  * byte, and relay the reply. The device never learns there was a hop. */
-function forwardTo(addr, req, res) {
+function forwardTo(addr, req, res, attempt = 1) {
   return new Promise((resolve) => {
     const [host, port] = addr.split(":");
+    let gotResponse = false;
     const up = http.request(
       {
         host,
@@ -395,16 +401,28 @@ function forwardTo(addr, req, res) {
         path: req.url,
         headers: { ...req.headers, host: addr, [FORWARDED_HEADER]: me.taskId },
         timeout: FORWARD_TIMEOUT_MS,
+        agent: attempt === 1 ? forwardAgent : false,
       },
       (upRes) => {
-        res.writeHead(upRes.statusCode, upRes.headers);
+        gotResponse = true;
+        /* hop-by-hop headers stay on their hop */
+        const h = { ...upRes.headers };
+        delete h.connection;
+        delete h["keep-alive"];
+        delete h["transfer-encoding"];
+        res.writeHead(upRes.statusCode, h);
         upRes.pipe(res);
         upRes.on("end", resolve);
       },
     );
     up.on("timeout", () => up.destroy(new Error("forward timeout")));
     up.on("error", (e) => {
-      log("forward to " + addr + " failed for " + req.url.slice(0, 60) + ": " + e.message);
+      /* a pooled socket the owner had just closed: nothing was sent to
+       * the device yet, so try once more on a fresh connection */
+      if (!gotResponse && attempt === 1 && /socket hang up|ECONNRESET|EPIPE/.test(e.message)) {
+        return resolve(forwardTo(addr, req, res, 2));
+      }
+      log("forward to " + addr + " failed for " + req.url.slice(0, 60) + ": " + e.message + (attempt > 1 ? " (retry)" : ""));
       if (!res.headersSent) respondRetry(res, "owner unreachable: " + e.message);
       else res.end();
       resolve();
@@ -663,6 +681,16 @@ async function publishMetrics() {
     log("metrics: publish failed:", e.message);
   }
 }
+
+/* The balancer reuses connections to us and closes idle ones after its
+ * own 120s idle timeout. Node's default is to close idle keep-alive
+ * sockets after 5s, so the balancer regularly sent a request down a
+ * socket we were closing: HTTPCode_ELB_502 at 5-30/min under load
+ * (phase 1, 2026-09-07). Outlive the balancer's idle timeout, and keep
+ * headersTimeout above keepAliveTimeout as Node requires. */
+server.keepAliveTimeout = 125000;
+server.headersTimeout = 130000;
+server.requestTimeout = 300000;
 
 server.listen(PORT, "0.0.0.0", async () => {
   await resolveIdentity();

@@ -80,6 +80,53 @@ function patchFiles(dir, base) {
   return out;
 }
 
+let reniceWarned = false;
+function reniceChromium(log) {
+  if (process.platform !== "linux") return 0;
+  const os = require("os");
+  let entries;
+  try {
+    entries = fs.readdirSync("/proc").filter((d) => /^\d+$/.test(d));
+  } catch (e) {
+    return 0;
+  }
+  const kids = new Map();
+  const comm = new Map();
+  for (const pid of entries) {
+    try {
+      const stat = fs.readFileSync("/proc/" + pid + "/stat", "utf8");
+      const close = stat.lastIndexOf(")");
+      const name = stat.slice(stat.indexOf("(") + 1, close);
+      const ppid = stat.slice(close + 2).split(" ")[1];
+      comm.set(pid, name);
+      if (!kids.has(ppid)) kids.set(ppid, []);
+      kids.get(ppid).push(pid);
+    } catch (e) {}
+  }
+  let n = 0;
+  const stack = [String(process.pid)];
+  while (stack.length) {
+    const p = stack.pop();
+    for (const k of kids.get(p) || []) {
+      stack.push(k);
+      if (/chrom/i.test(comm.get(k) || "")) {
+        try {
+          if (os.getPriority(parseInt(k, 10)) < 10) {
+            os.setPriority(parseInt(k, 10), 10);
+            n++;
+          }
+        } catch (e) {
+          if (!reniceWarned) {
+            reniceWarned = true;
+            log && log("could not renice chromium: " + e.message);
+          }
+        }
+      }
+    }
+  }
+  return n;
+}
+
 class LivePortal {
   /*
    * opts: { portalBase, major, minor, deviceId, outW, outH,
@@ -106,7 +153,11 @@ class LivePortal {
        * never the rotation host" switch (parentController.js) - the same
        * flag its rotated iframe passes. A rotated display is rendered
        * unrotated at a portrait canvas; the device turns it. */
-      (this.opts.embed ? "&embed=true" : "")
+      (this.opts.embed ? "&embed=true" : "") +
+      /* designer=true: no socket, no TV takeover - the portal's own
+       * preview protections. Synthetic displays only (see simWorker.js):
+       * hundreds of copies of one layout can then coexist. */
+      (this.opts.designer ? "&designer=true&page=0" : "")
     );
   }
 
@@ -151,6 +202,15 @@ class LivePortal {
       this.page = await this.browser.newPage(pageOpts);
     }
 
+    /* The fleet process must stay responsive while the task's CPU is
+     * all browsers (health checks, polls). Raising its own priority
+     * needs a capability Fargate does not grant, but LOWERING the
+     * browsers' is always allowed. Playwright hides the browser's pid,
+     * so walk our own descendants in /proc (Linux only; a no-op
+     * elsewhere) and nice every Chromium we find - renderers included,
+     * since the page exists by now. */
+    reniceChromium(this.log);
+
     await this.installRoutes();
     await this.installPatches();
     await this.installSignalBridge();
@@ -161,8 +221,13 @@ class LivePortal {
      * that never produce a signal (an API 500, an exception inside a
      * success callback) - errors and warnings only, so the log stays
      * quiet in health */
+    this.console = [];
     this.page.on("console", (m) => {
       const kind = m.type();
+      /* a short tail of everything, for the post-mortem of an open that
+       * never signalled ready */
+      this.console.push(kind + ": " + m.text().slice(0, 200));
+      if (this.console.length > 40) this.console.shift();
       if (kind === "error" || kind === "warning") {
         this.log("[portal " + kind + "]", m.text().slice(0, 300));
       }
@@ -320,6 +385,7 @@ class LivePortal {
       { id: "mm-capture-hygiene", css: nw.effectHideCss() },
       { id: "mm-weather-settle", css: nw.weatherSettleCss() },
       { id: "mm-scroll-park", css: nw.scrollParkCss() },
+      { id: "mm-idle-repaint", css: nw.idleRepaintCss() },
     ];
     await this.page.addInitScript((list) => {
       const add = () => {
@@ -329,6 +395,8 @@ class LivePortal {
           s.textContent = t.css;
           document.head.appendChild(s);
         }
+        /* idle until a capture says otherwise (capture.js toggles it) */
+        document.documentElement.classList.add("mm-idle");
       };
       if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", add);
       else add();
@@ -553,6 +621,10 @@ class LivePortal {
     return { handled: true, kind: "calendar", direction: type };
   }
 
+  consoleTail() {
+    return (this.console || []).slice(-12);
+  }
+
   async close(why) {
     this.ready = false;
     const browser = this.browser;
@@ -562,6 +634,19 @@ class LivePortal {
     this.log("live portal closing (" + why + ")");
     try {
       await browser.close();
+    } catch (e) {}
+  }
+
+  /* close with a deadline, then the process signal: a browser whose
+   * close hangs is exactly the browser that failed to open */
+  async kill(why) {
+    const browser = this.browser;
+    const proc = browser && browser.process ? browser.process() : null;
+    const closed = this.close(why + ", killing");
+    const timeout = new Promise((r) => setTimeout(r, 5000));
+    await Promise.race([closed, timeout]);
+    try {
+      if (proc && proc.exitCode === null) proc.kill("SIGKILL");
     } catch (e) {}
   }
 }

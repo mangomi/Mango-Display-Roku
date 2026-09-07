@@ -24,16 +24,20 @@
  *
  * One worker owns one display outright - its socket (the backend closes
  * duplicate connections for the same identity, so exactly one owner is a
- * hard rule), its renders, its files, its R2 prefix. NOTE: this makes the
- * service single-task by design; running two of these containers behind
- * one balancer means two sockets per display and endless churn. Scaling
- * past one task needs a partitioner in front, not a bigger desired-count.
+ * hard rule), its renders, its files, its asset prefix. Across tasks the
+ * same rule is kept by the ownership layer (ownership.js): a display is
+ * leased to one task, every other task forwards to it, and ECS may run
+ * as many tasks as the load needs. With OWNERSHIP=off this is the old
+ * single-task mode - never run two of those behind one balancer.
  */
 const http = require("http");
 const https = require("https");
 const path = require("path");
 const { DisplayWorker } = require("./displayWorker");
 const { PaintedWorker } = require("./paintedWorker");
+const { SimWorker } = require("./simWorker");
+const { OwnershipManager, backendFromEnv } = require("./ownership");
+const { UsageSampler } = require("./usage");
 
 const env = (name, fallback) => process.env[name] || fallback;
 
@@ -71,6 +75,48 @@ const DEVICE_ID_RE = /^[A-Za-z0-9_-]{4,32}$/;
 function log(...args) {
   console.log(new Date().toISOString(), "[fleet]", ...args);
 }
+
+const IS_PROD_API = /(^|\.)api\.mangomirror\.com/.test(ENV.apiBase) || /(^|\/\/)socket\./.test(ENV.socketBase);
+
+/* Synthetic displays, TEST ONLY: with SIM_DISPLAYS=1, device ids that
+ * start with "SIM" skip the backend check and open the "claude test"
+ * display's layout in designer mode, which takes no socket, so hundreds
+ * of copies coexist and load the fleet like real displays would. The
+ * switch lives in the one shared image, inert unless set; two guards
+ * (Dave, 2026-09-07): the service REFUSES TO START if it is set while the
+ * API base is production, and the banner names it on every boot. */
+const SIM_ENABLED = process.env.SIM_DISPLAYS === "1";
+const SIM_ID_RE = /^SIM[A-Za-z0-9_-]{1,29}$/;
+const SIM_RECORD = {
+  major: parseInt(env("SIM_MAJOR", "1"), 10),
+  minor: parseInt(env("SIM_MINOR", "1715"), 10),
+  w: 1280,
+  h: 720,
+  orientation: 0,
+  synthetic: true,
+};
+if (SIM_ENABLED && IS_PROD_API) {
+  console.error("SIM_DISPLAYS=1 with a PRODUCTION api base (" + ENV.apiBase + ") - refusing to start");
+  process.exit(1);
+}
+const isSim = (deviceId) => SIM_ENABLED && SIM_ID_RE.test(deviceId);
+
+/* One display, one owner, across however many tasks ECS runs: see
+ * ownership.js. Off (the default) keeps the single-task behaviour. */
+let ownership = null;
+const usage = new UsageSampler(log);
+
+/* A process-wide failure in one display's worker must not take every
+ * other display down with it: log it against the display where it can
+ * be told, and keep serving. Node would otherwise exit on an unhandled
+ * rejection (one display's bug restarting the whole fleet). */
+process.on("unhandledRejection", (reason) => {
+  const msg = reason && reason.stack ? reason.stack.split("\n").slice(0, 4).join(" | ") : String(reason);
+  log("UNHANDLED REJECTION (contained):", msg);
+});
+process.on("uncaughtException", (err) => {
+  log("UNCAUGHT EXCEPTION (contained):", err && err.stack ? err.stack.split("\n").slice(0, 4).join(" | ") : String(err));
+});
 
 // ---- shared render gate --------------------------------------------------
 
@@ -162,6 +208,7 @@ const truthy = (v) => v === true || v === 1 || v === "true" || v === "1";
 const lastKnownDisplay = new Map();
 
 async function validateDisplay(deviceId) {
+  if (isSim(deviceId)) return { ...SIM_RECORD };
   const r = await httpGetJson(ENV.apiBase + "mirrors/deviceId/" + encodeURIComponent(deviceId));
   if (!r) {
     const cached = lastKnownDisplay.get(deviceId);
@@ -214,7 +261,7 @@ function isPainted(deviceId) {
 }
 
 async function startWorker(cfg) {
-  const Worker = isPainted(cfg.deviceId) ? PaintedWorker : DisplayWorker;
+  const Worker = cfg.synthetic ? SimWorker : isPainted(cfg.deviceId) ? PaintedWorker : DisplayWorker;
   const worker = new Worker({
     deviceId: cfg.deviceId,
     major: cfg.major,
@@ -230,7 +277,7 @@ async function startWorker(cfg) {
   });
   await worker.start();
   workers.set(cfg.deviceId, worker);
-  log("fleet:", workers.size, "worker(s)", isPainted(cfg.deviceId) ? "| " + cfg.deviceId + " is PAINTED (live portal)" : "");
+  log("fleet:", workers.size, "worker(s)", cfg.synthetic ? "| " + cfg.deviceId + " is SYNTHETIC (designer portal)" : isPainted(cfg.deviceId) ? "| " + cfg.deviceId + " is PAINTED (live portal)" : "");
   return worker;
 }
 
@@ -244,6 +291,7 @@ async function getOrCreateWorker(id) {
     /* a worker that unpaired itself (display reset) is done; the next
      * poll gets a fresh look at the backend record */
     workers.delete(id.device);
+    if (ownership) ownership.release(id.device).catch(() => {});
   } else if (existing) {
     existing.lastSeen = Date.now();
     return existing;
@@ -276,6 +324,7 @@ async function getOrCreateWorker(id) {
       outH: id.h > 0 ? id.h : known.h > 0 ? known.h : 1080,
       orientation: known.orientation || 0,
       legacy: false,
+      synthetic: known.synthetic === true,
     });
   })();
   creating.set(id.device, p);
@@ -318,9 +367,194 @@ async function startLegacyWorker() {
 
 // ---- HTTP ----------------------------------------------------------------
 
-function respondJson(res, code, body) {
-  res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+function respondJson(res, code, body, extraHeaders) {
+  res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store", ...(extraHeaders || {}) });
   res.end(JSON.stringify(body));
+}
+
+/* "try again in a moment, probably somewhere else": the channel treats a
+ * non-200 as a failed wait and re-polls in ~5s, and the balancer may
+ * land that poll on another task */
+function respondRetry(res, why) {
+  respondJson(res, 503, { error: why, retry: true }, { "Retry-After": "5" });
+}
+
+const FORWARDED_HEADER = "x-mm-forwarded-by";
+const FORWARD_TIMEOUT_MS = 60000; /* a /wait is held up to 50s by the owner */
+/* Task-to-task connections are pooled. Node 20's default agent keeps
+ * sockets alive too, but with the SERVER's 5s idle close (below) a
+ * reused socket died under the request - "socket hang up" on 1 in ~50
+ * forwarded long-polls in phase 1. Explicit agent, explicit retry. */
+const forwardAgent = new http.Agent({ keepAlive: true, maxSockets: 1024, timeout: FORWARD_TIMEOUT_MS + 5000 });
+
+/* Hand a device's request to the task that owns its display, byte for
+ * byte, and relay the reply. The device never learns there was a hop. */
+function forwardTo(addr, req, res, attempt = 1) {
+  return new Promise((resolve) => {
+    const [host, port] = addr.split(":");
+    let gotResponse = false;
+    const up = http.request(
+      {
+        host,
+        port: parseInt(port, 10) || PORT,
+        method: req.method,
+        path: req.url,
+        headers: { ...req.headers, host: addr, [FORWARDED_HEADER]: me.taskId },
+        timeout: FORWARD_TIMEOUT_MS,
+        agent: attempt === 1 ? forwardAgent : false,
+      },
+      (upRes) => {
+        gotResponse = true;
+        /* hop-by-hop headers stay on their hop */
+        const h = { ...upRes.headers };
+        delete h.connection;
+        delete h["keep-alive"];
+        delete h["transfer-encoding"];
+        res.writeHead(upRes.statusCode, h);
+        upRes.pipe(res);
+        upRes.on("end", resolve);
+      },
+    );
+    up.on("timeout", () => up.destroy(new Error("forward timeout")));
+    up.on("error", (e) => {
+      /* a pooled socket the owner had just closed: nothing was sent to
+       * the device yet, so try once more on a fresh connection */
+      if (!gotResponse && attempt === 1 && /socket hang up|ECONNRESET|EPIPE/.test(e.message)) {
+        return resolve(forwardTo(addr, req, res, 2));
+      }
+      log("forward to " + addr + " failed for " + req.url.slice(0, 60) + ": " + e.message + (attempt > 1 ? " (retry)" : ""));
+      if (!res.headersSent) respondRetry(res, "owner unreachable: " + e.message);
+      else res.end();
+      resolve();
+    });
+    /* the device hung up (re-armed, or went away): drop the hop too.
+     * On the RESPONSE, not the request: a GET's request stream ends and
+     * closes at once, which tore every forward down before the owner
+     * could answer (phase 0, 2026-09-07) */
+    res.on("close", () => {
+      if (!res.writableFinished) up.destroy();
+    });
+    req.pipe(up);
+  });
+}
+
+/* Admission: usage lags a burst. A fresh task claimed 89 displays in
+ * ninety seconds before its CPU sample said anything, then sat at 100%
+ * with 89 browsers booting (phase 1, 2026-09-07). So besides the usage
+ * thresholds a task takes new displays only while few are still
+ * booting, and only so many a minute. */
+const MAX_BOOTING = parseInt(env("MAX_BOOTING", "4"), 10);
+const MAX_CLAIMS_PER_MIN = parseInt(env("MAX_CLAIMS_PER_MIN", "20"), 10);
+const claimTimes = [];
+function bootingCount() {
+  let n = 0;
+  for (const w of workers.values()) {
+    if (w.stopped) continue;
+    /* a painted worker with no ready portal is still booting; the old
+     * pipeline's workers have no portal at all and never count */
+    if ("portal" in w && (!w.portal || !w.portal.ready)) n++;
+  }
+  return n;
+}
+function admission() {
+  const r = usage.refusal();
+  if (r) return r;
+  const booting = bootingCount();
+  if (booting >= MAX_BOOTING) return booting + " portal(s) still booting";
+  const now = Date.now();
+  while (claimTimes.length && now - claimTimes[0] > 60000) claimTimes.shift();
+  if (claimTimes.length >= MAX_CLAIMS_PER_MIN) return "claim rate (" + claimTimes.length + "/min)";
+  return null;
+}
+
+/* Decide who serves this display: us, another task (forward), or nobody
+ * yet (claim). Returns { own: true } | { forward: addr } | { retry: why }. */
+async function route(id, req) {
+  if (!ownership) return { own: true };
+  const device = id.device;
+  if (ownership.owns(device)) return { own: true };
+  const hop = req.headers[FORWARDED_HEADER];
+  let row;
+  try {
+    row = await ownership.lookup(device);
+  } catch (e) {
+    /* the table is unreachable: keep serving what we own (handled above),
+     * take nothing new - the device retries in 5s */
+    return { retry: "ownership store unreachable" };
+  }
+  if (row && row.taskId === me.taskId) {
+    /* our row from a previous life of this task id - adopt it */
+    ownership.owned.set(device, { claimedAt: row.claimedAt });
+    return { own: true };
+  }
+  if (row) {
+    if (hop) return { retry: "stale owner row during hand-over" }; /* never bounce a hop twice */
+    return { forward: row.taskAddr };
+  }
+  if (hop) return { retry: "forwarded to a task that does not own the display" };
+  const refusal = admission();
+  if (refusal) {
+    log("refusing " + device + " - " + refusal);
+    return { retry: "task full (" + refusal + ")" };
+  }
+  let won;
+  try {
+    won = await ownership.claim(device);
+  } catch (e) {
+    return { retry: "ownership store unreachable" };
+  }
+  if (won) {
+    claimTimes.push(Date.now());
+    log("claimed " + device + " (" + ownership.count() + " owned)");
+    return { own: true };
+  }
+  const other = await ownership.lookup(device).catch(() => null);
+  if (other && other.taskId !== me.taskId) return { forward: other.taskAddr };
+  return { retry: "claim lost the race" };
+}
+
+/* the wedged-service check the balancer cannot see: displays are polling
+ * but nothing has published for a long time, or the ownership store has
+ * been failing */
+const HEALTH_STALE_MS = parseInt(env("HEALTH_STALE_MS", String(15 * 60 * 1000)), 10);
+function healthReport() {
+  const now = Date.now();
+  let watched = 0;
+  let lastPublish = 0;
+  let wanting = 0; /* watched displays that asked for a capture and have not published since */
+  let unhealthy = 0;
+  let portals = 0;
+  for (const w of workers.values()) {
+    const seen = now - (w.lastSeen || 0) < 120000;
+    if (seen) watched++;
+    if (w.lastPublishAt > lastPublish) lastPublish = w.lastPublishAt;
+    if (seen && w.lastCaptureRequestAt && w.lastCaptureRequestAt > (w.lastPublishAt || 0) && now - w.lastCaptureRequestAt > HEALTH_STALE_MS) wanting++;
+    if (w.unhealthy) unhealthy++;
+    if (w.portal) portals++;
+  }
+  const own = ownership ? ownership.health() : null;
+  const storeDown = !!(own && own.lastError && own.lastOkAgoMs > 120000);
+  const wedged = watched > 0 && wanting === watched;
+  /* An unreachable ownership store must NOT fail the health check: the
+   * task keeps serving every display it owns, and a balancer that
+   * deregisters it - then ECS replacing every task at once - turns a
+   * store blip into a fleet-wide hand-over (phase 3 drill, 2026-09-07).
+   * It is reported here and alarmed on separately. */
+  return {
+    ok: !wedged,
+    storeDown,
+    task: me,
+    workers: workers.size,
+    watched,
+    portals,
+    unhealthyWorkers: unhealthy,
+    lastPublishAgoMs: lastPublish ? now - lastPublish : null,
+    wanting,
+    usage: usage.snapshot(),
+    admission: { booting: bootingCount(), claimsLastMinute: claimTimes.filter((t) => now - t <= 60000).length, refusing: admission() },
+    ownership: own,
+    reasons: [storeDown ? "ownership store failing" : null, wedged ? "watched displays not publishing" : null].filter(Boolean),
+  };
 }
 
 const server = http.createServer(async (req, res) => {
@@ -328,10 +562,28 @@ const server = http.createServer(async (req, res) => {
   const id = identityFrom(u);
 
   try {
+    if (u.pathname === "/healthz") {
+      const h = healthReport();
+      return respondJson(res, h.ok ? 200 : 503, h);
+    }
+
+    if (id.device && (u.pathname === "/version" || u.pathname === "/wait" || u.pathname === "/interact")) {
+      if (!DEVICE_ID_RE.test(id.device)) return respondJson(res, 404, { error: "unknown display" });
+      const r = await route(id, req);
+      if (r.retry) return respondRetry(res, r.retry);
+      if (r.forward) return forwardTo(r.forward, req, res);
+      /* who answered, for the simulator's one-owner check (forwarded
+       * replies carry the owner's, since headers are relayed) */
+      res.setHeader("x-mm-owner", me.taskId);
+    }
+
     if (u.pathname === "/version") {
       if (id.device || legacyWorker) {
         const w = id.device ? await getOrCreateWorker(id) : legacyWorker;
-        if (!w) return respondJson(res, 404, { error: "unknown display" });
+        if (!w) {
+          if (ownership && id.device) ownership.release(id.device).catch(() => {});
+          return respondJson(res, 404, { error: "unknown display" });
+        }
         w.lastSeen = Date.now();
         return w.respondVersion(res);
       }
@@ -344,6 +596,7 @@ const server = http.createServer(async (req, res) => {
       const w = id.device ? await getOrCreateWorker(id) : legacyWorker;
       if (!w) {
         if (!id.device) return respondJson(res, 200, { version: 0 });
+        if (ownership) ownership.release(id.device).catch(() => {});
         return respondJson(res, 404, { error: "unknown display" });
       }
       return w.handleWait(u, res, req);
@@ -351,7 +604,10 @@ const server = http.createServer(async (req, res) => {
 
     if (u.pathname === "/interact") {
       const w = id.device ? await getOrCreateWorker(id) : legacyWorker;
-      if (!w) return respondJson(res, 404, { error: "unknown display" });
+      if (!w) {
+        if (ownership && id.device) ownership.release(id.device).catch(() => {});
+        return respondJson(res, 404, { error: "unknown display" });
+      }
       return void w.handleInteract(u, res);
     }
   } catch (e) {
@@ -369,6 +625,7 @@ setInterval(() => {
   for (const [idStr, w] of workers) {
     if (w.evictable() && w.idleFor() > IDLE_EVICT_MS) {
       workers.delete(idStr);
+      if (ownership) ownership.release(idStr).catch(() => {});
       w.stop("no device contact for " + Math.round(w.idleFor() / 60000) + " min").catch(() => {});
       log("fleet:", workers.size, "worker(s)");
     }
@@ -388,16 +645,131 @@ function banner() {
   log("data root", DATA_ROOT);
   log("render concurrency", RENDER_CONCURRENCY, "| idle eviction", Math.round(IDLE_EVICT_MS / 60000) + "min");
   log("painted displays:", PAINTED_LIST.length ? PAINTED_LIST.join(",") : "(none - all on the original pipeline)");
+  log("ownership:", ownership ? (process.env.OWNERSHIP + (process.env.OWNERSHIP_TABLE ? " table " + process.env.OWNERSHIP_TABLE : "")) : "off (single task)", "| task", me.taskId, "at", me.taskAddr);
+  if (SIM_ENABLED) log("*** SIM_DISPLAYS=1: synthetic SIM* displays accepted (test only; major " + SIM_RECORD.major + " minor " + SIM_RECORD.minor + ") ***");
   if (PAINTED_LIST.length && process.env.PORTAL_PREVIEW_DIR) {
     log("*** painted portal files come from " + process.env.PORTAL_PREVIEW_DIR + " (pre-merge) ***");
   }
   log("environment:", prod ? "*** PRODUCTION ***" : "test");
 }
 
-server.listen(PORT, "0.0.0.0", () => {
+/* Who we are, for the ownership rows: the ECS task id and the private
+ * address other tasks can reach us on. Elsewhere, TASK_ID / TASK_ADDR or
+ * a random id on 127.0.0.1 (phase 0: three processes on one laptop). */
+const me = { taskId: env("TASK_ID", ""), taskAddr: env("TASK_ADDR", "") };
+async function resolveIdentity() {
+  const base = process.env.ECS_CONTAINER_METADATA_URI_V4;
+  if (base && (!me.taskId || !me.taskAddr)) {
+    const task = await new Promise((resolve) => {
+      const r = http.get(base + "/task", { timeout: 3000 }, (res) => {
+        let b = "";
+        res.on("data", (c) => (b += c));
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(b));
+          } catch (e) {
+            resolve(null);
+          }
+        });
+      });
+      r.on("timeout", () => r.destroy());
+      r.on("error", () => resolve(null));
+    });
+    if (task) {
+      if (!me.taskId && task.TaskARN) me.taskId = task.TaskARN.split("/").pop();
+      if (!me.taskAddr) {
+        const c = (task.Containers || []).find((x) => x.Networks && x.Networks.length);
+        const ip = c && c.Networks[0].IPv4Addresses && c.Networks[0].IPv4Addresses[0];
+        if (ip) me.taskAddr = ip + ":" + PORT;
+      }
+    }
+  }
+  if (!me.taskId) me.taskId = "local-" + Math.random().toString(36).slice(2, 8);
+  if (!me.taskAddr) me.taskAddr = "127.0.0.1:" + PORT;
+}
+
+/* OwnedDisplays, per task and for the service: dashboards and alarms
+ * only - scaling runs on ECS's own memory/CPU (Dave, 2026-09-06) */
+const METRICS = process.env.METRICS === "1" || !!process.env.ECS_CONTAINER_METADATA_URI_V4;
+const METRIC_NAMESPACE = env("METRIC_NAMESPACE", "MangoDisplay/Roku");
+let cloudwatch = null;
+async function publishMetrics() {
+  if (!METRICS) return;
+  try {
+    if (!cloudwatch) {
+      const { CloudWatchClient, PutMetricDataCommand } = require("@aws-sdk/client-cloudwatch");
+      cloudwatch = { client: new CloudWatchClient({}), PutMetricDataCommand };
+    }
+    const service = env("SERVICE_NAME", "roku-render-" + (IS_PROD_API ? "prod" : "test"));
+    const owned = ownership ? ownership.count() : workers.size;
+    const snap = usage.snapshot();
+    const h = healthReport();
+    const dims = (withTask) => [{ Name: "Service", Value: service }, ...(withTask ? [{ Name: "TaskId", Value: me.taskId }] : [])];
+    const data = [];
+    for (const withTask of [true, false]) {
+      data.push({ MetricName: "OwnedDisplays", Dimensions: dims(withTask), Value: owned, Unit: "Count" });
+      data.push({ MetricName: "WatchedDisplays", Dimensions: dims(withTask), Value: h.watched, Unit: "Count" });
+      data.push({ MetricName: "OpenPortals", Dimensions: dims(withTask), Value: h.portals, Unit: "Count" });
+      data.push({ MetricName: "Refusing", Dimensions: dims(withTask), Value: admission() ? 1 : 0, Unit: "Count" });
+      data.push({ MetricName: "UnhealthyWorkers", Dimensions: dims(withTask), Value: h.unhealthyWorkers, Unit: "Count" });
+    }
+    await cloudwatch.client.send(new cloudwatch.PutMetricDataCommand({ Namespace: METRIC_NAMESPACE, MetricData: data }));
+  } catch (e) {
+    log("metrics: publish failed:", e.message);
+  }
+}
+
+/* The balancer reuses connections to us and closes idle ones after its
+ * own 120s idle timeout. Node's default is to close idle keep-alive
+ * sockets after 5s, so the balancer regularly sent a request down a
+ * socket we were closing: HTTPCode_ELB_502 at 5-30/min under load
+ * (phase 1, 2026-09-07). Outlive the balancer's idle timeout, and keep
+ * headersTimeout above keepAliveTimeout as Node requires. */
+server.keepAliveTimeout = 125000;
+server.headersTimeout = 130000;
+server.requestTimeout = 300000;
+
+/* Under load the task's CPU is all Chromium. The fleet process answers
+ * the balancer's health check and every device poll, and at 100% CPU
+ * with 34 portals it was starved enough to fail /healthz - the balancer
+ * deregistered a healthy-in-every-other-way task and ECS replaced it
+ * (phase 1, 2026-09-07). Schedule this process ahead of the browsers. */
+try {
+  require("os").setPriority(process.pid, -10);
+  log("process priority raised (nice -10)");
+} catch (e) {
+  log("could not raise process priority:", e.message);
+}
+
+server.listen(PORT, "0.0.0.0", async () => {
+  await resolveIdentity();
+  await usage.init().catch((e) => log("usage sampler failed to init:", e.message));
+  try {
+    const backend = backendFromEnv(log);
+    if (backend) {
+      ownership = new OwnershipManager(backend, me, {
+        log,
+        /* another task holds a display we thought was ours: stop serving
+         * it here, the owner has the socket now */
+        onLost: (deviceId) => {
+          const w = workers.get(deviceId);
+          if (w) {
+            workers.delete(deviceId);
+            w.stop("ownership lost").catch(() => {});
+          }
+        },
+      });
+      ownership.start();
+    }
+  } catch (e) {
+    log("ownership setup failed:", e.message, "- refusing to start");
+    process.exit(1);
+  }
   banner();
   log("control endpoint on 0.0.0.0:" + PORT);
   startLegacyWorker().catch((e) => log("legacy worker failed to start:", e.message));
+  setInterval(() => publishMetrics(), 60000).unref();
+  publishMetrics();
 });
 
 // A deploy overlaps old and new tasks for a minute; closing our sockets
@@ -407,6 +779,14 @@ async function shutdown(sig) {
   log(sig + ": stopping", workers.size, "worker(s)");
   const all = [...workers.values()];
   workers.clear();
+  /* rows first: the moment they are gone another task can claim these
+   * displays, so a deploy or a Spot reclaim hands over in one poll, not
+   * one lease */
+  if (ownership) {
+    ownership.stop();
+    await ownership.releaseAll().catch(() => {});
+    log("ownership: released every row");
+  }
   await Promise.allSettled(all.map((w) => w.stop(sig)));
   process.exit(0);
 }

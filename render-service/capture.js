@@ -483,7 +483,27 @@ function wantsNativeWeather(deviceId) {
   return NATIVE_WEATHER_PREFIXES.some((p) => id.startsWith(p));
 }
 
+/* The idle-repaint guard (nativeWidgets.idleRepaintCss) hides the
+ * animated weather icons while nothing is being captured. Lift it for
+ * the whole of a capture - still, films and follow-ups included - and
+ * put it back whatever happens. */
+async function setIdle(page, idle) {
+  const toggle = (on) => document.documentElement.classList.toggle("mm-idle", on);
+  const f = portalFrameOf(page);
+  if (f) await f.evaluate(toggle, idle).catch(() => {});
+  await page.evaluate(toggle, idle).catch(() => {});
+}
+
 async function capturePage(page, opts) {
+  await setIdle(page, false);
+  try {
+    return await capturePageInner(page, opts);
+  } finally {
+    await setIdle(page, true);
+  }
+}
+
+async function capturePageInner(page, opts) {
   const { out, url, width, height, outWidth, outHeight, apiBase } = opts;
   // stage timings: "make it fast" needs measurements, not guesses
   const t0 = Date.now();

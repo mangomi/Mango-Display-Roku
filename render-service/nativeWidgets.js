@@ -4613,6 +4613,17 @@ function effectHideCss() {
  * jQuery animates, so the animation may keep running underneath.
  * Its own element so the cell-scroll film can disable JUST this while it
  * drives `top` itself. */
+/* Between captures a live portal repaints continuously: the weather
+ * icons are SVG images with their own SMIL/CSS animation inside, which
+ * Chromium repaints at frame rate whether or not anyone screenshots it.
+ * Measured 2026-09-07: one idle portal at ~30% of a core, half of it
+ * these six icons. The device draws them natively from frame sheets,
+ * so while the portal sits idle (html.mm-idle, cleared for the length
+ * of every capture) they need not paint at all. */
+function idleRepaintCss() {
+  return 'html.mm-idle img[src*=".svg"]{visibility:hidden!important}';
+}
+
 function scrollParkCss() {
   return ".-m-scroll-c{top:0 !important}";
 }
@@ -4927,6 +4938,7 @@ module.exports = {
   effectHideCss,
   weatherSettleCss,
   scrollParkCss,
+  idleRepaintCss,
   extractTargets,
   extractRegions,
   hideTargets,

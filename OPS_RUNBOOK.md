@@ -282,6 +282,7 @@ run clean for a few days (Dave's convention across all repos).
 | Job | Triggers on | Result |
 |---|---|---|
 | **`Roku-Staging-Service`** (BUILT 2026-08-31) | a push to `test-release-auto-deploy` that touches `render-service/`, `fonts/` or `buildspec.yml` | auto-deploy of the render service to the test fleet |
+| **`Roku-Production-Service`** (BUILT 2026-09-07) | a push to `prod-release-auto-deploy` touching the same paths | builds the image under an immutable `prod-<sha>` tag, registers a `roku-render-prod` task-definition revision on it (everything else copied from the current revision), rolls `roku-render-prod`, smoke-tests `https://roku-control.mangodisplay.com/healthz`. Same Slack notifications as staging. |
 
 **Path filtering:** the job's Git SCM carries *included regions*
 (`render-service/.*`, `fonts/.*`, `buildspec\.yml`). The GitHub hook
@@ -313,9 +314,27 @@ CodeBuild builds arm64 natively):
 6. `ecs update-service` → wait for `services-stable`
 7. smoke test: portal boots and one capture publishes, else fail
 
-**Prod job difference:** do not rebuild. Find the image already built
-and tested for that commit SHA, retag it `:prod`, deploy it. What was
-tested is what ships.
+**Prod job difference (as built):** the same source is rebuilt by
+CodeBuild under an immutable `prod-<sha>` tag and the task definition
+is pinned to it, so every production revision names exactly the image
+it runs and rollback is "update-service to the previous revision".
+(The original idea of re-tagging the image the test job built was not
+done: the staging job pushes the mutable `v1`/`latest` tags with no
+SHA, so there is nothing to look up by commit. Deterministic Docker
+builds from the same commit make this equivalent in practice.)
+
+**Staging note (2026-09-07):** the staging job rolls the service with
+`--force-new-deployment` and no task definition, so it deploys
+whatever image the test service's current revision names. That revision
+must therefore point at the mutable `latest` tag the job pushes; the
+density tests had pinned it to `ownership9` and it was moved back to
+`latest` (same digest) the same day. Never pin the TEST task definition
+to an immutable tag, or Jenkins deploys will silently change nothing.
+
+**Branches:** `prod-release-auto-deploy` was created 2026-09-07 from
+`live-portal` (= the code running on both fleets). `test-release-auto-deploy`
+lags `live-portal`; pushing `live-portal` to it triggers a staging deploy
+of the same code.
 
 **Jenkins IAM** (dedicated user/role, nothing broader): `s3:PutObject`
 on the build bucket; `codebuild:StartBuild`/`BatchGetBuilds`;

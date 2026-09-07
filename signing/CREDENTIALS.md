@@ -14,6 +14,7 @@ when convenient, and scrub it from git history when you do.
   the string Roku printed after `genkey` on 2026-09-03 (also in Dave's Mac keychain: `security find-generic-password -a rokudev -s roku-signing -w`) |
 | Generated on | Roku Express X026001ENXR9, Roku OS 15.3.4, 2026-09-03 |
 | Signed package (rekey source) | `signing/MangoDisplay_1_0_test.pkg` (channel 1.0 build 1, TEST environment) |
+| Latest signed build | `signing/MangoDisplay_1_0_build4_test.pkg` (1.0 build 4, 2026-09-06: strip style keys + countdown label fix) |
 
 The key itself lives on the Roku that generated it. There is no key file.
 The **password plus any signed .pkg** together recreate it on another box.

@@ -126,6 +126,13 @@ name and the tag `Environment=prod` (test resources are tagged
 | Budget | shared "Roku render service" ($500 on tag Project=Roku; covers test too) |
 | Channel | `./package.sh prod` (API v1.0.5 default; `PROD_API_VERSION` overrides), controlBase `roku-control.mangodisplay.com` |
 
+**Status 2026-09-07 21:50 UTC: built and running** — `roku-render-prod`
+desired 1, healthy on `https://roku-control.mangodisplay.com/healthz`,
+banner `*** PRODUCTION ***`, zero displays. Fonts appear under
+`prod/fonts/` at the first display's first publish (publishFonts runs
+then, not at boot). The `:443` default action is a fixed 404; only the
+two host rules route.
+
 ### Build order (what was run, in order)
 
 1. Retag the tested image immutably:

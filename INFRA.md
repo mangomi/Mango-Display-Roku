@@ -43,7 +43,7 @@ per-GB processing.
 | 13 | Security group rule | port 80 from anywhere -> `roku-render-sg` | free |
 | 14 | Security group | `roku-render-task-sg` (`sg-0cef8da8f496529ed`), 8091 from the ALB only | free |
 | 15 | Application Load Balancer | `roku-control`, idle timeout **120s** | ~$17/mo |
-| 16 | Target group | `roku-control-tg`, health check `/version` | free |
+| 16 | Target group | `roku-control-tg`, health check `/healthz` since 2026-09-07 (was `/version`) | free |
 | 17 | ~~Listener HTTP :80~~ | removed 2026-08-11 with its :80 SG rule — the endpoint is HTTPS-only | — |
 | 18 | Task definition | `roku-render:1`, 1 vCPU / 2GB, ARM64 | free |
 | 19 | ECS service | `roku-render`, 1 task | ~$36/mo |
@@ -56,6 +56,9 @@ per-GB processing.
 | 26 | Service tag + capacity strategy | service tagged Project=Roku (tasks inherit); `FARGATE` base 1 + `FARGATE_SPOT` weight 4 | — |
 | 27 | Service auto-scaling | 1–14 tasks, target tracking memory 70% / CPU 65% | — |
 | 28 | AWS Budget | "Roku render service", $500/mo on tag Project=Roku, alerts at 50% and 80% to Dave | free |
+| 29 | Target group health check | `/healthz`, 10 s timeout, 30 s interval, 5 unhealthy / 2 healthy | — |
+| 30 | CloudWatch alarms | `roku-render-test-{task-ceiling,refusing,unhealthy-workers,unhealthy-hosts,owner-table-errors}` | free tier |
+| 31 | Task definition | `roku-sim` (0.25 vCPU / 0.5 GB, same image, runs `sim-devices.js`) — the synthetic-device soak | ~$2/mo on Spot while running |
 
 **Live at** `https://roku-control.mangodisplay.com`
 — the only address compiled into the channel, and it survives an ALB

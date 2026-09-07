@@ -30,6 +30,8 @@ final class DisplayController: ObservableObject {
     @Published private(set) var busyAt: CGPoint?
     /// active confetti bursts (canvas coords), drawn above everything
     @Published private(set) var celebrationBursts: [CelebrationBurstSpec] = []
+    /// night mode: a black video plays full screen under the page layer
+    @Published private(set) var night = false
     /// the remote pointer, checkboxes and gesture routing
     let interaction = InteractionController()
 
@@ -106,6 +108,9 @@ final class DisplayController: ObservableObject {
     private var lastVersionAt = Date.distantPast   // last version EVENT, not last reply
     private var launchExitQuery = ""               // previous run's exit, rides &launch=1
     private var playPauseTaps: [Date] = []         // dev-gesture press timestamps
+    private var fontBase = ""                      // where the catalog fonts are served from
+    private var fontsReady = true                  // gate: pages apply only with their faces present
+    private var fontTask: Task<Void, Never>?
 
     func start() {
         guard runTask == nil else { return }
@@ -198,6 +203,15 @@ final class DisplayController: ObservableObject {
     /// Discard the identity and re-pair from scratch (dev helper).
     private func regeneratePairing() {
         NSLog("[Mango] dev gesture: discarding device code, back to pairing")
+        code = DeviceIdentity.regenerate()
+        resetToPairing()
+    }
+
+    /// Back to the pairing screen with the CURRENT code (MainScene
+    /// startPairing): stop the version poll and everything on screen, then
+    /// run the pairing poll again as at first launch. The cancelled wait
+    /// loop exits at its next check; the new run starts alongside it.
+    private func resetToPairing() {
         runTask?.cancel(); runTask = nil
         rotateTask?.cancel()
         spinnerWatchdog?.cancel()
@@ -207,9 +221,10 @@ final class DisplayController: ObservableObject {
         effects = []; effectsKey = ""; effectAssetURLs = []
         celebrationBursts = []
         busy = false; showSpinner = false; busyAt = nil
+        night = false
+        fontTask?.cancel(); fontTask = nil; fontsReady = true
         identity = ""
         interaction.setTargets(nil, regions: [], pageIndex: 0)
-        code = DeviceIdentity.regenerate()
         phase = .pairing
         runTask = Task { await run() }
     }
@@ -292,7 +307,8 @@ final class DisplayController: ObservableObject {
                     NSLog("[Mango] heartbeat found version: %d", ver)
                     if let man = await fetchManifest(ver) { apply(man) }
                 }
-                try? await Task.sleep(for: .seconds(5))
+                // a 503's Retry-After wins over the fixed 5s when longer
+                try? await Task.sleep(for: .seconds(max(5, retryAfterHint)))
             }
             try? await Task.sleep(for: .milliseconds(250))
         }
@@ -317,17 +333,38 @@ final class DisplayController: ObservableObject {
         return DisplayManifest(json)
     }
 
+    /// The fleet may answer /wait, /version and /interact with 503 +
+    /// `Retry-After: 5` (JSON `{error, retry: true}`) while a display is
+    /// handed between tasks or every task is full. That is exactly a
+    /// failed wait - keep showing what we have, re-poll after the hint
+    /// (never fatal, never minutes of backoff). Server 2a56f82..1e39144.
+    private var retryAfterHint: TimeInterval = 0
+
     private func getJSON(_ url: URL, timeout: TimeInterval) async -> [String: Any]? {
         var req = URLRequest(url: url, timeoutInterval: timeout)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+              let http = resp as? HTTPURLResponse else { return nil }
+        if http.statusCode == 503 {
+            retryAfterHint = Double(http.value(forHTTPHeaderField: "Retry-After") ?? "") ?? 5
+            return nil
+        }
+        guard http.statusCode == 200 else { return nil }
+        retryAfterHint = 0
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
     // MARK: - applying manifests (MainScene onVersionChange/maybeApplyPages)
 
     private func apply(_ man: DisplayManifest) {
+        // the display was reset in the webapp: back to the pairing screen
+        // with the code this box already has, so it can simply be added
+        // again (MainScene.onVersionChange, before the pages guard)
+        if !man.paired {
+            NSLog("[Mango] display was reset - back to pairing")
+            resetToPairing()
+            return
+        }
         if man.schema > DisplayManifest.knownSchema {
             // future contract: keep showing what we already have rather
             // than guess - a stale screen beats a wrong one (MANIFEST.md)
@@ -335,11 +372,60 @@ final class DisplayController: ObservableObject {
             return
         }
         NSLog("[Mango] display.json: %d page(s)", man.pages.count)
+        applyNight(man.night)
+        if !man.fontBase.isEmpty { fontBase = man.fontBase }
+        ensureFonts(man.pages)
         applyEffects(man.effects)
         // honour the user's gesture switches - the same ones the portal obeys
         interaction.gestures = man.gestures
         latestManifest = man
         maybeApplyPages()
+    }
+
+    /// Night mode (MainScene.applyNight): the service publishes transparent
+    /// pages and one badge overlay; the view plays the black clip full
+    /// screen beneath them while this is set.
+    private func applyNight(_ on: Bool) {
+        guard on != night else { return }
+        night = on
+    }
+
+    /// The fonts a manifest's native text needs (any fontFamily in any
+    /// overlay) are fetched BEFORE the pages are applied, so labels are
+    /// built with the right face instead of the fallback (MainScene
+    /// ensureFonts). Nothing missing, or no fontBase yet: pages apply at
+    /// once. The fetch reports done whether or not every file succeeded.
+    private func ensureFonts(_ pages: [Page]) {
+        var families = Set<String>()
+        for pg in pages { Self.collectFonts(pg.overlays, into: &families, depth: 0) }
+        let missing = FontRegistry.shared.missingFiles(for: families)
+        if missing.isEmpty || fontBase.isEmpty {
+            fontsReady = true
+            return
+        }
+        fontTask?.cancel()
+        fontsReady = false
+        NSLog("[Mango] fonts to fetch: %d", missing.count)
+        let base = fontBase
+        fontTask = Task { [weak self] in
+            await FontRegistry.shared.fetch(files: missing, base: base)
+            guard !Task.isCancelled, let self else { return }
+            self.fontsReady = true
+            self.fontTask = nil
+            self.maybeApplyPages()
+        }
+    }
+
+    /// every `fontFamily` string anywhere in the overlay configs
+    /// (MainScene.collectFonts, depth-capped the same way)
+    private static func collectFonts(_ node: Any, into families: inout Set<String>, depth: Int) {
+        guard depth <= 6 else { return }
+        if let dict = node as? [String: Any] {
+            if let fam = dict["fontFamily"] as? String, !fam.isEmpty { families.insert(fam) }
+            for (_, v) in dict { collectFonts(v, into: &families, depth: depth + 1) }
+        } else if let arr = node as? [Any] {
+            for v in arr { collectFonts(v, into: &families, depth: depth + 1) }
+        }
     }
 
     /// Effects are long-running and display-wide, so they are only
@@ -379,7 +465,7 @@ final class DisplayController: ObservableObject {
     /// Never apply a manifest mid-transition or mid-load; the newest one
     /// waits and is applied when the in-flight work completes.
     private func maybeApplyPages() {
-        guard let man = latestManifest, !loading, !animating else { return }
+        guard let man = latestManifest, fontsReady, !loading, !animating else { return }
         latestManifest = nil
         pages = man.pages
         // new manifest = pixels may have changed under the stable file

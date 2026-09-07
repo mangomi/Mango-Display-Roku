@@ -21,6 +21,10 @@ struct DisplayView: View {
             RemoteInputView { key, press in
                 controller.handleKey(key, press: press)
             }
+            // night mode: black video under the (transparent) page layer
+            if controller.night {
+                NightVideoView().ignoresSafeArea()
+            }
             ForEach(controller.slots) { slot in
                 SlotView(slot: slot)
                     // flip = horizontal squash/expand of the whole slot

@@ -8,12 +8,14 @@
 
 /* Begin PBXBuildFile section */
 		A100000000000000000000B1 /* fonts in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B0 /* fonts */; };
+		A100000000000000000000B5 /* media in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B4 /* media */; };
 		A100000000000000000000B3 /* celebrations in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000B2 /* celebrations */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A100000000000000000000A2 /* MangoDisplayTV.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MangoDisplayTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A100000000000000000000B0 /* fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; name = fonts; path = ../fonts; sourceTree = "<group>"; };
+		A100000000000000000000B4 /* media */ = {isa = PBXFileReference; lastKnownFileType = folder; name = media; path = ../media; sourceTree = "<group>"; };
 		A100000000000000000000B2 /* celebrations */ = {isa = PBXFileReference; lastKnownFileType = folder; name = celebrations; path = ../images/celebrations; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -42,6 +44,7 @@
 				A100000000000000000000A1 /* MangoDisplayTV */,
 				A100000000000000000000B0 /* fonts */,
 				A100000000000000000000B2 /* celebrations */,
+				A100000000000000000000B4 /* media */,
 				A100000000000000000000A5 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -120,6 +123,7 @@
 			files = (
 				A100000000000000000000B1 /* fonts in Resources */,
 				A100000000000000000000B3 /* celebrations in Resources */,
+				A100000000000000000000B5 /* media in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

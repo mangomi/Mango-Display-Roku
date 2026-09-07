@@ -28,7 +28,9 @@ struct CountdownOverlayView: View {
                 ZStack(alignment: .topLeading) {
                     ForEach(Self.units, id: \.self) { unit in
                         if let spec = LabelSpec(JSON.obj(elements[unit])) {
-                            OverlayLabelView(spec: spec, text: String(values[unit] ?? 0))
+                            // value boxes are text-tight: slack + no ellipsis
+                            let pad = JSON.double(spec.raw["fontSizePx"]) ?? 16
+                            OverlayLabelView(spec: spec.withSlack(pad), text: String(values[unit] ?? 0))
                         }
                     }
                 }

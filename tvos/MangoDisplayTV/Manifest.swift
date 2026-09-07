@@ -73,12 +73,27 @@ struct DisplayManifest {
     /// mirrors the portal by navigating there (absent on every other
     /// publish; Roku b0c3f90)
     let showPage: Int?
+    /// false = the display was reset in the webapp: no pages, and the
+    /// client returns to its pairing screen with the code it already has
+    /// (the code stays valid; the user adds the display again). Absent
+    /// means paired. Checked BEFORE the pages guard (Roku 9eadb53).
+    let paired: Bool
+    /// URL prefix the overlays' Google Fonts are served under
+    /// (`<fontBase>gf/<File>.ttf`); empty when none
+    let fontBase: String
+    /// night mode: transparent pages, one badge overlay, and the client
+    /// plays a black VIDEO full screen underneath (TVs dim their
+    /// backlight for video, not for a black picture)
+    let night: Bool
     let pages: [Page]
 
     init?(_ dict: [String: Any]) {
-        guard let rawPages = JSON.arr(dict["pages"]), !rawPages.isEmpty else { return nil }
+        paired = !(dict["paired"] != nil && !(dict["paired"] is NSNull) && !JSON.truthy(dict["paired"]))
+        let rawPages = JSON.arr(dict["pages"]) ?? []
         let parsed = rawPages.compactMap { JSON.obj($0).flatMap(Page.init) }
-        guard !parsed.isEmpty else { return nil }
+        // a reset manifest legitimately carries no pages; anything else
+        // without pages is not a manifest we can show
+        guard !parsed.isEmpty || !paired else { return nil }
         pages = parsed
         schema = JSON.int(dict["schema"]) ?? 1
         updateReason = JSON.str(dict["updateReason"])
@@ -86,5 +101,7 @@ struct DisplayManifest {
         effects = (JSON.arr(dict["effects"]) ?? []).compactMap { JSON.obj($0) }
         gestures = JSON.obj(dict["gestures"]) ?? [:]
         showPage = JSON.int(dict["showPage"])
+        fontBase = JSON.str(dict["fontBase"])
+        night = JSON.truthy(dict["night"])
     }
 }

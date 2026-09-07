@@ -9,11 +9,30 @@ import SwiftUI
 
 /// One hidden text element from a clock/countdown manifest entry.
 struct LabelSpec {
-    let rect: CGRect
+    var rect: CGRect
     let align: Alignment
     let color: Color
     let font: Font
     let raw: [String: Any]
+    /// false = never ellipsize: the text may overflow its frame instead
+    /// (Roku `ellipsisText = ""`)
+    var truncates = true
+
+    /// The portal's box is exactly as wide as the text it holds, measured
+    /// with sub-pixel advances; a native label of that exact width can
+    /// ellipsize the same digits to "..." when the platform's glyph
+    /// advances round up (a tester saw a countdown's minutes as three
+    /// dots, 2026-09-05). A font-size of slack on the aligned side(s),
+    /// and no truncation. (Roku 7fdc46c, CountdownOverlay.makeLabel)
+    func withSlack(_ pad: Double) -> LabelSpec {
+        var s = self
+        var x = rect.minX
+        if align == .center { x -= pad / 2 }
+        if align == .trailing { x -= pad }
+        s.rect = CGRect(x: x, y: rect.minY, width: rect.width + pad, height: rect.height)
+        s.truncates = false
+        return s
+    }
 
     init?(_ el: [String: Any]?) {
         guard let el, let r = JSON.obj(el["rect"]),
@@ -61,6 +80,9 @@ struct OverlayLabelView: View {
             .font(spec.font)
             .foregroundStyle(spec.color)
             .lineLimit(1)
+            // fixedSize keeps the text at its natural width so it can
+            // overflow the frame rather than be ellipsized
+            .fixedSize(horizontal: !spec.truncates, vertical: false)
             .frame(width: spec.rect.width, height: spec.rect.height,
                    alignment: Alignment(horizontal: spec.align.horizontal, vertical: .center))
             .position(x: spec.rect.midX, y: spec.rect.midY)

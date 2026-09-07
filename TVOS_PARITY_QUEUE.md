@@ -214,6 +214,77 @@ layout.
 - An Apple TV reports 1920x1080 and renders at it, so on tvOS this is
   already the case; the canvas-mismatch path still has to exist.
 
+## REQUIRED — catch-up 2026-09-03 → 2026-09-07 (Roku channel 1.0 build 4, production live)
+
+- [ ] **Countdown value labels: never ellipsize** (Roku `7fdc46c`,
+  `CountdownOverlay.brs` `makeLabel`). The portal's element rect is
+  exactly as wide as the number, measured with sub-pixel advances; a
+  native label of that exact width truncates to "..." when the
+  platform's glyph advances round up (a tester saw minutes as three
+  dots). Give each value/label a font-size of slack on the aligned
+  side(s) — centre: shift x by half the slack and widen; right: shift by
+  the whole slack — and disable truncation (Roku `ellipsisText = ""`;
+  on tvOS `lineBreakMode` / `adjustsFontSizeToFitWidth = false` with a
+  wider frame). Applies to `day`/`hour`/`minute`/`second` and their
+  captions alike.
+
+- [ ] **Fonts: fetch before applying, gate on readiness** (Roku
+  `050c1d8`, refines the fonts entry above). The Roku's FontTask checks
+  its cache for every family the incoming manifest names, downloads
+  the missing ones, and reports `ready`; the scene keeps a
+  `fontsReady` flag and only builds labels with the custom face once
+  it is set, falling back to Source Sans Pro otherwise. File-system
+  access is task-thread only on Roku; on tvOS just do it off the main
+  thread. Family → file map: `source/fontMap.brs` (`gf/<File>.ttf`).
+
+- [ ] **Pairing screen at native size** (Roku `050c1d8`): heading 40,
+  code 72, instructions 28 in a 1920-wide design space, converted to
+  the scene's own pixels (no group scaling — a scaled group blurs the
+  text). Instructions read `"Setup at " + setupHost + " using any
+  browser"` from the environment config. Roku reference: MainScene
+  pairing labels with `Int(size * k)`.
+
+- [ ] **Spinner centred on the scene, not on 1920x1080** (Roku
+  `4b5d2a1`): follows the canvas/scene size from the resolution entry.
+
+- [ ] **Environments and the production channel** (Roku `package.sh`
+  `prod`, `source/env.brs`; production render service live 2026-09-07):
+  the build carries an environment config —
+
+  | | test | production |
+  |---|---|---|
+  | apiBase | `https://testapi.mangomirror.com/v1.0.5/` | `https://api.mangomirror.com/v1.0.5/` |
+  | setupHost | `testapp.mangodisplay.com` | `app.mangodisplay.com` |
+  | controlBase | `https://roku-control-test.mangodisplay.com` | `https://roku-control.mangodisplay.com` |
+
+  The two control names share one balancer that routes by **host
+  header**; anything else gets a 404, so the client must use the
+  hostname, never the balancer address or an IP. The checked-in config
+  is always test; a production build regenerates it. The Roku ships a
+  signed production package (`signing/MangoDisplay_1_0_build4_prod.pkg`)
+  built this way. tvOS: mirror with a build configuration / scheme,
+  never a runtime switch.
+
+- [ ] **Poll semantics under the fleet** (server `2a56f82`..`1e39144`,
+  no manifest change): `/wait`, `/version` and `/interact` may answer
+  **503 with `Retry-After: 5`** and a JSON `{error, retry: true}`
+  while a display is being handed between tasks or every task is full.
+  Treat exactly like a failed wait: re-poll after ~5 s, keep showing
+  what you have. The Roku's existing failed-wait path (heartbeat, then
+  5 s sleep) already does this; verify tvOS does not treat 503 as
+  fatal or back off for minutes. Every reply also carries an
+  `x-mm-owner` header (the serving task id) — diagnostic only.
+
+## UPCOMING — decided, not yet built (post-production list, OPS_RUNBOOK §5)
+
+- [ ] **Poll backoff with jitter + launch delay**: on failed waits back
+  off 5 → 10 → 20 → 40 s up to 2 min with random spread, reset on
+  success; on an app launch after a crash wait a random 0–30 s before
+  the first poll. Both clients, next builds.
+- [ ] **Memory guard**: when the platform reports low memory, stop
+  loading new scroll strips (show those cells from the page image) and
+  report the level in the poll (`mem=` already exists on Roku).
+
 ## DONE by the tvOS session already (listed for the record)
 
 - [x] Calendar cell-weather overlays (`overlay_cw_*` gif entries,
@@ -241,5 +312,16 @@ layout.
 - Effect-tiles capture fix, weather settle, portal console piping,
   layout-signal portal hooks: all server/portal-side.
 
+- Display ownership / auto-scaling / admission control / health
+  (`2a56f82`..`1e39144`, 2026-09-07), keep-alive and forwarding fixes,
+  the idle-repaint guard (`0ff4590`), scroll-strip cache keys carrying
+  the rows' text style (`7fdc46c`), the simulator and synthetic
+  displays: all server-side. The only client-visible effect is the 503
+  / Retry-After behaviour listed under "Poll semantics".
+- Runbook split (`OPS_RUNBOOK.md` short, `OPS_RUNBOOK_DETAIL.md` full)
+  and production infrastructure: nothing for the client beyond the
+  environment table above.
+
 *Baseline context: tvOS parity marker sits at Roku `56392b2`; this
-queue covers everything after it. Last updated: 2026-08-28 (showPage).*
+queue covers everything after it. Last updated: 2026-09-07 (channel
+1.0 build 4 / production live; Roku `live-portal` head `3b94f35`).*

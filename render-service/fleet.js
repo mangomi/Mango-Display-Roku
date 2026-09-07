@@ -535,8 +535,14 @@ function healthReport() {
   const own = ownership ? ownership.health() : null;
   const storeDown = !!(own && own.lastError && own.lastOkAgoMs > 120000);
   const wedged = watched > 0 && wanting === watched;
+  /* An unreachable ownership store must NOT fail the health check: the
+   * task keeps serving every display it owns, and a balancer that
+   * deregisters it - then ECS replacing every task at once - turns a
+   * store blip into a fleet-wide hand-over (phase 3 drill, 2026-09-07).
+   * It is reported here and alarmed on separately. */
   return {
-    ok: !storeDown && !wedged,
+    ok: !wedged,
+    storeDown,
     task: me,
     workers: workers.size,
     watched,

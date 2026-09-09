@@ -54,12 +54,21 @@ struct MotionOverlayView: View {
                     for (i, layer) in layers.enumerated() {
                         guard i < images.count, let ui = images[i] else { continue }
                         var c = base
-                        var opacity = layer.opacity
+                        // The layer's declared `opacity` is its RESTING
+                        // value, which its own opacity track REPLACES once
+                        // that track starts - it is not a multiplier
+                        // (MotionOverlay.brs:70 sets g.opacity, then the
+                        // interpolator drives the same field). Multiplying
+                        // made the night badge, declared at opacity 0 and
+                        // faded in by its track, permanently invisible
+                        // (2026-09-09). Nested chain groups DO multiply,
+                        // the way SceneGraph composes parent opacity.
+                        var opacity = 1.0
                         // outer chain levels first, each wrapping the next
                         for level in layer.chain {
-                            opacity *= Self.apply(level, to: &c, at: t)
+                            opacity *= Self.apply(level, to: &c, at: t) ?? 1
                         }
-                        opacity *= Self.apply(layer.tracks, to: &c, at: t)
+                        opacity *= Self.apply(layer.tracks, to: &c, at: t) ?? layer.opacity
                         c.opacity = max(0, min(1, opacity))
                         c.draw(ctx.resolve(Image(uiImage: ui)), in: CGRect(x: 0, y: 0, width: w, height: h))
                     }
@@ -85,9 +94,11 @@ struct MotionOverlayView: View {
 
     /// Apply one group's tracks to the context (translation, then
     /// rotation about center, then scale about center - the SceneGraph
-    /// node order) and return the group's opacity factor.
-    private static func apply(_ tracks: [Track], to c: inout GraphicsContext, at t: TimeInterval) -> Double {
-        var opacity = 1.0
+    /// node order) and return the opacity its own track dictates, or nil
+    /// when no opacity track is driving it yet (still in its delay, or
+    /// none declared) - the caller then keeps the declared resting value.
+    private static func apply(_ tracks: [Track], to c: inout GraphicsContext, at t: TimeInterval) -> Double? {
+        var opacity: Double?
         var translation = CGPoint.zero
         var rotation = 0.0
         var rotCenter = CGPoint.zero

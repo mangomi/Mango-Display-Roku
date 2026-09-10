@@ -129,6 +129,7 @@ final class DisplayController: ObservableObject {
     private var fontsReady = true                  // gate: pages apply only with their faces present
     private var fontTask: Task<Void, Never>?
     private var failStreak = 0                     // consecutive failed waits, drives the backoff
+    private var stampedeDelayDone = false          // the post-kill launch delay runs once per app run
     /// After a memory warning: stop loading new scroll strips (those
     /// cells show from the page image instead) - the post-production
     /// memory guard (OPS_RUNBOOK §5), alongside mem=low on the poll.
@@ -287,11 +288,18 @@ final class DisplayController: ObservableObject {
         // A launch after a crash/kill waits a random 0-30s before its
         // first poll, so a fleet-wide restart does not stampede the
         // service (OPS_RUNBOOK §5 post-production list). Clean exits and
-        // first-ever launches poll at once.
-        if launchExitQuery.contains("lastexit=killed") {
-            let delay = Double.random(in: 0...30)
-            NSLog("[Mango] launch after kill - first poll in %.0fs", delay)
-            try? await Task.sleep(for: .seconds(delay))
+        // first-ever launches poll at once. ONCE per app run: this loop
+        // also restarts after a display reset + re-claim, and a user who
+        // just claimed the code is standing at the TV - making them wait
+        // up to 30s there is not a stampede guard, it is a broken screen
+        // (Dave, 2026-09-09: "why did it not reload?").
+        if !stampedeDelayDone {
+            stampedeDelayDone = true
+            if launchExitQuery.contains("lastexit=killed") {
+                let delay = Double.random(in: 0...30)
+                NSLog("[Mango] launch after kill - first poll in %.0fs", delay)
+                try? await Task.sleep(for: .seconds(delay))
+            }
         }
         while !Task.isCancelled {
             // the exit reason only matters alongside the launch announcement

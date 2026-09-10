@@ -464,7 +464,7 @@ async function applyCalendarOverride(page, stateDir) {
  * list per platform: Roku's channel does (ScrollOverlay, 2026-09-02); tvOS
  * is queued in TVOS_PARITY_QUEUE.md and joins here once its app has it.
  * Anything not listed keeps receiving the sheets. */
-const NATIVE_SCROLL_PREFIXES = ["RK"];
+const NATIVE_SCROLL_PREFIXES = ["RK", "ATV"]; /* ATV joined 2026-09-09: tvOS ff1a107 */
 function wantsNativeScroll(deviceId) {
   const id = String(deviceId || "");
   return NATIVE_SCROLL_PREFIXES.some((p) => id.startsWith(p));
@@ -477,7 +477,7 @@ function wantsNativeScroll(deviceId) {
  * 2026-09-02: "rather than trying to rotate it via GIF because it looks
  * very jerky"). Roku's channel has MotionOverlay; tvOS joins here once
  * its app has it. Icons the decomposer cannot handle keep the sheets. */
-const NATIVE_WEATHER_PREFIXES = ["RK"];
+const NATIVE_WEATHER_PREFIXES = ["RK", "ATV"]; /* ATV joined 2026-09-09: tvOS d02eb65 */
 function wantsNativeWeather(deviceId) {
   const id = String(deviceId || "");
   return NATIVE_WEATHER_PREFIXES.some((p) => id.startsWith(p));

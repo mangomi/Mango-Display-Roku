@@ -280,7 +280,7 @@ build 4, production live), ported in two commits:
   pointer starts at the canvas centre, clamps to canvas bounds, and
   arrows remap for 90/270; celebration finale bands and the spinner
   default follow the canvas. Regression-checked on the FHD landscape
-  display (identical render). Portrait: see the verification note.
+  display (identical render); portrait verified live 2026-09-09.
 - **`scroll` overlays + checkboxes riding the strip** (37f3826,
   6ce70f4, 0eb3117, 986c5de): `ScrollStripState` (shared with the
   interaction layer) drives an analytic linear loop from fromY to toY
@@ -308,12 +308,37 @@ build 4, production live), ported in two commits:
   embeds only the production control host. NEVER install a Production
   build on the test rig - it would register the code on production.
 
-Pending server-side coordination: `scroll` and `motion` reach a device
-only when its prefix is in `NATIVE_SCROLL_PREFIXES` /
-`NATIVE_WEATHER_PREFIXES` (`render-service/capture.js`, currently
-`["RK"]`). The client is ready; ask the server-side agent to add `"ATV"`
-and verify against the live display afterwards. Until then tvOS keeps
-receiving the `gif` sheets, which still play.
+Verified live 2026-09-09/10 (the catch-up, on the re-added display):
+
+- **Night mode**: the black clip plays under the transparent page, and
+  the badge fades through its 35s burn-in cycle at the portal's own
+  offsets - after a real bug: a motion layer's declared `opacity` is
+  its RESTING value that its own track REPLACES, not a multiplier
+  (d02eb65). Nothing else could have shown it: the badge is the first
+  motion overlay this client ever drew.
+- **Display reset**: `display was reset - back to pairing`, re-claim,
+  content back - no relaunch. Found and fixed on the way: the 0-30s
+  post-kill stampede delay also fired after the re-pair (a 16s blank
+  stare after claiming); it now runs once per app run (8d508ae). The
+  Roku has no such delay at all.
+- **Rotation**: Dave set the display to portrait. `canvas 1080x1920
+  rotation 90`: the whole stage - captured pixels, native clock/date,
+  stickers, motion icon, scroll strips - turned clockwise as one unit,
+  filling the landscape screen exactly (scale 1). Pointer revealed at
+  the exact screen centre and moved +100/-100 on screen for ten
+  viewer-"up"/"right" taps: the arrow remap is right.
+- **`motion` weather icon** (gate open server-side): a 4-layer drizzle
+  icon at its rotated rect, raindrops animating (73px changing between
+  frames inside the 79x79 box).
+- **`scroll` cells** (gate open): three overflowing day cells got
+  112x45 windows with 69-92px single-segment strips looping every
+  6-7s; ~4,000px change per cell per 2s, distinct event rows in view
+  between frames, clipped to the window, all under rotation. No boxes
+  on this layout, so strip checkboxes remain code-reviewed only.
+
+Still variant-coverage only: strip checkboxes (a todo list whose rows
+overflow), slideshow as a placed widget, brightness<1 photo dim,
+slide/flip photo swaps, the celebration finale.
 
 ## Spike-only conveniences to revisit
 

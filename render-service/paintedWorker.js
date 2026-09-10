@@ -201,7 +201,14 @@ class PaintedWorker extends DisplayWorker {
    * up. handleWait runs on every poll, so this is the reopen path too. */
   handleWait(u, res, req) {
     const launching = u.searchParams.get("launch") === "1";
-    if (launching) {
+    /* Launch polls can arrive in a tight loop (a TV re-entering pairing,
+     * a crash loop): everything below that costs something - the log
+     * line, the spinner flip, a portal reload - happens at most once per
+     * LAUNCH_HOLD_MS, the rest are ordinary polls. */
+    const LAUNCH_HOLD_MS = 20000;
+    const launchFresh = launching && Date.now() - (this.lastLaunchAt || 0) > LAUNCH_HOLD_MS;
+    if (launchFresh) {
+      this.lastLaunchAt = Date.now();
       /* the channel reports WHY the previous run ended (GetLastExitInfo,
        * Roku OS 13+): crash vs low-memory kill vs the OS's ~2h idle
        * auto-exit vs a person pressing Home. Logged next to the poll
@@ -218,22 +225,38 @@ class PaintedWorker extends DisplayWorker {
        * when the launch render publishes (clearBusySoon); interacting
        * keeps the janitor from clearing it during the portal boot,
        * when nothing is rendering yet. */
-      this.setBusy(true, "app launch");
-      this.interacting = true;
+      /* no spinner while the portal is backed off: it would clear on the
+       * same tick, and every flip answers the held poll early */
+      if (!(this.portalBlockedUntil && Date.now() < this.portalBlockedUntil)) {
+        this.setBusy(true, "app launch");
+        this.interacting = true;
+      }
     }
     if (!this.portal) {
       /* cold launch: the portal was closed (app off for more than a few
        * minutes). The reload it is about to announce IS this launch, so
        * label it accordingly - rank 3, spinner, staged, not preemptible. */
-      if (launching) this.launchReload = true;
-      this.openPortal().catch((e) => {
-        this.log("live portal failed to open:", e.message);
-        if (launching) {
-          this.interacting = false;
-          this.setBusy(false, "portal failed to open");
-        }
-      });
-    } else if (launching) {
+      if (launchFresh) this.launchReload = true;
+      const backedOff = this.portalBlockedUntil && Date.now() < this.portalBlockedUntil;
+      if (!backedOff || Date.now() - (this.lastBackoffLogAt || 0) > 30000) {
+        this.openPortal().catch((e) => {
+          if (backedOff) this.lastBackoffLogAt = Date.now();
+          this.log("live portal failed to open:", e.message);
+          if (launchFresh) {
+            this.interacting = false;
+            this.setBusy(false, "portal failed to open");
+          }
+        });
+      }
+    } else if (launchFresh && (this.portalOpening || !this.portal.ready)) {
+      /* the portal is still booting for an earlier poll: reloading it
+       * now would close the browser under that boot ("Target page,
+       * context or browser has been closed") and every launch poll in a
+       * loop would do it again. Its own reload announcement is the
+       * launch render. */
+      this.log("app launch: portal is still opening - waiting for it");
+      this.launchReload = true;
+    } else if (launchFresh) {
       /* The app restarted. Recapturing what the portal currently shows is
        * not enough: a portal left open from the previous session holds
        * that session's state - a calendar someone swiped three months

@@ -192,6 +192,34 @@ class DisplayWorker {
     const remote = await this.publisher.getJson("display.json").catch(() => null);
     const rv = remote && parseInt(remote.version, 10);
     if (rv > 0 && rv < 1000000 && rv + 1 > this.version) this.version = rv + 1;
+    /* A display that was RESET and then added again: the bucket still
+     * holds the unpaired manifest from the reset. Served to the TV now,
+     * it sends the TV straight back to pairing, which restarts its poll
+     * loop, which fetches it again - seven times a second, for as long
+     * as the portal takes to boot (four displays, production,
+     * 2026-09-10). Replace it before anything is served: paired, no
+     * pages, which the TV treats as "nothing new yet" and keeps its
+     * cached picture behind the launch spinner. */
+    if (remote && remote.paired === false) {
+      fs.writeFileSync(
+        path.join(this.dir, "display.json"),
+        JSON.stringify(
+          {
+            schema: 1,
+            canvas: { width: this.display.canvasW, height: this.display.canvasH },
+            rotation: this.display.rotation || 0,
+            paired: true,
+            version: this.version,
+            updateReason: "re-added",
+            pages: [],
+          },
+          null,
+          1,
+        ),
+      );
+      this.log("display.json: the bucket held the reset's unpaired manifest - replaced with an empty paired one (v" + this.version + ")");
+      if (r2Enabled()) await this.pushToR2("re-added", false).catch(() => {});
+    }
 
     this.log(
       "worker start (major " + this.display.major + " minor " + this.display.minor + ")",

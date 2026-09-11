@@ -555,6 +555,7 @@ function healthReport() {
     lastPublishAgoMs: lastPublish ? now - lastPublish : null,
     wanting,
     usage: usage.snapshot(),
+    portalCpu: lastPortalCpu.slice(0, 10),
     admission: { booting: bootingCount(), claimsLastMinute: claimTimes.filter((t) => now - t <= 60000).length, refusing: admission() },
     ownership: own,
     reasons: [storeDown ? "ownership store failing" : null, wedged ? "watched displays not publishing" : null].filter(Boolean),
@@ -692,12 +693,93 @@ async function resolveIdentity() {
   if (!me.taskAddr) me.taskAddr = "127.0.0.1:" + PORT;
 }
 
+/* Which portal is burning the CPU. The task-level numbers say the fleet
+ * is busy; this says WHO. Every browser is its own process tree, so on
+ * Linux the /proc stat of a portal's browser pid and its descendants
+ * gives that display's CPU. Sampled with the metrics, logged when any
+ * portal is over 5% of a core (production, 2026-09-11: a task sat at
+ * 60% CPU with the same displays that idled at 6% the day before, and
+ * nothing task-level could say which page it was). */
+const procStat = (() => {
+  const fs = require("fs");
+  const HZ = 100;
+  const read = (pid) => {
+    try {
+      const st = fs.readFileSync("/proc/" + pid + "/stat", "utf8");
+      const close = st.lastIndexOf(")");
+      const f = st.slice(close + 2).split(" ");
+      /* after the comm: state, ppid, ..., utime is field 14, stime 15 (1-based) */
+      return { ppid: parseInt(f[1], 10), ticks: parseInt(f[11], 10) + parseInt(f[12], 10) };
+    } catch (e) {
+      return null;
+    }
+  };
+  const all = () => {
+    let pids;
+    try {
+      pids = fs.readdirSync("/proc").filter((n) => /^\d+$/.test(n)).map(Number);
+    } catch (e) {
+      return null; /* not Linux */
+    }
+    const map = new Map();
+    for (const pid of pids) {
+      const r = read(pid);
+      if (r) map.set(pid, r);
+    }
+    return map;
+  };
+  return { all, HZ };
+})();
+const portalCpuLast = new Map(); /* deviceId -> { ticks, at } */
+function samplePortalCpu() {
+  const procs = procStat.all();
+  if (!procs) return [];
+  const children = new Map();
+  for (const [pid, r] of procs) {
+    if (!children.has(r.ppid)) children.set(r.ppid, []);
+    children.get(r.ppid).push(pid);
+  }
+  const out = [];
+  const now = Date.now();
+  for (const [id, w] of workers) {
+    const proc = w.portal && w.portal.browser && w.portal.browser.process ? w.portal.browser.process() : null;
+    if (!proc || !proc.pid) continue;
+    let ticks = 0;
+    const stack = [proc.pid];
+    while (stack.length) {
+      const pid = stack.pop();
+      const r = procs.get(pid);
+      if (!r) continue;
+      ticks += r.ticks;
+      for (const c of children.get(pid) || []) stack.push(c);
+    }
+    const prev = portalCpuLast.get(id);
+    portalCpuLast.set(id, { ticks, at: now });
+    if (prev && now > prev.at) {
+      const cores = (ticks - prev.ticks) / procStat.HZ / ((now - prev.at) / 1000);
+      out.push({ id, cores: Math.round(cores * 100) / 100 });
+    }
+  }
+  for (const id of [...portalCpuLast.keys()]) if (!workers.has(id)) portalCpuLast.delete(id);
+  return out.sort((a, b) => b.cores - a.cores);
+}
+let lastPortalCpu = [];
+
 /* OwnedDisplays, per task and for the service: dashboards and alarms
  * only - scaling runs on ECS's own memory/CPU (Dave, 2026-09-06) */
 const METRICS = process.env.METRICS === "1" || !!process.env.ECS_CONTAINER_METADATA_URI_V4;
 const METRIC_NAMESPACE = env("METRIC_NAMESPACE", "MangoDisplay/Roku");
 let cloudwatch = null;
 async function publishMetrics() {
+  try {
+    lastPortalCpu = samplePortalCpu();
+    const hot = lastPortalCpu.filter((p) => p.cores >= 0.05);
+    if (hot.length) {
+      log("portal cpu (cores):", hot.slice(0, 8).map((p) => p.id + "=" + p.cores).join(" "), "| total " + Math.round(lastPortalCpu.reduce((a, p) => a + p.cores, 0) * 100) / 100);
+    }
+  } catch (e) {
+    log("portal cpu sample failed:", e.message);
+  }
   if (!METRICS) return;
   try {
     if (!cloudwatch) {

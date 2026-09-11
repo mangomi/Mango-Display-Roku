@@ -251,6 +251,138 @@ class LivePortal {
   }
 
   async installRoutes() {
+    /* Photos the DEVICE draws - slideshow and image widgets, rotating
+     * backgrounds - must not be downloaded by this browser at all. The
+     * host block below only knows our own image host; a household's
+     * Google Photos albums (lh3.googleusercontent.com, 655 photos across
+     * four slideshows on one page, 2026-09-11) sailed past it, the
+     * portal preloaded every one, and that display's Chromium grew from
+     * 250 MB to ~4.5 GB and crashed its renderer every half hour. So the
+     * decision is by DATA, not host: any image URL in a slideshow/image
+     * widget's photo list, or in a rotating background's queue, is
+     * answered 204 like the blocked hosts are. Calendar photos keep the
+     * exemption the host block has.
+     *
+     * The page PUSHES the two URL sets (device-drawn, calendar) to Node
+     * every half second until they are populated, then every two seconds,
+     * so the route handler decides synchronously: a route that awaited
+     * page.evaluate during the initial navigation deadlocked goto
+     * (2026-09-11). Registered BEFORE the host route so that route still
+     * wins for its own hosts. */
+    this.devicePhotos = new Set();
+    this.calendarPhotos = new Set();
+    this.blockedPhotos = 0;
+    await this.page.exposeFunction("__mmPhotoSets", (drawn, cal) => {
+      this.devicePhotos = new Set(drawn || []);
+      this.calendarPhotos = new Set(cal || []);
+    });
+    await this.page.addInitScript(() => {
+      const abs = (v) => {
+        try {
+          return new URL(v, location.href).href;
+        } catch (e) {
+          return v || "";
+        }
+      };
+      let lastKey = "";
+      const collect = () => {
+        if (!window.angular) return;
+        const drawn = new Set();
+        const cal = new Set();
+        try {
+          const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
+          let list = null;
+          let sc = null;
+          for (const r of roots) {
+            if (!r) continue;
+            const inj = window.angular.element(r).injector();
+            if (!inj) continue;
+            const walk = (x) => {
+              if (!x) return;
+              if (!list && x.imageWidgetList) list = x.imageWidgetList;
+              if (!sc && x.groups && x.groups.length) sc = x;
+              if (list && sc) return;
+              walk(x.$$childHead);
+              walk(x.$$nextSibling);
+            };
+            walk(inj.get("$rootScope"));
+            break;
+          }
+          (list || []).forEach((d) => {
+            const ws = d && d.widgetSetting;
+            if (ws && ws.contentType === "pdf") return;
+            (d && d.images ? d.images : []).forEach((i) => {
+              const v = typeof i === "string" ? i : i && (i.url || i.src || i.imageUrl);
+              if (v) drawn.add(abs(v));
+            });
+          });
+          /* a rotating background (two or more photos) is device-drawn; a
+           * single static background stays baked, so it must load */
+          const photos = (sc && sc.allPhotos) || [];
+          if (photos.length >= 2) {
+            photos.forEach((ph) => ph && ph.regular && drawn.add(abs(ph.regular)));
+            for (const id of ["bg_img_1", "bg_img_2"]) {
+              const el = document.getElementById(id);
+              const m = el && (getComputedStyle(el).backgroundImage || "").match(/url\(["']?([^"')]+)["']?\)/);
+              if (m && m[1]) drawn.add(abs(m[1]));
+            }
+          }
+          /* calendar photos: on the page, or in the calendar widgets' data
+           * (the "fill day with photo" pre-check never puts the URL in
+           * the DOM first) */
+          for (const root of document.querySelectorAll('[id^="calendar_"]')) {
+            for (const img of root.querySelectorAll("img")) {
+              const v = img.currentSrc || img.getAttribute("src");
+              if (v) cal.add(abs(v));
+            }
+          }
+          const pages = [].concat(sc && sc.groups ? sc.groups : [], sc && sc.temppgroups ? sc.temppgroups : []);
+          for (const g of pages) {
+            for (const w of (g && g.widgets) || []) {
+              if (!/calendar/i.test(String(w && w.contentType))) continue;
+              const ev = w.data && w.data.events;
+              const evs = Array.isArray(ev) ? ev : ev && Array.isArray(ev.data) ? ev.data : [];
+              for (const e of evs) if (e && e.imageUrl) cal.add(abs(e.imageUrl));
+            }
+          }
+        } catch (e) {}
+        const key = drawn.size + ":" + cal.size + ":" + [...drawn].slice(0, 3).join("|");
+        if (key !== lastKey) {
+          lastKey = key;
+          try {
+            window.__mmPhotoSets([...drawn], [...cal]);
+          } catch (e) {}
+        }
+        return drawn.size > 0;
+      };
+      let ticks = 0;
+      const tick = () => {
+        const populated = collect();
+        ticks++;
+        setTimeout(tick, populated || ticks > 120 ? 2000 : 500);
+      };
+      setTimeout(tick, 0);
+    });
+    const portalOrigin = (() => {
+      try {
+        return new URL(this.opts.portalBase).origin;
+      } catch (e) {
+        return "";
+      }
+    })();
+    /* the predicate receives a URL object, not a string */
+    await this.page.route((u) => !portalOrigin || !String(u.href || u).startsWith(portalOrigin), (route) => {
+      const req = route.request();
+      if (req.resourceType() !== "image") return route.continue();
+      const url = req.url();
+      if (!this.devicePhotos.has(url) || this.calendarPhotos.has(url)) return route.continue();
+      this.blockedPhotos++;
+      if (this.blockedPhotos === 1 || this.blockedPhotos % 100 === 0) {
+        this.log("device-drawn photos blocked: " + this.blockedPhotos + " (latest " + url.slice(0, 80) + ")");
+      }
+      return route.fulfill({ status: 204, body: "" });
+    });
+
     await this.page.route(BLOCKED_MEDIA, async (route) => {
       /* Calendar photos live on the blocked host too: the photo-calendar
        * feature puts a user's picture on a day (an <img> in the event, or

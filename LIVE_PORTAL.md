@@ -381,3 +381,18 @@ so those may gain it back too.
 One throwaway experiment on a single cell: is a cell crop legible as a
 sprite at Roku's output scale, and how does the loop seam read when
 content wraps from bottom to top?
+
+## Device-drawn photos are never downloaded (2026-09-11)
+
+Two blocks in `livePortal.js installRoutes`: the host block
+(`BLOCKED_MEDIA`: our image host, visual overlays, backgrounds) and a
+DATA block - any image URL that appears in a slideshow/image widget's
+photo list, or in a rotating background's queue (two or more photos),
+is answered 204. The page pushes those URL sets to Node (init script,
+every 0.5 s until populated, then 2 s) so the route decides
+synchronously; awaiting `page.evaluate` inside a route deadlocked the
+initial `goto`. Calendar photos are exempt in both blocks. Why: a
+household's four Google Photos slideshows (655 photos) were preloaded
+by the portal, grew that display's Chromium to ~4.5 GB and crashed its
+renderer every half hour. Log line: `device-drawn photos blocked: N`.
+

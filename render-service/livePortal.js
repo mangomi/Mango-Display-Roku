@@ -263,18 +263,23 @@ class LivePortal {
      * answered 204 like the blocked hosts are. Calendar photos keep the
      * exemption the host block has.
      *
-     * The page PUSHES the two URL sets (device-drawn, calendar) to Node
-     * every half second until they are populated, then every two seconds,
-     * so the route handler decides synchronously: a route that awaited
-     * page.evaluate during the initial navigation deadlocked goto
-     * (2026-09-11). Registered BEFORE the host route so that route still
-     * wins for its own hosts. */
+     * The page PUSHES the URL set to Node so the route decides
+     * synchronously (a route that awaited page.evaluate during the
+     * initial navigation deadlocked goto). The collector is deliberately
+     * cheap: MainCtrl's scope is looked up directly (no scope-tree walk),
+     * inline styles are read (no getComputedStyle, which forces a style
+     * recalc), and it runs every 500 ms only until the set is populated
+     * or 30 s have passed, then every 5 s. The first version of this
+     * walked every scope and forced style every 2 s in every portal and
+     * roughly tripled the fleet's idle CPU (production, 2026-09-11).
+     * Calendar-photo exemption: checked in Node, only for a URL that IS
+     * in the set, and only once the portal is ready. Registered BEFORE
+     * the host route so that route still wins for its own hosts. */
     this.devicePhotos = new Set();
     this.calendarPhotos = new Set();
     this.blockedPhotos = 0;
-    await this.page.exposeFunction("__mmPhotoSets", (drawn, cal) => {
+    await this.page.exposeFunction("__mmPhotoSets", (drawn) => {
       this.devicePhotos = new Set(drawn || []);
-      this.calendarPhotos = new Set(cal || []);
     });
     await this.page.addInitScript(() => {
       const abs = (v) => {
@@ -286,29 +291,13 @@ class LivePortal {
       };
       let lastKey = "";
       const collect = () => {
-        if (!window.angular) return;
+        if (!window.angular) return false;
+        const ctl = document.querySelector('[ng-controller="MainCtrl"]');
+        const sc = ctl ? window.angular.element(ctl).scope() : null;
+        if (!sc) return false;
         const drawn = new Set();
-        const cal = new Set();
         try {
-          const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
-          let list = null;
-          let sc = null;
-          for (const r of roots) {
-            if (!r) continue;
-            const inj = window.angular.element(r).injector();
-            if (!inj) continue;
-            const walk = (x) => {
-              if (!x) return;
-              if (!list && x.imageWidgetList) list = x.imageWidgetList;
-              if (!sc && x.groups && x.groups.length) sc = x;
-              if (list && sc) return;
-              walk(x.$$childHead);
-              walk(x.$$nextSibling);
-            };
-            walk(inj.get("$rootScope"));
-            break;
-          }
-          (list || []).forEach((d) => {
+          (sc.imageWidgetList || []).forEach((d) => {
             const ws = d && d.widgetSetting;
             if (ws && ws.contentType === "pdf") return;
             (d && d.images ? d.images : []).forEach((i) => {
@@ -318,48 +307,29 @@ class LivePortal {
           });
           /* a rotating background (two or more photos) is device-drawn; a
            * single static background stays baked, so it must load */
-          const photos = (sc && sc.allPhotos) || [];
+          const photos = sc.allPhotos || [];
           if (photos.length >= 2) {
             photos.forEach((ph) => ph && ph.regular && drawn.add(abs(ph.regular)));
             for (const id of ["bg_img_1", "bg_img_2"]) {
               const el = document.getElementById(id);
-              const m = el && (getComputedStyle(el).backgroundImage || "").match(/url\(["']?([^"')]+)["']?\)/);
+              const m = el && (el.style.background || el.style.backgroundImage || "").match(/url\(["']?([^"')]+)["']?\)/);
               if (m && m[1]) drawn.add(abs(m[1]));
             }
           }
-          /* calendar photos: on the page, or in the calendar widgets' data
-           * (the "fill day with photo" pre-check never puts the URL in
-           * the DOM first) */
-          for (const root of document.querySelectorAll('[id^="calendar_"]')) {
-            for (const img of root.querySelectorAll("img")) {
-              const v = img.currentSrc || img.getAttribute("src");
-              if (v) cal.add(abs(v));
-            }
-          }
-          const pages = [].concat(sc && sc.groups ? sc.groups : [], sc && sc.temppgroups ? sc.temppgroups : []);
-          for (const g of pages) {
-            for (const w of (g && g.widgets) || []) {
-              if (!/calendar/i.test(String(w && w.contentType))) continue;
-              const ev = w.data && w.data.events;
-              const evs = Array.isArray(ev) ? ev : ev && Array.isArray(ev.data) ? ev.data : [];
-              for (const e of evs) if (e && e.imageUrl) cal.add(abs(e.imageUrl));
-            }
-          }
         } catch (e) {}
-        const key = drawn.size + ":" + cal.size + ":" + [...drawn].slice(0, 3).join("|");
+        const key = drawn.size + ":" + [...drawn].slice(0, 3).join("|");
         if (key !== lastKey) {
           lastKey = key;
           try {
-            window.__mmPhotoSets([...drawn], [...cal]);
+            window.__mmPhotoSets([...drawn]);
           } catch (e) {}
         }
         return drawn.size > 0;
       };
-      let ticks = 0;
+      const t0 = Date.now();
       const tick = () => {
         const populated = collect();
-        ticks++;
-        setTimeout(tick, populated || ticks > 120 ? 2000 : 500);
+        setTimeout(tick, populated || Date.now() - t0 > 30000 ? 5000 : 500);
       };
       setTimeout(tick, 0);
     });
@@ -371,11 +341,54 @@ class LivePortal {
       }
     })();
     /* the predicate receives a URL object, not a string */
-    await this.page.route((u) => !portalOrigin || !String(u.href || u).startsWith(portalOrigin), (route) => {
+    await this.page.route((u) => !portalOrigin || !String(u.href || u).startsWith(portalOrigin), async (route) => {
       const req = route.request();
       if (req.resourceType() !== "image") return route.continue();
       const url = req.url();
-      if (!this.devicePhotos.has(url) || this.calendarPhotos.has(url)) return route.continue();
+      if (!this.devicePhotos.has(url)) return route.continue();
+      if (this.calendarPhotos.has(url)) return route.continue();
+      /* the rare case: the same photo also sits on a calendar day, where it
+       * is baked into the still. Ask the page - only for set members, and
+       * only once the portal is up (never during the initial navigation) */
+      if (this.ready) {
+        let onCalendar = false;
+        try {
+          onCalendar = await this.page.evaluate((u) => {
+            const abs = (v) => {
+              try {
+                return new URL(v, location.href).href;
+              } catch (e) {
+                return v || "";
+              }
+            };
+            for (const root of document.querySelectorAll('[id^="calendar_"]')) {
+              for (const img of root.querySelectorAll("img")) {
+                if (abs(img.currentSrc || img.getAttribute("src")) === u) return true;
+              }
+            }
+            try {
+              const ctl = document.querySelector('[ng-controller="MainCtrl"]');
+              const sc = ctl && window.angular ? window.angular.element(ctl).scope() : null;
+              const pages = [].concat(sc && sc.groups ? sc.groups : [], sc && sc.temppgroups ? sc.temppgroups : []);
+              for (const g of pages) {
+                for (const w of (g && g.widgets) || []) {
+                  if (!/calendar/i.test(String(w && w.contentType))) continue;
+                  const ev = w.data && w.data.events;
+                  const evs = Array.isArray(ev) ? ev : ev && Array.isArray(ev.data) ? ev.data : [];
+                  for (const e of evs) if (e && e.imageUrl && abs(e.imageUrl) === u) return true;
+                }
+              }
+            } catch (e) {}
+            return false;
+          }, url);
+        } catch (e) {
+          onCalendar = false;
+        }
+        if (onCalendar) {
+          this.calendarPhotos.add(url);
+          return route.continue();
+        }
+      }
       this.blockedPhotos++;
       if (this.blockedPhotos === 1 || this.blockedPhotos % 100 === 0) {
         this.log("device-drawn photos blocked: " + this.blockedPhotos + " (latest " + url.slice(0, 80) + ")");

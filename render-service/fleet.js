@@ -694,70 +694,36 @@ async function resolveIdentity() {
 }
 
 /* Which portal is burning the CPU. The task-level numbers say the fleet
- * is busy; this says WHO. Every browser is its own process tree, so on
- * Linux the /proc stat of a portal's browser pid and its descendants
- * gives that display's CPU. Sampled with the metrics, logged when any
- * portal is over 5% of a core (production, 2026-09-11: a task sat at
- * 60% CPU with the same displays that idled at 6% the day before, and
- * nothing task-level could say which page it was). */
-const procStat = (() => {
-  const fs = require("fs");
-  const HZ = 100;
-  const read = (pid) => {
-    try {
-      const st = fs.readFileSync("/proc/" + pid + "/stat", "utf8");
-      const close = st.lastIndexOf(")");
-      const f = st.slice(close + 2).split(" ");
-      /* after the comm: state, ppid, ..., utime is field 14, stime 15 (1-based) */
-      return { ppid: parseInt(f[1], 10), ticks: parseInt(f[11], 10) + parseInt(f[12], 10) };
-    } catch (e) {
-      return null;
-    }
-  };
-  const all = () => {
-    let pids;
-    try {
-      pids = fs.readdirSync("/proc").filter((n) => /^\d+$/.test(n)).map(Number);
-    } catch (e) {
-      return null; /* not Linux */
-    }
-    const map = new Map();
-    for (const pid of pids) {
-      const r = read(pid);
-      if (r) map.set(pid, r);
-    }
-    return map;
-  };
-  return { all, HZ };
-})();
-const portalCpuLast = new Map(); /* deviceId -> { ticks, at } */
-function samplePortalCpu() {
-  const procs = procStat.all();
-  if (!procs) return [];
-  const children = new Map();
-  for (const [pid, r] of procs) {
-    if (!children.has(r.ppid)) children.set(r.ppid, []);
-    children.get(r.ppid).push(pid);
-  }
+ * is busy; this says WHO. Each display is its own browser, and Chromium
+ * reports the cumulative CPU time of every one of its processes over
+ * CDP (SystemInfo.getProcessInfo) - no /proc, works on any OS, and it
+ * is the browser's own accounting. Sampled with the metrics; the
+ * portals over 5% of a core are logged, the top ten are on /healthz
+ * (production, 2026-09-11: a task sat at 60% CPU with the same displays
+ * that idled at 6% the day before, and nothing task-level could say
+ * which page it was). Playwright's Browser has no process(): the
+ * earlier /proc walk never found a pid. */
+const portalCpuLast = new Map(); /* deviceId -> { seconds, at } */
+async function samplePortalCpu() {
   const out = [];
   const now = Date.now();
   for (const [id, w] of workers) {
-    const proc = w.portal && w.portal.browser && w.portal.browser.process ? w.portal.browser.process() : null;
-    if (!proc || !proc.pid) continue;
-    let ticks = 0;
-    const stack = [proc.pid];
-    while (stack.length) {
-      const pid = stack.pop();
-      const r = procs.get(pid);
-      if (!r) continue;
-      ticks += r.ticks;
-      for (const c of children.get(pid) || []) stack.push(c);
-    }
-    const prev = portalCpuLast.get(id);
-    portalCpuLast.set(id, { ticks, at: now });
-    if (prev && now > prev.at) {
-      const cores = (ticks - prev.ticks) / procStat.HZ / ((now - prev.at) / 1000);
-      out.push({ id, cores: Math.round(cores * 100) / 100 });
+    const portal = w.portal;
+    const browser = portal && portal.browser;
+    if (!browser || !browser.isConnected()) continue;
+    try {
+      if (!portal.cpuSession) portal.cpuSession = await browser.newBrowserCDPSession();
+      const info = await portal.cpuSession.send("SystemInfo.getProcessInfo");
+      const seconds = (info.processInfo || []).reduce((a, p) => a + (p.cpuTime || 0), 0);
+      const prev = portalCpuLast.get(id);
+      portalCpuLast.set(id, { seconds, at: now, session: portal.cpuSession });
+      if (prev && prev.session === portal.cpuSession && now > prev.at) {
+        const cores = (seconds - prev.seconds) / ((now - prev.at) / 1000);
+        out.push({ id, cores: Math.round(Math.max(0, cores) * 100) / 100 });
+      }
+    } catch (e) {
+      portal.cpuSession = null; /* browser mid-restart: next tick makes a new session */
+      portalCpuLast.delete(id);
     }
   }
   for (const id of [...portalCpuLast.keys()]) if (!workers.has(id)) portalCpuLast.delete(id);
@@ -772,7 +738,7 @@ const METRIC_NAMESPACE = env("METRIC_NAMESPACE", "MangoDisplay/Roku");
 let cloudwatch = null;
 async function publishMetrics() {
   try {
-    lastPortalCpu = samplePortalCpu();
+    lastPortalCpu = await samplePortalCpu();
     const hot = lastPortalCpu.filter((p) => p.cores >= 0.05);
     if (hot.length) {
       log("portal cpu (cores):", hot.slice(0, 8).map((p) => p.id + "=" + p.cores).join(" "), "| total " + Math.round(lastPortalCpu.reduce((a, p) => a + p.cores, 0) * 100) / 100);

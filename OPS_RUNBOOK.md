@@ -43,7 +43,7 @@ Golden rules:
 | Log group | `/ecs/roku-render` | `/ecs/roku-render-prod` |
 | Target group / health | `roku-control-tg` / `/healthz` | `roku-control-prod-tg` / `/healthz` |
 | Capacity | `FARGATE` base 1 + `FARGATE_SPOT` weight 4 | same |
-| Auto-scaling | 1–14 tasks, memory 70 % / CPU 65 % | same |
+| Auto-scaling | 1–14 tasks, memory 70 % / CPU 65 %, scale-out 2 min / **scale-in 15 min** (5 min flapped: a takeover burst scaled out, the idle second task halved the average, scale-in killed it, its displays rebooted on the survivor and scaled out again — 2026-09-11) | same |
 | Alarms | `roku-render-test-*` | `roku-render-prod-*` |
 | Tags | `Project=Roku`, `Environment=test` | `Project=Roku`, `Environment=prod` |
 | Channel build | `./package.sh` | `./package.sh prod` (setup at `app.mangodisplay.com`) |
@@ -128,7 +128,11 @@ Alarms (both environments; production ones prefixed `roku-render-prod-`):
 | Budget $250 / $400 | growth notice (email) |
 
 `/healthz` on either hostname returns the answering task's id, usage,
-owned displays and admission state. Useful log greps: `claimed`,
+owned displays, admission state and `portalCpu` — the top ten portals
+by cores, from Chromium's own per-process accounting. The same numbers
+land in the log every minute as `portal cpu (cores): RK…=0.4 …` for any
+portal over 5 % of a core; that line is the first thing to read when
+task CPU is high, since the task-level number never says which page. Useful log greps: `claimed`,
 `ownership: lost`, `released every row`, `refusing`, `live portal
 ready`, `captured page(s)`, `portal open failed`, `UNHANDLED REJECTION`.
 

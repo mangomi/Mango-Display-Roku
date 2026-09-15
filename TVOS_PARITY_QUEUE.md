@@ -285,6 +285,18 @@ layout.
   loading new scroll strips (show those cells from the page image) and
   report the level in the poll (`mem=` already exists on Roku).
 
+## DONE both sides — checkboxes re-aimed on in-place refreshes (2026-09-15)
+
+Found by the tvOS session (tvOS `0215c47`), fixed on Roku the same day:
+the in-place image refresh (`loadPage`, the "not animated, same page,
+overlays unchanged" path) swapped the poster and returned without handing
+the page's `targets` / `regions` back to the interaction layer, so a todo
+widget dragged on a one-page display, a task added or completed
+elsewhere, or the backend confirming a tick left the native boxes where
+an older render put them. `applyPageTargets(index)` now runs there as it
+does in `finalizeSwap`; the 180s override rule keeps a pressed tick safe;
+strips are untouched (a strip change already rebuilds).
+
 ## DONE by the tvOS session already (listed for the record)
 
 - [x] Calendar cell-weather overlays (`overlay_cw_*` gif entries,

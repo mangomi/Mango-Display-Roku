@@ -563,6 +563,15 @@ sub loadPage(index as integer, animated as boolean)
         ' cleared, and every later update is deferred behind it.
         m.slots[m.frontKey].poster.uri = pageUri(pg)
         m.pageIndex = index
+        ' The overlays are unchanged, the checkboxes are not necessarily:
+        ' a todo widget dragged on a one-page display, a task added or
+        ' completed elsewhere, or the backend confirming a tick all move,
+        ' add, drop or flip targets without touching the overlay set.
+        ' Re-aim the native boxes exactly as a rebuild would; the
+        ' interaction layer's 180s override keeps a pressed tick safe.
+        ' Strips are left alone - a strip change already rebuilds.
+        ' (tvOS: 0215c47.)
+        applyPageTargets(index)
         armPageTimer()
         return
     end if
@@ -660,6 +669,24 @@ sub onPosterLoad(ev as object)
     end if
 end sub
 
+' Hand the page's actionable items to the interaction layer: the native
+' checkboxes (targets) and the tappable regions. Shared by the slot swap
+' and the in-place image refresh, which must re-aim the boxes too.
+sub applyPageTargets(index as integer)
+    pg = m.pages[index]
+    m.interaction.pageIndex = index
+    if pg.targets <> invalid
+        m.interaction.targets = pg.targets
+    else
+        m.interaction.targets = {}
+    end if
+    if pg.regions <> invalid
+        m.interaction.regions = pg.regions
+    else
+        m.interaction.regions = []
+    end if
+end sub
+
 sub finalizeSwap(newKey as string, index as integer)
     ' content is on screen: from here the channel must read as "playing"
     keepAliveEnsureRunning()
@@ -681,18 +708,7 @@ sub finalizeSwap(newKey as string, index as integer)
     m.pairingGroup.visible = false
     m.pageIndex = index
     ' actionable items belong to the page on screen
-    pg = m.pages[index]
-    m.interaction.pageIndex = index
-    if pg.targets <> invalid
-        m.interaction.targets = pg.targets
-    else
-        m.interaction.targets = {}
-    end if
-    if pg.regions <> invalid
-        m.interaction.regions = pg.regions
-    else
-        m.interaction.regions = []
-    end if
+    applyPageTargets(index)
     ' checkboxes inside scrolling lists ride their ScrollOverlay strips:
     ' hand the page's scroll overlays to the interaction layer so it can
     ' aim at and tick them where they are RIGHT NOW

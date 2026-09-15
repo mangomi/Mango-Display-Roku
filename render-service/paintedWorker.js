@@ -444,7 +444,9 @@ class PaintedWorker extends DisplayWorker {
               const over = tds.filter((t) => t.firstElementChild && t.firstElementChild.scrollHeight > t.firstElementChild.clientHeight + 2).length;
               const calCells = cells.filter((c) => c && c.el && roots.some((r) => r.contains(c.el))).length;
               cal = " | calendars " + roots.length + ": directive cells " + tds.length + ", scrolling " + scrolling + ", overflowing " + over + ", registered for painting " + calCells + " (all registered cells " + cells.length + ")";
-            } catch (e) {}
+            } catch (e) {
+              cal = " | calendars: diagnostic failed: " + (e && e.message);
+            }
             const out = ids.map((id) => {
               const el = document.getElementById(id + "_" + pg);
               const r = el ? el.getBoundingClientRect() : null;

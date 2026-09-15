@@ -1832,7 +1832,14 @@ async function csCaptureStrips(page, frame, items, ctx) {
   const fill = (o, meta) => {
     const tv = csTvDuration(o, ctx); /* before durationMs is overwritten below */
     o.type = "scroll";
-    if (meta.rect) o.rect = { ...meta.rect };
+    /* The strip is filmed once and reused wherever the cell goes: x/y
+     * are deliberately not in the cache key. So the cached meta must
+     * NEVER bring its position along - only the filmed size, which the
+     * key guarantees matches. Until 2026-09-15 it did, and a to-do widget
+     * dragged across the page kept its strip at the old spot on every
+     * render (tvOS display ATV447393236: model and DOM had moved, the
+     * manifest had not). */
+    if (meta.rect) o.rect = { ...meta.rect, x: o.rect.x, y: o.rect.y };
     o.segments = meta.segments.map((s) => ({ ...s }));
     o.stripFile = meta.segments[0].file; /* first piece, for tooling that lists by stripFile */
     o.stripW = meta.stripW;
@@ -2559,7 +2566,10 @@ const cellScrollHandler = {
       o.stripFile = meta.stripFile;
       /* a cached sheet was cropped from a snapped rect - reuse it, or the
        * sprite is drawn at a different box than it was filmed from */
-      if (meta.rect) o.rect = { ...meta.rect };
+      /* same rule as the strip path: the filmed SIZE is reused, the
+       * position is always the live one (a moved widget kept its sheet
+       * at the old spot until 2026-09-15) */
+      if (meta.rect) o.rect = { ...meta.rect, x: o.rect.x, y: o.rect.y };
       o.frameW = o.rect.w;
       o.frameH = o.rect.h;
       o.frameCount = meta.frameCount;

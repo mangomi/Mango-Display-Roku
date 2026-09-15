@@ -419,9 +419,45 @@ class PaintedWorker extends DisplayWorker {
    * pushes, layout edits, the portal's own midnight rollover, and its
    * self-initiated refreshes - which the old architecture could not see
    * at all. */
+  /* Diagnostic (2026-09-15, tvOS report): after a "layout/widget" signal
+   * that names widgets, log what the live portal holds for each - the
+   * model's xPos/yPos (MainCtrl scope) and the DOM box - so a move that
+   * the page never applied is visible in the log next to the capture. */
+  logWidgetGeometry(ids, pageIndex) {
+    if (!this.portal || !this.portal.page || !ids || !ids.length) return;
+    setTimeout(() => {
+      this.portal.page
+        .evaluate(
+          ({ ids, pageIndex }) => {
+            const ctl = document.querySelector('[ng-controller="MainCtrl"]');
+            const sc = ctl && window.angular ? window.angular.element(ctl).scope() : null;
+            const pg = typeof pageIndex === "number" ? pageIndex : sc && typeof sc.quoteIndex === "number" ? sc.quoteIndex : 0;
+            return ids.map((id) => {
+              const el = document.getElementById(id + "_" + pg);
+              const r = el ? el.getBoundingClientRect() : null;
+              let model = null;
+              try {
+                const g = sc && sc.groups && sc.groups[pg];
+                const w = g && (g.widgets || []).find((x) => String(x.widgetSettingId) === String(id));
+                if (w) model = { x: Math.round(w.xPos), y: Math.round(w.yPos), w: Math.round(w.width), h: Math.round(w.height) };
+              } catch (e) {}
+              return id + ": model " + (model ? JSON.stringify(model) : "none") + " dom " + (r ? JSON.stringify({ x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }) : "none") + (el && el.style ? " inline(" + el.style.left + "," + el.style.top + ")" : "");
+            });
+          },
+          { ids, pageIndex },
+        )
+        .then((lines) => this.log("widget geometry after layout/widget (page " + pageIndex + "): " + lines.join(" | ")))
+        .catch(() => {});
+    }, 800);
+  }
+
   onPortalChange(message) {
     this.lastSignalAt = Date.now();
     const type = message.widgetType;
+    if (message.source === "layout" && type === "widget" && message.widgetSettingId) {
+      const ids = Array.isArray(message.widgetSettingId) ? message.widgetSettingId : [message.widgetSettingId];
+      this.logWidgetGeometry(ids.map(String), typeof message.pageIndex === "number" ? message.pageIndex : this.portalPage);
+    }
     /* The backend's reset deletes the display and tells the portal
      * (socket resetDevice); the portal's handler only toasts, and in
      * painted mode also raises this signal. Until 2026-09-05 nothing

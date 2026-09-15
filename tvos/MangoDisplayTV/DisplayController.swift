@@ -679,6 +679,21 @@ final class DisplayController: ObservableObject {
            forceInPlace || pg.overlaysKey == front.overlaysKey {
             slots[slots.count - 1].image = image
             pageIndex = index
+            // The page's checkboxes are NOT live layers: they are drawn
+            // by the interaction layer from this manifest's targets, and
+            // every render can move them (a todo widget dragged across
+            // the page), add or drop them (a task created or completed
+            // elsewhere) or flip them (the backend confirming a tick).
+            // Re-aim from the new targets here too, or they sit where an
+            // older render put them until something rebuilds the page -
+            // seen 2026-09-15 as a column of boxes 400px left of their
+            // list. Ticks the user pressed survive this through the
+            // held-override rule, exactly as on a rebuild; the strips
+            // are untouched (their boxes ride the overlay set, whose
+            // change already forces a rebuild). DIVERGES from
+            // MainScene.loadPage's in-place path, which has this bug.
+            NSLog("[Mango] in-place refresh of page %d", index)
+            interaction.setTargets(pg.targets, regions: pg.regions, pageIndex: index)
             armRotation()
             maybeApplyPages()
             updateSpinner()

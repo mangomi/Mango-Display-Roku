@@ -158,8 +158,18 @@ Landed 2026-08-26 (chunk 4 — the interaction layer):
   anchoring, one-swipe-at-a-time lock with 8s cooldown released
   early by the imageOnly manifest, celebrate events emitted
   (burst/finale grouping rule ported; the PLAYER is the next chunk).
-- Targets apply at slot finalize only, never on in-place refreshes
-  (Roku parity - overrides carry the truth through imageOnly renders).
+- Targets apply at slot finalize AND on every in-place refresh
+  (2026-09-15). DELIBERATE DIVERGENCE: MainScene.loadPage's in-place
+  path (the same-page, overlays-unchanged swap from 980fcc5/5a7ebb8)
+  only exchanges the poster and never re-reads `targets`, so a todo
+  widget dragged across a one-page display, a task added or completed
+  elsewhere, or the backend's own confirmation of a tick leaves the
+  Roku's boxes where an OLDER render put them until something rebuilds
+  the page. Seen here as a column of boxes 400px left of their list
+  after Dave moved the widget. The held-override rule already makes
+  re-applying safe (a pressed tick survives until the render agrees or
+  180s pass), which is what it was written for. Strips are left alone:
+  their boxes ride the overlay set, whose change forces a rebuild.
 - VERIFIED end-to-end on the live display: pointer walked onto a real
   todo checkbox, ticked optimistically, `/interact` tap delivered,
   the portal completed the task in the todo backend, the next render

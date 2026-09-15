@@ -99,13 +99,28 @@ aws ecs update-service --cluster roku-render --service roku-render-prod \
 About 90 seconds. Every production revision names the exact image it
 ran, so any earlier revision is a valid target.
 
-### Roku channel
+### Roku channel — a code change is not a release
 
-Not in Jenkins. `./package.sh` (test) or `./package.sh prod`, sideload
-the zip on a Roku that holds the signing key, sign with `plugin_package`,
-download the `.pkg`, upload in the Roku dashboard. Signed packages and
-the recovery steps: `signing/CREDENTIALS.md`. Bump `build_version` in
-`manifest` before every upload.
+Pushing channel code to a branch records it; **every household keeps
+running the package last uploaded to the Roku dashboard** until a newer
+one is uploaded. Jenkins does not build the channel. A release is:
+
+1. Bump `build_version` in `manifest` (each upload must be higher than
+   the last; both channels share the number).
+2. `./package.sh` → test zip, `./package.sh prod` → production zip. Same
+   code; only the API, setup host and control endpoint are stamped in.
+3. Sideload the zip on a Roku that holds the signing key, sign it
+   (`plugin_package`), download the `.pkg` — `signing/CREDENTIALS.md`
+   has the commands and the rekey steps for a second box. Signing a
+   TEST package on a Roku that is a production display drops it to the
+   pairing screen until the production build is sideloaded back.
+4. Upload: the test `.pkg` to the **beta channel** (testers get it at
+   once), the production `.pkg` to the **public channel** (Roku reviews,
+   then updates devices itself).
+5. Commit the signed `.pkg` files and note them in `CREDENTIALS.md`.
+
+Ship channel fixes in batches: each upload is a release event. The
+queue of unreleased channel changes is in §5.
 
 ### Manual service deploy (escape hatch)
 
@@ -172,6 +187,19 @@ Quick triage:
 Full design, drill results and numbers: `OPS_RUNBOOK_DETAIL.md` §9.
 
 ---
+
+## 5a. Channel changes waiting for the next release (build 5)
+
+Code is on all three branches; households still run **1.0 build 4**
+(uploaded 2026-09-07). Dave's own Roku runs the newer code sideloaded.
+
+| Commit | Change | Verified |
+|---|---|---|
+| `3069143` (2026-09-15) | Checkboxes re-aimed on every in-place refresh, not only on a rebuild (todo dragged / task added elsewhere / backend confirming a tick left boxes where an older render put them; tvOS `0215c47`) | Dave, on his production display: dragged the widget, ticked a task — boxes followed, tick held |
+
+Planned for the same build (not written yet): poll backoff with jitter
+and a launch delay; the memory guard (skip new scroll strips when the
+Roku reports low memory, report the level).
 
 ## 5. Post-production to-do
 

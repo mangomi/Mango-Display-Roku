@@ -256,10 +256,18 @@ Landed 2026-08-26 (chunk 6 — the Phase B tail):
   ATV447393236); detection exercised, action code-reviewed only.
 
 **Phase B is COMPLETE.** Remaining known gaps are variant coverage
-only: slideshow as a placed widget, brightness<1 photo dim, slide/flip
-photo swaps, and the celebration finale (fires the first time a whole
-list completes on-device). Phase C (hardware, trackpad pointer, soak)
-is next.
+only: slideshow as a placed widget, brightness<1 photo dim, and
+slide/flip photo swaps. Phase C (hardware, trackpad pointer, soak) is
+next.
+
+Verified live 2026-09-15/16: strip checkboxes (a 29-box todo strip
+scrolling inside its 662x280 window, boxes riding the rows, the strip
+following the widget across the page on an in-place refresh once the
+service's strip cache stopped carrying a stale rect); the celebration
+finale (Dave ticked the sole task of a one-task list twice, the finale
+fired both times); two calendar cell strips alongside the todo strip on
+the same page after the portal's overflow scan was fixed to re-run
+once fonts and rows settle.
 
 ## Roku 1.0 build 4 / production catch-up (2026-09-07)
 

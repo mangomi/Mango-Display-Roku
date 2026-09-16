@@ -142,6 +142,12 @@ Alarms (both environments; production ones prefixed `roku-render-prod-`):
 | `owner-table-errors` | DynamoDB errors on the owner table |
 | Budget $250 / $400 | growth notice (email) |
 
+When a display's layout edit does not show on the TV, grep its device id
+for `widget geometry after layout/widget`: one line per edit with the
+widget's model position and its box as the live portal holds them. If
+they match the webapp, the page is right and the fault is downstream
+(service or manifest); if they do not, the portal never applied the edit.
+
 `/healthz` on either hostname returns the answering task's id, usage,
 owned displays, admission state and `portalCpu` — the top ten portals
 by cores, from Chromium's own per-process accounting. The same numbers
@@ -213,7 +219,7 @@ production; none blocked launch.
 | 3 | Persisted display records | service | a backend outage must never block a display the service has not seen since its last restart |
 | 4 | Canary display after every portal/service deploy, with an alarm | infra + portal | a portal change that breaks painted mode should page, not wait for a customer |
 | 5 | Portrait "never signalled ready" | portal/service | reproducible with a portrait layout in designer mode; same error a tester's portrait Roku logged — root cause before selling portrait |
-| 6 | Promote portal PR #74 (no marquee animation in painted mode) | portal | halves idle CPU per portal → doubles displays per task |
+| 6 | ~~Promote portal PR #74~~ merged 2026-09-08, live on test and prod. Next: portal PR #77 (no GIF animation, no photo downloads in painted mode) — team to merge | portal | removes the idle sticker burn and the photo memory balloon at the source |
 | 7 | Shared weather-icon library filmed once | service + channel | removes per-display icon filming and the idle SVG repainting for good |
 | 8 | Confirm the idle-repaint guard's effect on Fargate | test | measured 2× on a Mac; a 20-minute simulator run settles it |
 | 9 | Move the signing password out of git history | repo | Dave deferred; do before the repo is shared more widely |

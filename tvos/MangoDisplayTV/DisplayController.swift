@@ -796,14 +796,21 @@ final class DisplayController: ObservableObject {
             guard !Task.isCancelled, let self else { return }
             // Someone is aiming at this page: a turn would pull the
             // checkbox out from under the pointer (Dave, first hardware
-            // session 2026-09-16 - the page rotated as he ticked). Hold
-            // until the pointer hides (15s after the last press), then
-            // turn. DIVERGES from MainScene, whose pageTimer runs on
-            // regardless of the pointer.
-            while !Task.isCancelled, self.interaction.pointerActive {
-                try? await Task.sleep(for: .seconds(1))
+            // session 2026-09-16 - the page rotated as he ticked). Wait
+            // for the pointer to hide (15s after the last press), then
+            // give the page a FRESH full dwell before turning, so the
+            // page just worked on stays readable for its usual time
+            // rather than leaving the instant the dot goes (Dave's
+            // choice over turning immediately). DIVERGES from MainScene,
+            // whose pageTimer runs on regardless of the pointer.
+            if self.interaction.pointerActive {
+                while !Task.isCancelled, self.interaction.pointerActive {
+                    try? await Task.sleep(for: .seconds(1))
+                }
+                guard !Task.isCancelled else { return }
+                try? await Task.sleep(for: .seconds(dwell))
+                guard !Task.isCancelled else { return }
             }
-            guard !Task.isCancelled else { return }
             // turning mid-load/mid-transition would fight the work in
             // flight; the show() that ends it re-arms rotation anyway
             guard !self.loading, !self.animating else { return }

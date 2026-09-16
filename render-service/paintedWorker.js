@@ -432,34 +432,6 @@ class PaintedWorker extends DisplayWorker {
             const ctl = document.querySelector('[ng-controller="MainCtrl"]');
             const sc = ctl && window.angular ? window.angular.element(ctl).scope() : null;
             const pg = typeof pageIndex === "number" ? pageIndex : sc && typeof sc.quoteIndex === "number" ? sc.quoteIndex : 0;
-            /* calendar cells: what the scroll directive registered vs what
-             * overflows on the page right now (the tvOS display's enlarged
-             * month view emitted no strips, 2026-09-15) */
-            let cal = "";
-            try {
-              const cells = window.mmScrollCells || [];
-              const roots = [...document.querySelectorAll('[id^="calendar_"]')];
-              const tds = roots.flatMap((r) => [...r.querySelectorAll("[mango-mirror-scroll]")]);
-              const scrolling = tds.filter((t) => t.querySelector(".-m-scroll-c")).length;
-              const over = tds.filter((t) => t.firstElementChild && t.firstElementChild.scrollHeight > t.firstElementChild.clientHeight + 2).length;
-              const calCells = cells.filter((c) => c && c.el && roots.some((r) => r.contains(c.el))).length;
-              /* attribute present vs directive actually LINKED (it stamps
-               * __mangoMirrorScrollCleanup on link); FullCalendar owns the
-               * cell DOM, so a re-render can leave attributed cells that
-               * Angular never compiled */
-              const linked = tds.filter((t) => !!t.__mangoMirrorScrollCleanup).length;
-              const heavy = tds
-                .map((t) => ({ t, ev: t.querySelectorAll(".fc-event").length }))
-                .filter((x) => x.ev >= 3)
-                .slice(0, 3)
-                .map((x) => {
-                  const f = x.t.firstElementChild;
-                  return x.ev + "ev td" + Math.round(x.t.getBoundingClientRect().height) + " frame" + (f ? f.clientHeight + "/" + f.scrollHeight : "-") + (x.t.__mangoMirrorScrollCleanup ? " linked" : " unlinked") + (x.t.querySelector(".-m-scroll-c") ? " scrolling" : "");
-                });
-              cal = " | calendars " + roots.length + ": directive cells " + tds.length + " (linked " + linked + "), scrolling " + scrolling + ", overflowing " + over + ", registered for painting " + calCells + " (all registered cells " + cells.length + ") heavy: " + heavy.join("; ");
-            } catch (e) {
-              cal = " | calendars: diagnostic failed: " + (e && e.message);
-            }
             const out = ids.map((id) => {
               const el = document.getElementById(id + "_" + pg);
               const r = el ? el.getBoundingClientRect() : null;
@@ -471,7 +443,6 @@ class PaintedWorker extends DisplayWorker {
               } catch (e) {}
               return id + ": model " + (model ? JSON.stringify(model) : "none") + " dom " + (r ? JSON.stringify({ x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }) : "none") + (el && el.style ? " inline(" + el.style.left + "," + el.style.top + ")" : "");
             });
-            if (cal) out.push(cal);
             return out;
           },
           { ids, pageIndex },

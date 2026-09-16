@@ -35,6 +35,9 @@
         <!-- a check-off worth celebrating: { kind: "burst"|"finale", x, y }
              (burst at the ticked box; finale when its whole list is done) -->
         <field id="celebrate" type="assocarray" />
+        <!-- true while the remote pointer is on screen (it hides 15s after
+             the last press); MainScene holds page rotation while it is -->
+        <field id="pointerActive" type="boolean" value="false" />
     </interface>
     <children>
         <Group id="boxes" />

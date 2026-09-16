@@ -60,6 +60,8 @@ sub init()
     m.interaction.assetBase = m.assetBaseUrl
     m.interaction.serviceBase = m.versionBaseUrl
     m.interaction.observeField("pageTurn", "onPageTurn")
+    m.interaction.observeField("pointerActive", "onPointerActive")
+    m.turnDeferred = false
     m.celebrationLayer = m.top.findNode("celebrationLayer")
     m.interaction.observeField("celebrate", "onCelebrate")
     ' The scene runs at the device's OWN UI resolution (manifest
@@ -136,6 +138,7 @@ sub init()
     m.loadWatchdog = m.top.findNode("loadWatchdog")
     m.loadWatchdog.observeField("fire", "onLoadWatchdog")
     m.forceInPlace = false
+    m.turnDeferred = false
     m.latestImageOnly = false
     m.lastVersionSeconds = 0
     m.latestReason = ""
@@ -487,7 +490,28 @@ end sub
 
 sub onPageTimer()
     if m.pages = invalid or m.pages.Count() < 2 then return
+    ' A page must not turn away while someone is aiming at it: the remote
+    ' pointer on screen means a person is mid-tick (tvOS hardware session,
+    ' 2026-09-16). Hold the turn until the pointer hides (15s after the
+    ' last press), then give the page one more full dwell before turning,
+    ' so the person sees what they just did. Pages the pointer never
+    ' touched turn exactly as before. (tvOS: DisplayController.armRotation,
+    ' 690210d + 170bc4b.)
+    if m.interaction.pointerActive = true
+        if not m.turnDeferred then print "[Mango] page turn held: pointer active"
+        m.turnDeferred = true
+        return
+    end if
     loadPage((m.pageIndex + 1) mod m.pages.Count(), true)
+end sub
+
+' the pointer just hid: if a turn was held for it, restart the dwell
+sub onPointerActive()
+    if m.interaction.pointerActive = true then return
+    if not m.turnDeferred then return
+    m.turnDeferred = false
+    print "[Mango] pointer hidden: re-arming the page dwell"
+    armPageTimer()
 end sub
 
 ' Double-click left/right on the remote. The device already holds every
@@ -792,6 +816,7 @@ end sub
 
 sub armPageTimer()
     m.pageTimer.control = "stop"
+    m.turnDeferred = false
     if m.pages = invalid or m.pages.Count() < 2 then return
     pg = m.pages[m.pageIndex]
     if pg.autoRotate <> true then return

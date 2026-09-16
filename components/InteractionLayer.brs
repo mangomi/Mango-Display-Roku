@@ -228,6 +228,7 @@ sub showPointer()
     end if
     m.active = true
     m.pointer.visible = true
+    m.top.pointerActive = true
     updateHighlight()
     m.hideTimer.control = "start"
     ' warm the portal session while the user is still aiming
@@ -240,6 +241,7 @@ end sub
 sub onIdle()
     m.active = false
     m.pointer.visible = false
+    m.top.pointerActive = false
     m.highlight.visible = false
     m.warmSent = false
     stopHold()

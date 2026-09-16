@@ -292,6 +292,16 @@ the same field `background` always had. If the tvOS slideshow layer only
 applied brightness for backgrounds, apply it for slideshows too; treat a
 missing field as 1. Apple TV Spike page 2 is set to 0.4 — a visible test.
 
+## DONE both sides — page rotation waits for the remote pointer (2026-09-16)
+
+Found on tvOS hardware (tvOS `690210d` + `170bc4b`, `armRotation`), fixed
+on Roku the same day: the rotation timer turned the page while someone
+was aiming at a checkbox. Roku now: `InteractionLayer.pointerActive`
+(true from `showPointer` until the 15s idle hide); `onPageTimer` holds
+the turn while it is true, and when the pointer hides the dwell is
+re-armed for the same page in full before turning. Pages the pointer
+never touched turn exactly as before.
+
 ## DONE both sides — checkboxes re-aimed on in-place refreshes (2026-09-15)
 
 Found by the tvOS session (tvOS `0215c47`), fixed on Roku the same day:

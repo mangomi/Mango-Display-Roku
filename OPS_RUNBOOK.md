@@ -202,6 +202,7 @@ Code is on all three branches; households still run **1.0 build 4**
 | Commit | Change | Verified |
 |---|---|---|
 | `3069143` (2026-09-15) | Checkboxes re-aimed on every in-place refresh, not only on a rebuild (todo dragged / task added elsewhere / backend confirming a tick left boxes where an older render put them; tvOS `0215c47`) | Dave, on his production display: dragged the widget, ticked a task — boxes followed, tick held |
+| (2026-09-16) | Page rotation holds while the remote pointer is on screen, then gives the page one more full dwell before turning (tvOS `690210d`/`170bc4b`) | Compiles and runs on Dave's Roku; behaviour needs a rotating display with the pointer up |
 
 Planned for the same build (not written yet): poll backoff with jitter
 and a launch delay; the memory guard (skip new scroll strips when the

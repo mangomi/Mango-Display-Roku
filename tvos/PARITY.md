@@ -382,5 +382,12 @@ slide/flip photo swaps, the celebration finale.
   changes, both copies must move — or the asset should be shared via a
   build phase.
 - No app icon / top-shelf art (store prep is Phase D).
-- Bundle id `com.mangodisplay.tv`, display name "Mango Display" (Dave,
-  2026-08-26).
+- Bundle id `mdmar.MangoDisplay2026` - the SAME identifier as the iOS
+  app (mangodisplay-ios-2026), because App Store Connect groups the
+  tvOS platform under that app record as a universal purchase and
+  requires one bundle id across platforms (Dave, 2026-09-16; was
+  `com.mangodisplay.tv` from 2026-08-26 to then). Team R85KS2638R,
+  automatic signing. Display name "Mango Display". The Keychain
+  service that stores the device code is still the literal string
+  `com.mangodisplay.tv` - it is a key, not the bundle id, and changing
+  it would mint every existing install a new code.

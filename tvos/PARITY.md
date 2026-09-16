@@ -392,3 +392,33 @@ slide/flip photo swaps, the celebration finale.
   service that stores the device code is still the literal string
   `com.mangodisplay.tv` - it is a key, not the bundle id, and changing
   it would mint every existing install a new code.
+
+## Phase C: hardware (2026-09-16)
+
+Apple TV 4K 2nd gen "Basement TV" (AppleTV11,1, tvOS 26.6), paired over
+Wi-Fi with `xcrun devicectl manage pair`, built with automatic signing
+under the shared identifier, installed and launched with
+`devicectl device process launch --console` so NSLog streams to the
+Mac. Claimed as "Real Apple TV (Basement)" (ATV862575515). Since a
+real Apple TV has no screenshot path, DEBUG builds answer the Darwin
+notification com.mangodisplay.debug.snapshot by writing the window to
+tmp/snapshot.png (3840x2160) for `devicectl device copy from`; the
+`.dump` command logs page/slot state.
+
+Verified on the device by Dave with the Siri Remote and by snapshot:
+pairing and claim, first render, pointer reveal, trackpad glide,
+double-click page turns (slideleft and flip), calendar double-click
+swipe, checkbox ticks with the round trip reconciling, the finale,
+Menu not consumed, calendar and todo scroll strips, page backgrounds,
+the dimmed slideshow, and the two behaviours added on this session:
+rotation waiting for the pointer then giving the page a fresh dwell
+(690210d/170bc4b, Roku 5f0ce93), and reduced-resolution sprite sheets
+stretched to their on-screen frame (335de34 - the one real client bug
+the hardware found).
+
+Not the client, measured here and handed on: the render service's
+strip cache carrying a stale rect (fixed, 88d9a9a), and the portal's
+live-resize pass leaving a weather icon box unscaled and the widget's
+H/L line ~150px below its box until the next portal boot (OPS_RUNBOOK
+§5 row 6b, portal team). Still to do on hardware: a Menu-and-return
+after minutes on the Home screen, and an unattended run for memory.

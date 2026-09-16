@@ -691,8 +691,9 @@ final class DisplayController: ObservableObject {
             // list. Ticks the user pressed survive this through the
             // held-override rule, exactly as on a rebuild; the strips
             // are untouched (their boxes ride the overlay set, whose
-            // change already forces a rebuild). DIVERGES from
-            // MainScene.loadPage's in-place path, which has this bug.
+            // change already forces a rebuild). Found here first; the
+            // Roku's in-place path had the same bug and now does the
+            // same (3069143).
             NSLog("[Mango] in-place refresh of page %d", index)
             interaction.setTargets(pg.targets, regions: pg.regions, pageIndex: index)
             armRotation()
@@ -801,8 +802,8 @@ final class DisplayController: ObservableObject {
             // give the page a FRESH full dwell before turning, so the
             // page just worked on stays readable for its usual time
             // rather than leaving the instant the dot goes (Dave's
-            // choice over turning immediately). DIVERGES from MainScene,
-            // whose pageTimer runs on regardless of the pointer.
+            // choice over turning immediately). MainScene.onPageTimer
+            // does the same since Roku 5f0ce93.
             if self.interaction.pointerActive {
                 while !Task.isCancelled, self.interaction.pointerActive {
                     try? await Task.sleep(for: .seconds(1))

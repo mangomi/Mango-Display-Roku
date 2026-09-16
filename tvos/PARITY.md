@@ -255,10 +255,19 @@ Landed 2026-08-26 (chunk 6 — the Phase B tail):
   Deliberately NOT live-fired on this rig (it orphans the claimed
   ATV447393236); detection exercised, action code-reviewed only.
 
-**Phase B is COMPLETE.** Remaining known gaps are variant coverage
-only: slideshow as a placed widget, brightness<1 photo dim, and
-slide/flip photo swaps. Phase C (hardware, trackpad pointer, soak) is
-next.
+**Phase B is COMPLETE.** No known variant gaps remain. Phase C
+(hardware, trackpad pointer, soak) is next.
+
+Verified live 2026-09-16: `slideleft` page entry (the incoming slot
+moves in from the right as one unit, clock and slideshow together,
+over the static outgoing page); `flip` (outgoing squashes to a sliver
+at centre, incoming expands out of it, page backgrounds riding along);
+a slideshow placed as a widget (cropToFill, animated swaps clipped to
+its rect); page backgrounds on both pages fading every 10s under the
+slots; and `brightness` 0.4 on the placed slideshow dimming the photo
+while the page background stays at 1 (the service only started
+emitting `brightness` for slideshow entries that day, dcd242a; this
+view had read it for both kinds since the port, missing = 1).
 
 Verified live 2026-09-15/16: strip checkboxes (a 29-box todo strip
 scrolling inside its 662x280 window, boxes riding the rows, the strip

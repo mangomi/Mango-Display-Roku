@@ -1,6 +1,6 @@
 # tvOS ↔ Roku parity marker
 
-**Behavior parity as of Roku commit `91828ec`** (branch `live-portal`;
+**Behavior parity as of Roku commit `5f0ce93`** (branch `live-portal`;
 docs-only commits since `cfc6c1a`, which is the Roku client state this
 port was written against).
 
@@ -159,17 +159,18 @@ Landed 2026-08-26 (chunk 4 — the interaction layer):
   early by the imageOnly manifest, celebrate events emitted
   (burst/finale grouping rule ported; the PLAYER is the next chunk).
 - Targets apply at slot finalize AND on every in-place refresh
-  (2026-09-15). DELIBERATE DIVERGENCE: MainScene.loadPage's in-place
-  path (the same-page, overlays-unchanged swap from 980fcc5/5a7ebb8)
-  only exchanges the poster and never re-reads `targets`, so a todo
-  widget dragged across a one-page display, a task added or completed
-  elsewhere, or the backend's own confirmation of a tick leaves the
-  Roku's boxes where an OLDER render put them until something rebuilds
-  the page. Seen here as a column of boxes 400px left of their list
-  after Dave moved the widget. The held-override rule already makes
-  re-applying safe (a pressed tick survives until the render agrees or
-  180s pass), which is what it was written for. Strips are left alone:
-  their boxes ride the overlay set, whose change forces a rebuild.
+  (2026-09-15). Found here first: MainScene.loadPage's in-place path
+  only exchanged the poster and never re-read `targets`, so a todo
+  widget dragged across a one-page display left the boxes where an
+  OLDER render put them (a column 400px left of their list). Fixed on
+  tvOS in 0215c47 and ported to the Roku as 3069143, so both clients
+  agree again. The held-override rule makes re-applying safe; strips
+  are left alone (their boxes ride the overlay set, whose change
+  forces a rebuild).
+- Rotation waits for the pointer (2026-09-16, first hardware session):
+  a dwell that expires while the pointer is up holds until the pointer
+  hides, then gives the page one more full dwell before turning. tvOS
+  690210d/170bc4b, Roku 5f0ce93 - both sides.
 - VERIFIED end-to-end on the live display: pointer walked onto a real
   todo checkbox, ticked optimistically, `/interact` tap delivered,
   the portal completed the task in the todo backend, the next render

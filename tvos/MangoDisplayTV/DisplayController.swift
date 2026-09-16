@@ -158,7 +158,8 @@ final class DisplayController: ObservableObject {
         }
         #if DEBUG
         // headless remote for test harnesses (RemoteInput.swift)
-        DebugRemote.install { [weak self] key, press in self?.handleKey(key, press: press) }
+        DebugRemote.install({ [weak self] key, press in self?.handleKey(key, press: press) },
+                            debug: { [weak self] cmd in self?.debugCommand(cmd) })
         #endif
         // breadcrumbs for the next launch's &lastexit=, and the previous
         // run's answer for this launch's announcement
@@ -793,12 +794,52 @@ final class DisplayController: ObservableObject {
         rotateTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(dwell))
             guard !Task.isCancelled, let self else { return }
+            // Someone is aiming at this page: a turn would pull the
+            // checkbox out from under the pointer (Dave, first hardware
+            // session 2026-09-16 - the page rotated as he ticked). Hold
+            // until the pointer hides (15s after the last press), then
+            // turn. DIVERGES from MainScene, whose pageTimer runs on
+            // regardless of the pointer.
+            while !Task.isCancelled, self.interaction.pointerActive {
+                try? await Task.sleep(for: .seconds(1))
+            }
+            guard !Task.isCancelled else { return }
             // turning mid-load/mid-transition would fight the work in
             // flight; the show() that ends it re-arms rotation anyway
             guard !self.loading, !self.animating else { return }
             self.loadPage(next, animated: true)
         }
     }
+
+    #if DEBUG
+    /// Hardware bring-up eyes (DebugRemote): `dump` logs the state that
+    /// decides what is on screen; `snapshot` renders the app window to
+    /// tmp/snapshot.png so the Mac can copy it off a real Apple TV.
+    private func debugCommand(_ cmd: String) {
+        switch cmd {
+        case "dump":
+            NSLog("[Mango] DEBUG dump: phase=%@ pages=%d pageIndex=%d slots=%@ animating=%d loading=%d pointer=%d busy=%d canvas=%dx%d",
+                  String(describing: phase), pages.count, pageIndex,
+                  slots.map { "p\($0.pageIndex)(under:\($0.under.count) over:\($0.over.count) img:\(Int($0.image.size.width))x\(Int($0.image.size.height)) squash:\($0.flipSquash))" }.joined(separator: ","),
+                  animating ? 1 : 0, loading ? 1 : 0, interaction.pointerActive ? 1 : 0, busy ? 1 : 0,
+                  Int(canvas.width), Int(canvas.height))
+        case "snapshot":
+            guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                  let window = scene.windows.first else { NSLog("[Mango] DEBUG snapshot: no window"); return }
+            let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
+            let image = renderer.image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: true) }
+            let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("snapshot.png")
+            do {
+                try image.pngData()?.write(to: url)
+                NSLog("[Mango] DEBUG snapshot: %dx%d -> %@", Int(image.size.width), Int(image.size.height), url.path)
+            } catch {
+                NSLog("[Mango] DEBUG snapshot failed: %@", error.localizedDescription)
+            }
+        default:
+            break
+        }
+    }
+    #endif
 
     // MARK: - celebrations (MainScene onCelebrate/playFinale/spawnBurst)
 

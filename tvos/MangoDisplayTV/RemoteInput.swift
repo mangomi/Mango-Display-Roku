@@ -80,12 +80,26 @@ final class RemoteInputUIView: UIView {
 #if DEBUG
 enum DebugRemote {
     private static var handler: ((String, Bool) -> Void)?
+    /// com.mangodisplay.debug.<snapshot|dump>: hardware bring-up eyes.
+    /// A real Apple TV has no screenshot path from the Mac (devicectl
+    /// cannot capture tvOS), so `snapshot` renders the app's own window
+    /// to tmp/snapshot.png for `devicectl device copy from`, and `dump`
+    /// logs the controller's page/slot state. Posted with
+    ///   xcrun devicectl device notification post --device <id> --name com.mangodisplay.debug.snapshot
+    private static var debugHandler: ((String) -> Void)?
 
-    static func install(_ h: @escaping (String, Bool) -> Void) {
+    static func install(_ h: @escaping (String, Bool) -> Void, debug: @escaping (String) -> Void) {
         handler = h
+        debugHandler = debug
         let callback: CFNotificationCallback = { _, _, name, _, _ in
             guard let raw = name?.rawValue as String? else { return }
             let parts = raw.split(separator: ".")
+            guard parts.count >= 4 else { return }
+            if parts[2] == "debug" {
+                let cmd = String(parts[3])
+                DispatchQueue.main.async { DebugRemote.debugHandler?(cmd) }
+                return
+            }
             guard parts.count >= 5 else { return }
             let key = String(parts[3])
             let phase = String(parts[4])
@@ -109,6 +123,12 @@ enum DebugRemote {
                     "com.mangodisplay.key.\(key).\(phase)" as CFString,
                     nil, .deliverImmediately)
             }
+        }
+        for cmd in ["snapshot", "dump"] {
+            CFNotificationCenterAddObserver(
+                center, nil, callback,
+                "com.mangodisplay.debug.\(cmd)" as CFString,
+                nil, .deliverImmediately)
         }
     }
 }

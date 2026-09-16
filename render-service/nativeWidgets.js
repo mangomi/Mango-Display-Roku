@@ -3732,6 +3732,12 @@ const slideshowHandler = {
               intervalSeconds: parseInt(iws.imageDelayTime, 10) || 60,
               cropToFill: iws.isCropToFill === true,
               transition: iws.transition || "fade",
+              /* the portal draws the layer with filter: brightness(n); the
+               * device dims the same way (Roku: SlideshowOverlay blend).
+               * Never shipped for image widgets until 2026-09-16 - every
+               * slideshow arrived at full brightness (Apple TV Spike page
+               * 2, set to 0.4). Backgrounds already carried it. */
+              brightness: typeof iws.imageBrightness === "number" ? iws.imageBrightness : 1,
             });
           });
         } catch (e) {}

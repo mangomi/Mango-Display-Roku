@@ -123,6 +123,12 @@ within a minute, a slideshow would never advance. The service extracts
 the geometry, hides the element in the captured image, and the client
 redraws it live.
 
+**`slideshow` and `background` carry `brightness`** (0–1, `1` = unchanged):
+the portal draws the photo layer with `filter: brightness(n)`; the client
+must dim its own layer the same way (Roku: a grey `blendColor` on the
+poster). Backgrounds always carried it; slideshows only from 2026-09-16 —
+treat a missing field as `1`.
+
 **Animated overlays carry two representations:**
 
 - `stripFile`, `cols`, `rows`, `frameCount`, `frameMs` — a pre-built

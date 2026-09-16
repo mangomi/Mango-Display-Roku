@@ -285,6 +285,13 @@ layout.
   loading new scroll strips (show those cells from the page image) and
   report the level in the poll (`mem=` already exists on Roku).
 
+## VERIFY — `brightness` on `slideshow` overlays (service 2026-09-16)
+
+Image widgets / slideshows now carry `brightness` (0–1, 1 = unchanged),
+the same field `background` always had. If the tvOS slideshow layer only
+applied brightness for backgrounds, apply it for slideshows too; treat a
+missing field as 1. Apple TV Spike page 2 is set to 0.4 — a visible test.
+
 ## DONE both sides — checkboxes re-aimed on in-place refreshes (2026-09-15)
 
 Found by the tvOS session (tvOS `0215c47`), fixed on Roku the same day:

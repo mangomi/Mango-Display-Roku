@@ -258,6 +258,14 @@ Landed 2026-08-26 (chunk 6 — the Phase B tail):
 **Phase B is COMPLETE.** No known variant gaps remain. Phase C
 (hardware, trackpad pointer, soak) is next.
 
+Network drop verified 2026-09-16 (Mac Wi-Fi off ~40s): three wait
+failures 5s and 12s apart (the 5/10/20s ladder with jitter), each
+followed by the direct version check; two slideshow photos failed and
+were skipped; pages kept rotating from cache with no spinner and no
+blank; after Wi-Fi returned the next wait simply succeeded (silent by
+design), and the next edit's busy flag plus its render version arrived
+through the long-poll within 0.4s of each other.
+
 Verified live 2026-09-16: `slideleft` page entry (the incoming slot
 moves in from the right as one unit, clock and slideshow together,
 over the static outgoing page); `flip` (outgoing squashes to a sliver

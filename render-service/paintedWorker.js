@@ -443,7 +443,20 @@ class PaintedWorker extends DisplayWorker {
               const scrolling = tds.filter((t) => t.querySelector(".-m-scroll-c")).length;
               const over = tds.filter((t) => t.firstElementChild && t.firstElementChild.scrollHeight > t.firstElementChild.clientHeight + 2).length;
               const calCells = cells.filter((c) => c && c.el && roots.some((r) => r.contains(c.el))).length;
-              cal = " | calendars " + roots.length + ": directive cells " + tds.length + ", scrolling " + scrolling + ", overflowing " + over + ", registered for painting " + calCells + " (all registered cells " + cells.length + ")";
+              /* attribute present vs directive actually LINKED (it stamps
+               * __mangoMirrorScrollCleanup on link); FullCalendar owns the
+               * cell DOM, so a re-render can leave attributed cells that
+               * Angular never compiled */
+              const linked = tds.filter((t) => !!t.__mangoMirrorScrollCleanup).length;
+              const heavy = tds
+                .map((t) => ({ t, ev: t.querySelectorAll(".fc-event").length }))
+                .filter((x) => x.ev >= 3)
+                .slice(0, 3)
+                .map((x) => {
+                  const f = x.t.firstElementChild;
+                  return x.ev + "ev td" + Math.round(x.t.getBoundingClientRect().height) + " frame" + (f ? f.clientHeight + "/" + f.scrollHeight : "-") + (x.t.__mangoMirrorScrollCleanup ? " linked" : " unlinked") + (x.t.querySelector(".-m-scroll-c") ? " scrolling" : "");
+                });
+              cal = " | calendars " + roots.length + ": directive cells " + tds.length + " (linked " + linked + "), scrolling " + scrolling + ", overflowing " + over + ", registered for painting " + calCells + " (all registered cells " + cells.length + ") heavy: " + heavy.join("; ");
             } catch (e) {
               cal = " | calendars: diagnostic failed: " + (e && e.message);
             }

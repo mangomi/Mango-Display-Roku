@@ -79,14 +79,29 @@ struct SpriteSheetView: View {
         // that softened every frame.
         let strideX = (sheet.size.width / CGFloat(max(1, cols))).rounded()
         let strideY = (sheet.size.height / CGFloat(max(1, rows))).rounded()
+        // Big stickers are filmed at a REDUCED texture size so ~27 frames
+        // still fit one sheet (a 600x529 sticker arrives as 355x313
+        // cells): the contract (MANIFEST.md "Animated overlays") is that
+        // frameW/frameH are the on-screen size and the client STRETCHES
+        // the sheet to cols x frameW by rows x frameH - GifOverlay.brs
+        // sizes its strip exactly so. Drawing such a sheet at native
+        // size showed four partial frames in the window (Apple TV,
+        // 2026-09-16). Stretch whenever the packed cell is not the
+        // on-screen size; a 1:1 film keeps the native draw, which is
+        // what avoids the 0.999x resample that softened every frame.
+        let native = abs(strideX - frameW) < 1 && abs(strideY - frameH) < 1
+        let cellW = native ? strideX : CGFloat(frameW)
+        let cellH = native ? strideY : CGFloat(frameH)
+        let sheetW = native ? sheet.size.width : cellW * CGFloat(cols)
+        let sheetH = native ? sheet.size.height : cellH * CGFloat(rows)
         TimelineView(.periodic(from: .now, by: period)) { ctx in
             let idx = frameCount > 1 ? Int(ctx.date.timeIntervalSinceReferenceDate / period) % frameCount : 0
             let col = idx % cols
             let row = idx / cols
             Image(uiImage: sheet)
                 .resizable()
-                .frame(width: sheet.size.width, height: sheet.size.height)
-                .offset(x: -CGFloat(col) * strideX, y: -CGFloat(row) * strideY)
+                .frame(width: sheetW, height: sheetH)
+                .offset(x: -CGFloat(col) * cellW, y: -CGFloat(row) * cellH)
         }
     }
 }

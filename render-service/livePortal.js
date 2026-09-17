@@ -422,6 +422,36 @@ class LivePortal {
                 return v || "";
               }
             };
+            /* A page background with ONE picture is baked into the
+             * screenshot, like a single Unsplash or stock background
+             * (nativeWidgets: "static background stays baked"). A My
+             * Files picture must behave the same, so when the URL is
+             * what bg_img_1/bg_img_2 paints and the rotation holds
+             * fewer than two images, let it load (RK833911286,
+             * 2026-09-17: white page and no overlay either). Two or
+             * more stay blocked: the device draws those. */
+            try {
+              const bgUrls = [];
+              for (const id of ["bg_img_1", "bg_img_2"]) {
+                const el = document.getElementById(id);
+                if (!el) continue;
+                const m = (getComputedStyle(el).backgroundImage || "").match(/url\(["']?([^"')]+)["']?\)/);
+                if (m && m[1] && !bgUrls.includes(abs(m[1]))) bgUrls.push(abs(m[1]));
+              }
+              if (bgUrls.includes(u)) {
+                const ctl = document.querySelector('[ng-controller="MainCtrl"]');
+                const sc = ctl && window.angular ? window.angular.element(ctl).scope() : null;
+                const photos = (sc && Array.isArray(sc.allPhotos) ? sc.allPhotos : [])
+                  .map((p) => p && p.regular && abs(p.regular))
+                  .filter((x) => x && !bgUrls.includes(x));
+                if (bgUrls.length + photos.length < 2) {
+                  seen.add(u);
+                  return true;
+                }
+              }
+            } catch (e) {
+              /* no angular / no data yet: fall through to the calendar test */
+            }
             for (const root of document.querySelectorAll('[id^="calendar_"]')) {
               for (const img of root.querySelectorAll("img")) {
                 if (abs(img.currentSrc || img.getAttribute("src")) === u) {

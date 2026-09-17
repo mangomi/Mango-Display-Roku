@@ -5,8 +5,9 @@ the portal now runs live and tells us when to screenshot. This file still
 describes the fleet, pairing, HTTPS and the device side, which are all
 unchanged, but its rendering sections are superseded.
 
-Read this first, then `INFRA.md`. Everything is committed and pushed to
-`main` at https://github.com/mangomi/Mango-Display-Roku.
+Read this first, then `INFRA.md`. The code lives on the `live-portal`
+branch of https://github.com/mangomi/Mango-Display-Roku (`main` is
+stale) - see `README.md` for the branch model.
 
 ## What this is
 

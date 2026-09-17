@@ -1,97 +1,121 @@
-# Mango Display — Roku (registration spike)
+# Mango Display — TV clients and the render service
 
-Proves the Mango Display registration flow works on Roku. Port of the
-Tizen app's pairing logic (Mango-Display-Tizen `index.html`) to
-BrightScript/SceneGraph. No backend changes required — it talks to the
-same two endpoints the Samsung app uses.
+One repository holds everything that puts a Mango Display layout on a
+TV that cannot run the portal itself:
 
-**Environment: the spike is pinned to the TEST backend**
-(`testapi.mangomirror.com`), so displays must be claimed from
-**testapp.mangodisplay.com** (or a local `ng serve --configuration
-staging`), not the production webapp. The environment lives in one
-place: `m.env` at the top of `components/MainScene.brs`.
+| Folder | What it is |
+|---|---|
+| `components/`, `source/`, `manifest`, `images/`, `fonts/` | The **Roku channel** (BrightScript / SceneGraph). |
+| `tvos/` | The **Apple TV app** (Swift, Xcode project `tvos/MangoDisplayTV.xcodeproj`). |
+| `render-service/` | The **render service** (Node + headless Chromium on ECS) that runs each display's live portal, captures the pages, extracts native widget overlays and answers the devices' long-polls. Shared by both TV clients. |
+| `signing/` | Roku packages that were uploaded to the Roku dashboard, plus signing notes. |
+| `tools/` | Device simulator and other helpers. |
 
-## What it does
+Start with `OPS_RUNBOOK.md` for operating it and `LIVE_PORTAL.md` for
+how the service works. The rest of the docs are listed at the end.
 
-1. Generates a device code `RK` + 9 random digits (digits 1–9, same
-   charset as Tizen's `SM` codes) and persists it in the Roku registry
-   (the equivalent of `localStorage`).
-2. Shows the code full-screen with "Setup at testapp.mangodisplay.com".
-3. Polls `GET https://testapi.mangomirror.com/v1.0.5/mirrors/deviceId/{code}`
-   every 5 seconds.
-4. On an error response (device unknown), self-registers via
-   `POST /mirrors/saveMirror` — payload identical to the Tizen app's,
-   including `deviceType: "Android tablet"`, so the backend treats it
-   exactly like a known device type. Swap in a real Roku device type
-   once the backend supports one.
-5. When the display is claimed in the webapp (`isActive: true`), it
-   shows a full-screen test image plus a small "Linked | major X minor Y"
-   caption — the point where the real app would start showing rendered
-   display pages.
+## Where the code is — read this before you start
 
-Press `*` (options) on the remote to discard the code and start over
-with a fresh one (like clearing localStorage on Tizen). Back exits.
+**`live-portal` is the trunk. Always start from it, for everything.**
+Roku channel, Apple TV app, render service and docs all land on
+`live-portal` first, and it is never rewound. If you are looking for
+"the latest code", it is here.
 
-## Flow mapping (Tizen → Roku)
+The two other long-lived branches are **deploy pointers**, not places
+to work:
 
-| Tizen (web app)                  | Roku                                  |
-|----------------------------------|---------------------------------------|
-| `localStorage` displayCode       | `roRegistrySection("mangodisplay")`   |
-| `fetch()` / `XMLHttpRequest`     | `roUrlTransfer` in a Task node thread |
-| redirect to portal URL           | (later: fetch rendered page images)   |
-| Samsung back-button exit         | Scene default Back handling           |
-| `SM` prefix                      | `RK` prefix                           |
+| Branch | Holds | Who moves it |
+|---|---|---|
+| `live-portal` | the latest of everything | every change, as it is made |
+| `test-release-auto-deploy` | exactly what the **test** render fleet runs | a commit is copied here (cherry-pick) once it is ready to try on test; Jenkins deploys it |
+| `prod-release-auto-deploy` | exactly what the **production** render fleet runs | the same commit is copied here only after Dave approves that specific change; Jenkins deploys it |
 
-## Running it on a Roku
+Rules that keep this true:
 
-You need any Roku device (a TCL/Hisense/onn Roku TV or a Roku stick)
-in developer mode:
+- Nothing reaches a deploy branch that is not already on `live-portal`.
+  Promotion copies individual commits; a whole branch is never pushed
+  over a deploy branch.
+- Before every push to a deploy branch, diff it against the source
+  (`git diff --stat <deploy-branch> <ref> -- render-service fonts
+  buildspec.yml`). Only the approved change may show.
+- Jenkins only reacts to `render-service/`, `fonts/` and
+  `buildspec.yml`. Channel, tvOS and doc commits on the deploy
+  branches deploy nothing.
+- The running production task names its image by commit
+  (`mango-display-render:prod-<sha8>`), so what production runs can
+  always be tied back to a commit on `prod-release-auto-deploy`.
 
-1. On the Roku remote press: **Home ×3, Up ×2, Right, Left, Right,
-   Left, Right**. The Developer Settings screen appears.
-2. Enable the installer, note the device IP, set a dev password,
-   accept, and let it reboot.
-3. Build the zip: `./package.sh`
-4. Open `http://ROKU_TV_IP` in a browser (login `rokudev` + your dev
-   password), upload `MangoDisplayRoku.zip`, click Install. The app
-   launches immediately. (Or use the `curl` command `package.sh` prints.)
+**`main` is stale.** It is still GitHub's default branch but stopped
+receiving commits on 2026-08-15 and is far behind `live-portal`. Do not
+start from it. (Either fast-forward it to `live-portal` or change the
+default branch; until then, ignore it.)
 
-Sideloaded apps need no Roku account, store listing, or certification.
-Only one sideloaded app can exist at a time; re-uploading replaces it
-but keeps the registry (so the device code survives updates).
+### Channel and app code vs. what users run
 
-## TV setup for always-on use
+A branch push never releases a TV client. Users run whatever package
+was last **uploaded**:
 
-Roku offers no API for an app to block the screensaver, so each TV needs
-a one-time setting (same instruction commercial signage apps give):
+- **Roku**: the `.pkg` uploaded to the Roku dashboard (beta channel for
+  testers, public channel for households). The packages that were
+  uploaded live in `signing/`; the release steps and the list of
+  channel changes waiting for the next upload are in `OPS_RUNBOOK.md`
+  §5a. `manifest` carries `build_version`.
+- **Apple TV**: the build uploaded to App Store Connect / TestFlight
+  from `tvos/MangoDisplayTV.xcodeproj`. See `APPLE_TV.md` and
+  `tvos/PARITY.md`.
 
-**Home → Settings → Theme → Screensaver wait time → Disable screensaver**
-(older Roku models: Settings → Screensaver)
+So the latest Roku or tvOS code is on `live-portal`; what is actually
+on TVs is the last uploaded package. Cut a new package from
+`live-portal` when the queued changes should ship.
 
-Future phase: ship a companion Mango Display *screensaver channel* so the
-dashboard appears automatically whenever the TV idles — turns the
-constraint into an auto-start feature.
+### Render service: what runs where
 
-## Debugging
+| Environment | ECS service | Branch | Image tag |
+|---|---|---|---|
+| test | `roku-render` | `test-release-auto-deploy` | `latest` |
+| production | `roku-render-prod` | `prod-release-auto-deploy` | `prod-<sha8>` |
 
-BrightScript console (prints, crashes) streams over telnet:
+Both are on the ECS cluster `roku-render`; details, alarms and the
+rollback command are in `OPS_RUNBOOK.md` and `INFRA.md`.
 
-    telnet ROKU_TV_IP 8085
+## Typical change, end to end
 
-All app logs are prefixed `[Mango]`.
+1. Branch or commit on `live-portal`.
+2. Render-service change: cherry-pick the commit onto
+   `test-release-auto-deploy`, push, let Jenkins deploy, verify on a
+   test display. Then, with approval, cherry-pick the same commit onto
+   `prod-release-auto-deploy` and push.
+3. Roku channel change: it waits on `live-portal` until the next
+   package is cut (`./package.sh` / `./package.sh prod`, sign, upload).
+4. Apple TV change: it waits on `live-portal` until the next Xcode
+   build is uploaded.
 
-## Notes / follow-ups
+## Running the Roku channel on a device
 
-- The claim UI in the webapp only checks the code is non-empty, so the
-  `RK` prefix flows through today. If the backend ever validates
-  prefixes or the webapp adds per-platform setup instructions, add
-  `RK` there.
-- The two clients disagree on the "unknown device" error message
-  (Tizen matches `Mirror not registered`, the webapp matches a longer
-  message), so this app deliberately treats *any* error payload as
-  "not registered yet" instead of string-matching.
-- `deviceMode: "portrait"` is copied from Tizen verbatim. Roku is
-  landscape-only; fix alongside the deviceType cleanup.
-- Next phase: replace the hardcoded test image with per-display
-  server-rendered page images (see the Roku architecture plan —
-  screenshot pipeline + thin client).
+Any Roku in developer mode (Home ×3, Up ×2, Right, Left, Right, Left,
+Right; enable the installer, set a dev password, reboot):
+
+1. `./package.sh` builds `MangoDisplayRoku.zip` (test backend);
+   `./package.sh prod` builds the production variant.
+2. Open `http://ROKU_TV_IP`, log in as `rokudev`, upload the zip,
+   Install. Re-uploading keeps the registry, so the device code
+   survives updates.
+3. Logs stream over telnet: `telnet ROKU_TV_IP 8085`, prefixed
+   `[Mango]`.
+
+TVs used as always-on displays need the screensaver disabled once:
+Home → Settings → Theme → Screensaver wait time → Disable screensaver.
+
+## Documents
+
+| File | Read it for |
+|---|---|
+| `OPS_RUNBOOK.md` | day-to-day operation: what runs where, deploying, Jenkins, rollback, channel release queue (§5a), post-production to-do |
+| `OPS_RUNBOOK_DETAIL.md` | the long version: design, drills, numbers |
+| `INFRA.md` | every AWS/Cloudflare resource, in creation order |
+| `LIVE_PORTAL.md` | how the render service runs the live portal and captures it; open items |
+| `MANIFEST.md` | the manifest the devices consume |
+| `NATIVE_WIDGETS.md` | how overlays (clock, slideshow, gif, strips…) are extracted |
+| `APPLE_TV.md`, `tvos/PARITY.md`, `TVOS_PARITY_QUEUE.md` | the Apple TV port and what it still lacks vs. Roku |
+| `ROKU_EXCLUSIONS.md` | webapp options gated off for painted TVs |
+| `HANDOFF.md` | the original fleet/pairing/HTTPS write-up (rendering sections superseded by `LIVE_PORTAL.md`) |

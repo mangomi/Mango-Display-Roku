@@ -1,0 +1,13 @@
+{
+  "images": [
+    {
+      "filename": "icon1280x768@1x-back.png",
+      "idiom": "tv",
+      "scale": "1x"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}

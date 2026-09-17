@@ -316,6 +316,15 @@ reopen the portal if the geometry changed, and recapture every page.
    **FIXED 2026-08-31**: the slideshow extractor now emits widgets with
    one or more images (the device's slide timer already no-ops below
    two, so a lone photo shows statically).
+   **Same gap for PAGE BACKGROUNDS, fixed 2026-09-17** (prod
+   RK833911286: one My Files photo as the page background rendered
+   white): the background handler hands only 2+ images to the device and
+   leaves one image baked, but `BLOCKED_MEDIA` refused that one image.
+   `livePortal.js` now lets a My Files URL load when it is what
+   `bg_img_1/bg_img_2` paints and the rotation holds fewer than two
+   images. Note a live portal switching from a rotation to one photo
+   keeps the old photo in `bg_img_2` until it reopens, so the device
+   briefly gets a 2-image rotation (pre-existing).
 8. **Verify pixels means the file the MANIFEST names** (`imageFile`,
    .jpg for normal pages, .png only for layered ones). A stale
    `display_pN.png` from an older run sitting next to a fresh

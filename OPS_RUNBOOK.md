@@ -196,10 +196,8 @@ Full design, drill results and numbers: `OPS_RUNBOOK_DETAIL.md` §9.
 
 ## 5a. Channel releases
 
-**1.0 build 5** was signed on 2026-09-17 (`signing/MangoDisplay_1_0_build5_test.pkg`,
-`signing/MangoDisplay_1_0_build5_prod.pkg`) and handed to Dave for the
-dashboard uploads (beta channel: test pkg; public channel: prod pkg).
-Until the upload, households still run **1.0 build 4** (2026-09-07).
+**1.0 build 5** is live on the Roku Channel Store (uploaded by Dave,
+published 2026-09-19; `signing/MangoDisplay_1_0_build5_{test,prod}.pkg`).
 Build 5 carries:
 
 | Commit | Change | Verified |

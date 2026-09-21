@@ -110,7 +110,8 @@ regions[]     areas where a gesture is live (below), or null
 
 A page image may be a JPEG or a transparent PNG. When it is a PNG the
 page is *layered*: something in `overlays` draws **behind** the image
-(currently the rotating page background), so the client must respect
+(the page background, which the device always draws - one photo or
+many; a lone photo arrives as a pair of itself), so the client must respect
 draw order rather than assuming the image is the backdrop.
 
 ### overlays[]

@@ -3685,6 +3685,22 @@ const cellWeatherHandler = {
  * enough for any realistic album (Dave, 2026-08-31). */
 const MAX_ROTATION_IMAGES = 250;
 
+/* A lone photo is sent as a pair of itself, one swap per day. Both
+ * shipped clients ignore a list shorter than two (Roku SlideshowOverlay
+ * and tvOS SlideshowOverlayView start nothing below two images), so a
+ * one-photo overlay drew NOTHING - the widget's or page's photo was
+ * hidden from the render and never redrawn. Found 2026-09-21 when every
+ * page background became device-drawn (Dave's call, one rule for one
+ * photo or many). The pair makes build 5 / the current tvOS build show
+ * the photo today; a client that accepts one image (build 6 queue) can
+ * drop this. */
+function lonePhotoAsPair(o) {
+  if (o && Array.isArray(o.images) && o.images.length === 1) {
+    return { ...o, images: [o.images[0], o.images[0]], intervalSeconds: 86400 };
+  }
+  return o;
+}
+
 const slideshowHandler = {
   type: "slideshow",
 
@@ -3747,9 +3763,10 @@ const slideshowHandler = {
     /* One photo counts. BLOCKED_MEDIA stops the portal loading ANY
      * user photo, so a widget skipped here is not "left baked" - it is
      * left EMPTY on the TV. Single-image widgets used to fall through
-     * that gap (LIVE_PORTAL.md open item 7). The device's slide timer
-     * already no-ops below two images, so a lone photo simply shows. */
-    return raw.filter((o) => o.images && o.images.length >= 1);
+     * that gap (LIVE_PORTAL.md open item 7) - and, until 2026-09-21,
+     * through a second one: the clients start nothing below two images,
+     * so the lone photo has to travel as a pair (lonePhotoAsPair). */
+    return raw.filter((o) => o.images && o.images.length >= 1).map(lonePhotoAsPair);
   },
 
   // photos are FULLY hidden from the render (Dave's call): with crop
@@ -3876,12 +3893,12 @@ const countdownHandler = {
 // (render.js switches to alpha PNG), producing a widgets-only layer. The
 // Roku then stacks: page color -> background photos -> widgets PNG ->
 // overlays. Emitted as its own type so MainScene puts it in the slot's
-// UNDER-container; single-photo backgrounds stay baked.
+// UNDER-container. One photo or many: the device draws them all.
 const backgroundHandler = {
   type: "background",
 
   async extract(frame) {
-    return await frame.evaluate((maxImages) => {
+    const found = await frame.evaluate((maxImages) => {
       let sc = null;
       const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
       for (const r of roots) {
@@ -3918,7 +3935,12 @@ const backgroundHandler = {
       (sc.allPhotos || []).forEach((p) => {
         if (p && p.regular && !images.includes(p.regular)) images.push(p.regular);
       });
-      if (images.length < 2) return []; // static background stays baked
+      /* Every page background is drawn by the device, one photo or many
+       * (Dave, 2026-09-21): the one-photo "stays baked" path depended on
+       * the portal downloading the photo past the media block and
+       * finishing before the shutter, and it failed both ways in
+       * production (RK833911286, RK328853592). One rule, no timing. */
+      if (images.length < 1) return [];
 
       let brightness = 1;
       if (typeof sc.imageBrightness === "number") brightness = sc.imageBrightness;
@@ -3952,6 +3974,7 @@ const backgroundHandler = {
         },
       ];
     }, MAX_ROTATION_IMAGES);
+    return (found || []).map(lonePhotoAsPair);
   },
 
   async hide(frame) {

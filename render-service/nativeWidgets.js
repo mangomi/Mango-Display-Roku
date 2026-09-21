@@ -3747,7 +3747,17 @@ const slideshowHandler = {
               widgetSettingId: d.widgetId,
               page: parseInt(pg, 10),
               rect: { x: r.x, y: r.y, w: r.width, h: r.height },
-              images: (d.images || []).slice(0, maxImages),
+              /* The portal SPLICES a photo out of d.images as it shows it
+               * and keeps it in lastRenderedImage; a one-photo widget
+               * therefore has an EMPTY list once shown (My Files widget on
+               * the Apple TV Spike, 2026-09-21: no overlay at all). Put the
+               * shown photo first, as the background handler does. */
+              images: (() => {
+                const list = (d.images || []).slice();
+                const shown = d.lastRenderedImage;
+                if (typeof shown === "string" && shown && !list.includes(shown)) list.unshift(shown);
+                return list.slice(0, maxImages);
+              })(),
               intervalSeconds: parseInt(iws.imageDelayTime, 10) || 60,
               cropToFill: iws.isCropToFill === true,
               transition: iws.transition || "fade",

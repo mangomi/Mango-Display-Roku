@@ -396,8 +396,8 @@ content wraps from bottom to top?
 Two blocks in `livePortal.js installRoutes`: the host block
 (`BLOCKED_MEDIA`: our image host, visual overlays, backgrounds) and a
 DATA block - any image URL that appears in a slideshow/image widget's
-photo list, or in a rotating background's queue (two or more photos),
-is answered 204. The page pushes those URL sets to Node (init script,
+photo list, or in a page background's queue (one photo or many, since
+2026-09-21), is answered 204. The page pushes those URL sets to Node (init script,
 every 0.5 s until populated, then 2 s) so the route decides
 synchronously; awaiting `page.evaluate` inside a route deadlocked the
 initial `goto`. Calendar photos are exempt in both blocks. Why: a

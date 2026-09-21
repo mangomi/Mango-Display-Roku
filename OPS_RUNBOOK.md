@@ -210,6 +210,7 @@ Waiting for **build 6** (not written yet):
 | Item | What | Notes |
 |---|---|---|
 | Bug: clock/countdown vanish with some Google Fonts | Cabin Sketch downloads fine but the Roku font engine refuses it; a Label whose Font fails to load draws NOTHING, and the channel only falls back to Source Sans Pro when the DOWNLOAD fails, not the load. Dave's RK118583937 lost time and date (2026-09-20); RK332246865 and RK872142153 also use Cabin Sketch. Workaround: pick another font. Fix: load all 60 `fonts/gf` files once on a real Roku via a dev build, list the failures, and make the channel treat those families as unknown (fallback) instead of silent. Dave wants to do this together. | found 2026-09-20 |
+| Accept a ONE-image slideshow/background list | SlideshowOverlay.onConfig returns when images.Count() < 2, so the service (since 2026-09-21) sends a lone photo as a pair of itself with a one-day interval. Build 6 should accept one image and skip the timer; the service can then drop the pair (nativeWidgets lonePhotoAsPair). tvOS has the same guard. | service workaround live first |
 | Poll backoff with jitter + launch delay | planned | |
 | Memory guard | skip new scroll strips when the Roku reports low memory, report the level | planned |
 

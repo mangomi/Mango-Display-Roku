@@ -214,6 +214,20 @@ Waiting for **build 6** (not written yet):
 | Poll backoff with jitter + launch delay | planned | |
 | Memory guard | skip new scroll strips when the Roku reports low memory, report the level | planned |
 
+### Backgrounds: device-drawn, one photo or many (2026-09-21)
+
+Production runs `prod-d4029690` (prod branch d402969 = test 0a61b81;
+approved by Dave 2026-09-21 ~18:50Z after tests on ATV224657483). Every
+page background is a `background` overlay from one image up; the render
+no longer bakes any background; a lone photo (background or image
+widget) is sent as `[url, url]`, `intervalSeconds` 86400, `transition`
+fade, because build 5 / current tvOS start nothing below two images
+(build-6 item: accept one image). The slideshow extractor also carries
+the photo the portal is currently showing (`lastRenderedImage`). Test
+matrix passed on test: multi-photo bg + widget (unchanged), single My
+Files bg, single My Files widget, single URL bg + widget. Roku check:
+Dave's RK118583937 after the deploy.
+
 ## 5. Post-production to-do
 
 Reviewed with Dave 2026-09-07. Revisit after the first weeks of

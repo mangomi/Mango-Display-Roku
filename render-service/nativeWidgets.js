@@ -3696,7 +3696,10 @@ const MAX_ROTATION_IMAGES = 250;
  * drop this. */
 function lonePhotoAsPair(o) {
   if (o && Array.isArray(o.images) && o.images.length === 1) {
-    return { ...o, images: [o.images[0], o.images[0]], intervalSeconds: 86400 };
+    /* fade, whatever the user chose: a crossfade between identical
+     * pixels is invisible, a slide/flip/pop into an identical copy is
+     * not (tvOS session, 2026-09-21) */
+    return { ...o, images: [o.images[0], o.images[0]], intervalSeconds: 86400, transition: "fade" };
   }
   return o;
 }

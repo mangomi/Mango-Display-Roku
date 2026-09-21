@@ -205,9 +205,13 @@ Build 5 carries:
 | `3069143` (2026-09-15) | Checkboxes re-aimed on every in-place refresh, not only on a rebuild (tvOS `0215c47`) | Dave, on his production display |
 | `5f0ce93` (2026-09-16) | Page rotation holds while the remote pointer is on screen, then gives the page one more full dwell before turning (tvOS `690210d`/`170bc4b`) | runs on Dave's Roku; behaviour needs a rotating display with the pointer up |
 
-Waiting for the next build (not written yet): poll backoff with jitter
-and a launch delay; the memory guard (skip new scroll strips when the
-Roku reports low memory, report the level).
+Waiting for **build 6** (not written yet):
+
+| Item | What | Notes |
+|---|---|---|
+| Bug: clock/countdown vanish with some Google Fonts | Cabin Sketch downloads fine but the Roku font engine refuses it; a Label whose Font fails to load draws NOTHING, and the channel only falls back to Source Sans Pro when the DOWNLOAD fails, not the load. Dave's RK118583937 lost time and date (2026-09-20); RK332246865 and RK872142153 also use Cabin Sketch. Workaround: pick another font. Fix: load all 60 `fonts/gf` files once on a real Roku via a dev build, list the failures, and make the channel treat those families as unknown (fallback) instead of silent. Dave wants to do this together. | found 2026-09-20 |
+| Poll backoff with jitter + launch delay | planned | |
+| Memory guard | skip new scroll strips when the Roku reports low memory, report the level | planned |
 
 ## 5. Post-production to-do
 

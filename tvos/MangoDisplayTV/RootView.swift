@@ -9,7 +9,7 @@ struct RootView: View {
             Color.black.ignoresSafeArea()
             switch controller.phase {
             case .pairing:
-                PairingView(code: controller.code)
+                PairingView(code: controller.code, connected: controller.linked)
             case .display:
                 DisplayView()
             }

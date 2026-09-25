@@ -4,6 +4,8 @@ sub init()
     m.env = envConfig()
 
     m.codeLabel = m.top.findNode("codeLabel")
+    m.headingLabel = m.top.findNode("headingLabel")
+    m.instructionsLabel = m.top.findNode("instructionsLabel")
     m.pairingGroup = m.top.findNode("pairingGroup")
     m.pageHost = m.top.findNode("pageHost")
     m.refreshTimer = m.top.findNode("refreshTimer")
@@ -188,7 +190,12 @@ sub startPairing()
         clearOverlays(m.slots[k].under)
     end for
     m.pairingGroup.visible = true
+    ' the same group later becomes the "Connected" screen (onPaired), so a
+    ' re-pair after a reset must put the code screen back
+    m.headingLabel.text = "Display Device Code"
     m.codeLabel.text = m.deviceCode
+    m.instructionsLabel.text = "Setup at " + m.env.setupHost + " using any browser"
+    stopSpinner()
 
     m.task = CreateObject("roSGNode", "PairingTask")
     m.task.apiBase = m.env.apiBase
@@ -201,6 +208,18 @@ sub onPaired()
     r = m.task.result
     if r = invalid then return
     print "[Mango] paired (major "; r.major; " minor "; r.minor; "), waiting for display.json"
+    ' The phone said "success" but this screen still showed the code for
+    ' the 10-15 s the service takes to boot the portal and publish the
+    ' first page - which reads as "nothing happened" (Apple review,
+    ' 2026-09-25). Say so the moment the backend reports the claim; the
+    ' first page replaces this group as before (pairingGroup hidden when
+    ' a page slot is shown) and busy=false stops the spinner.
+    m.headingLabel.text = "Connected"
+    m.codeLabel.text = "Loading your display..."
+    m.instructionsLabel.text = ""
+    ' below the text, not over it (placeSpinner centres on the screen)
+    m.interaction.busyAt = [m.sceneW / 2, m.sceneH * 0.78]
+    startSpinner()
     ' The render service manages a fleet: every control request carries
     ' this display's identity so the service can route it - and, after a
     ' service restart, rebuild the display's worker from the request

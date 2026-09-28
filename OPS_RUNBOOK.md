@@ -229,6 +229,23 @@ matrix passed on test: multi-photo bg + widget (unchanged), single My
 Files bg, single My Files widget, single URL bg + widget. Roku check:
 Dave's RK118583937 after the deploy.
 
+### Portal recycle (2026-09-28)
+
+A live portal older than `PORTAL_MAX_AGE_MS` (default 12 h) is closed and
+reopened by its worker (paintedWorker `recycleIfOld`): one at a time per
+task, `RECYCLE_SPACING_MS` (2 min) apart, never mid-render or mid-gesture,
+only while a TV is watching. Log line `portal is N.Nh old - recycling it`;
+the re-render is reason `portal recycle` (rank 1: no spinner, no page
+steering). Why: the week-old base task's portals had grown to ~380 MB
+each (fresh: ~170 MB), pinning it at 89% memory and refusing new
+displays. Verified on test 2026-09-28 with a 20 min age: two recycles,
+3 s each, invisible on the tvOS simulator, memory flat.
+To shorten it for a test, register a test task-definition revision with
+`PORTAL_MAX_AGE_MS` and revert afterwards (rev 21 -> 22 that day). The
+staging job deploys the family's NEWEST revision, so never leave a
+revision that names an immutable image at the top of `roku-render`
+(rev 20 named `prod-25b07a5c`; deregistered 2026-09-28).
+
 ## 5. Post-production to-do
 
 Reviewed with Dave 2026-09-07. Revisit after the first weeks of

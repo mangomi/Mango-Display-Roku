@@ -62,6 +62,11 @@ const CAPTURE_HOLD_MS = 240000;
  * go with it. It reopens on the next poll. */
 const PORTAL_IDLE_MS = parseInt(process.env.PORTAL_IDLE_MS || "180000", 10);
 const IDLE_SWEEP_MS = 30000;
+/* how long a live portal may run before it is reopened fresh - see
+ * recycleIfOld. Per task: one reopen at a time, spaced. */
+const PORTAL_MAX_AGE_MS = parseInt(process.env.PORTAL_MAX_AGE_MS || String(12 * 3600 * 1000), 10);
+const RECYCLE_SPACING_MS = parseInt(process.env.RECYCLE_SPACING_MS || "120000", 10);
+const recycle = { inFlight: false, lastAt: 0 };
 
 /* one-shot JSON GET; resolves null on transport failure, like fleet's */
 function getJson(url) {
@@ -102,7 +107,45 @@ class PaintedWorker extends DisplayWorker {
      * keeps workers briefly after a display goes quiet - and a portal
      * with nobody watching is a browser tab and a socket for nothing.
      * First device contact opens it. */
-    this.portalIdleSweep = setInterval(() => this.closeIfUnwatched(), IDLE_SWEEP_MS);
+    this.portalIdleSweep = setInterval(() => {
+      this.closeIfUnwatched();
+      this.recycleIfOld();
+    }, IDLE_SWEEP_MS);
+  }
+
+  /* A live portal is a browser tab kept open for as long as a TV is
+   * watching, and a tab grows with age: the portal keeps adding data
+   * (calendar refreshes, weather, photo lists) and Chromium keeps what
+   * the page no longer needs. On 2026-09-28 the week-old base task's
+   * portals averaged ~380 MB against ~170 MB on a day-old task, which
+   * pinned that task at 89% memory and made it refuse every new
+   * display. So a portal that has lived PORTAL_MAX_AGE_MS is closed and
+   * reopened - exactly what a quiet TV or a task restart already does;
+   * the TV keeps its cached pages until the fresh portal renders (Dave,
+   * 2026-09-28: 12 h). One at a time per task, spaced, never while a
+   * render or a gesture is in flight, and only while a TV is watching
+   * (an unwatched portal closes by itself). The re-render it triggers
+   * is background work: no spinner, no page steering. */
+  recycleIfOld() {
+    if (!this.portal || !this.portal.ready || !this.portalOpenedAt) return;
+    if (this.rendering || this.interacting || this.pendingRender) return;
+    if (this.captureQueue.size || this.captureTimer) return;
+    if (Date.now() - this.lastSeen >= PORTAL_IDLE_MS) return; /* closeIfUnwatched's case */
+    const age = Date.now() - this.portalOpenedAt;
+    if (age < PORTAL_MAX_AGE_MS) return;
+    if (recycle.inFlight || Date.now() - recycle.lastAt < RECYCLE_SPACING_MS) return;
+    recycle.inFlight = true;
+    this.log("portal is " + (age / 3600000).toFixed(1) + "h old - recycling it (memory hygiene)");
+    this.recycleReload = true;
+    this.reopenPortal("portal recycle")
+      .catch((e) => {
+        this.recycleReload = false;
+        this.log("portal recycle failed:", e.message);
+      })
+      .finally(() => {
+        recycle.inFlight = false;
+        recycle.lastAt = Date.now();
+      });
   }
 
   /* The app stopped polling: close the portal, which also hands the
@@ -501,7 +544,11 @@ class PaintedWorker extends DisplayWorker {
        * starts on page 0 by itself */
       const launchBoot = this.launchReload === true;
       this.launchReload = false;
-      const reason = launchBoot ? "app launch" : this.sawFirstReload ? "layout change" : "startup";
+      /* a reopen we did for age (recycleIfOld) is background work (rank
+       * 1): no spinner, no page steering, every page recaptured quietly */
+      const recycleBoot = this.recycleReload === true;
+      this.recycleReload = false;
+      const reason = launchBoot ? "app launch" : recycleBoot ? "portal recycle" : this.sawFirstReload ? "layout change" : "startup";
       /* a user-driven reload (relayout, page add/reorder/delete) boots
        * the portal onto a page - usually the first. The TV mirrors it
        * (Dave 2026-08-28: "whatever page the portal lands on needs to
@@ -518,7 +565,7 @@ class PaintedWorker extends DisplayWorker {
       this.priorityPage = landing;
       /* Only a user-driven relayout also steers the TV to that page: on
        * a launch the TV starts on page 0 by itself. */
-      if (this.sawFirstReload && !launchBoot) {
+      if (this.sawFirstReload && !launchBoot && !recycleBoot) {
         this.pendingShowPage = landing;
         this.showPageUntil = Date.now() + 15000;
       }

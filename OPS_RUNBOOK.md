@@ -240,6 +240,9 @@ steering). Why: the week-old base task's portals had grown to ~380 MB
 each (fresh: ~170 MB), pinning it at 89% memory and refusing new
 displays. Verified on test 2026-09-28 with a 20 min age: two recycles,
 3 s each, invisible on the tvOS simulator, memory flat.
+Production: `prod-640d6d54` (prod branch 640d6d5 = test 98f812e), rolled
+2026-09-28 ~20:15Z on Dave's conditional go; both tasks fresh at 13-25%
+memory afterwards. First prod recycles due ~08:15Z 2026-09-29.
 To shorten it for a test, register a test task-definition revision with
 `PORTAL_MAX_AGE_MS` and revert afterwards (rev 21 -> 22 that day). The
 staging job deploys the family's NEWEST revision, so never leave a

@@ -1,6 +1,6 @@
 # tvOS ↔ Roku parity marker
 
-**Behavior parity as of Roku commit `91828ec`** (branch `live-portal`;
+**Behavior parity as of Roku commit `5f0ce93`** (branch `live-portal`;
 docs-only commits since `cfc6c1a`, which is the Roku client state this
 port was written against).
 
@@ -159,17 +159,18 @@ Landed 2026-08-26 (chunk 4 — the interaction layer):
   early by the imageOnly manifest, celebrate events emitted
   (burst/finale grouping rule ported; the PLAYER is the next chunk).
 - Targets apply at slot finalize AND on every in-place refresh
-  (2026-09-15). DELIBERATE DIVERGENCE: MainScene.loadPage's in-place
-  path (the same-page, overlays-unchanged swap from 980fcc5/5a7ebb8)
-  only exchanges the poster and never re-reads `targets`, so a todo
-  widget dragged across a one-page display, a task added or completed
-  elsewhere, or the backend's own confirmation of a tick leaves the
-  Roku's boxes where an OLDER render put them until something rebuilds
-  the page. Seen here as a column of boxes 400px left of their list
-  after Dave moved the widget. The held-override rule already makes
-  re-applying safe (a pressed tick survives until the render agrees or
-  180s pass), which is what it was written for. Strips are left alone:
-  their boxes ride the overlay set, whose change forces a rebuild.
+  (2026-09-15). Found here first: MainScene.loadPage's in-place path
+  only exchanged the poster and never re-read `targets`, so a todo
+  widget dragged across a one-page display left the boxes where an
+  OLDER render put them (a column 400px left of their list). Fixed on
+  tvOS in 0215c47 and ported to the Roku as 3069143, so both clients
+  agree again. The held-override rule makes re-applying safe; strips
+  are left alone (their boxes ride the overlay set, whose change
+  forces a rebuild).
+- Rotation waits for the pointer (2026-09-16, first hardware session):
+  a dwell that expires while the pointer is up holds until the pointer
+  hides, then gives the page one more full dwell before turning. tvOS
+  690210d/170bc4b, Roku 5f0ce93 - both sides.
 - VERIFIED end-to-end on the live display: pointer walked onto a real
   todo checkbox, ticked optimistically, `/interact` tap delivered,
   the portal completed the task in the todo backend, the next render
@@ -391,3 +392,33 @@ slide/flip photo swaps, the celebration finale.
   service that stores the device code is still the literal string
   `com.mangodisplay.tv` - it is a key, not the bundle id, and changing
   it would mint every existing install a new code.
+
+## Phase C: hardware (2026-09-16)
+
+Apple TV 4K 2nd gen "Basement TV" (AppleTV11,1, tvOS 26.6), paired over
+Wi-Fi with `xcrun devicectl manage pair`, built with automatic signing
+under the shared identifier, installed and launched with
+`devicectl device process launch --console` so NSLog streams to the
+Mac. Claimed as "Real Apple TV (Basement)" (ATV862575515). Since a
+real Apple TV has no screenshot path, DEBUG builds answer the Darwin
+notification com.mangodisplay.debug.snapshot by writing the window to
+tmp/snapshot.png (3840x2160) for `devicectl device copy from`; the
+`.dump` command logs page/slot state.
+
+Verified on the device by Dave with the Siri Remote and by snapshot:
+pairing and claim, first render, pointer reveal, trackpad glide,
+double-click page turns (slideleft and flip), calendar double-click
+swipe, checkbox ticks with the round trip reconciling, the finale,
+Menu not consumed, calendar and todo scroll strips, page backgrounds,
+the dimmed slideshow, and the two behaviours added on this session:
+rotation waiting for the pointer then giving the page a fresh dwell
+(690210d/170bc4b, Roku 5f0ce93), and reduced-resolution sprite sheets
+stretched to their on-screen frame (335de34 - the one real client bug
+the hardware found).
+
+Not the client, measured here and handed on: the render service's
+strip cache carrying a stale rect (fixed, 88d9a9a), and the portal's
+live-resize pass leaving a weather icon box unscaled and the widget's
+H/L line ~150px below its box until the next portal boot (OPS_RUNBOOK
+§5 row 6b, portal team). Still to do on hardware: a Menu-and-return
+after minutes on the Home screen, and an unattended run for memory.

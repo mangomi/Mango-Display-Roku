@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- App Store Connect export for the "MangoDisplayTV Prod" archive:
+       xcodebuild archive -project MangoDisplayTV.xcodeproj -scheme "MangoDisplayTV Prod" \
+         -destination "generic/platform=tvOS" -archivePath <path>.xcarchive -allowProvisioningUpdates
+       xcodebuild -exportArchive -archivePath <path>.xcarchive \
+         -exportOptionsPlist ExportOptions-AppStore.plist -exportPath <dir> -allowProvisioningUpdates
+     Automatic signing under team R85KS2638R (Chakra Group Inc); Xcode creates the
+     cloud-managed Apple Distribution certificate and the store profile on demand. -->
+<plist version="1.0"><dict>
+  <key>method</key><string>app-store-connect</string>
+  <key>destination</key><string>export</string>
+  <key>teamID</key><string>R85KS2638R</string>
+  <key>signingStyle</key><string>automatic</string>
+  <key>uploadSymbols</key><true/>
+</dict></plist>

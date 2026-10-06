@@ -14,6 +14,10 @@ final class DisplayController: ObservableObject {
 
     enum Phase { case pairing, display }
     @Published private(set) var phase: Phase = .pairing
+    /// The backend has reported the claim but no page has applied yet:
+    /// the pairing screen says "Connected / Loading your display..."
+    /// instead of still showing the code (Apple review, 2026-09-25).
+    @Published private(set) var linked = false
     @Published private(set) var code = ""
     /// At most two entries; the LAST is the front page. During an animated
     /// page turn the outgoing page stays underneath until the transition
@@ -129,7 +133,6 @@ final class DisplayController: ObservableObject {
     private var fontsReady = true                  // gate: pages apply only with their faces present
     private var fontTask: Task<Void, Never>?
     private var failStreak = 0                     // consecutive failed waits, drives the backoff
-    private var stampedeDelayDone = false          // the post-kill launch delay runs once per app run
     /// After a memory warning: stop loading new scroll strips (those
     /// cells show from the page image instead) - the post-production
     /// memory guard (OPS_RUNBOOK §5), alongside mem=low on the poll.
@@ -197,6 +200,7 @@ final class DisplayController: ObservableObject {
 
     private func run() async {
         guard let paired = await Backend.runPairing(code: code, screenW: screenW, screenH: screenH) else { return }
+        linked = true
         // identity begins with "&": every URL it joins already has a "?"
         identity = "&device=\(code)&major=\(paired.major)&minor=\(paired.minor)&w=\(screenW)&h=\(screenH)"
         // identity travels with every gesture too
@@ -253,6 +257,7 @@ final class DisplayController: ObservableObject {
         identity = ""
         interaction.setTargets(nil, regions: [], pageIndex: 0)
         phase = .pairing
+        linked = false
         runTask = Task { await run() }
     }
 
@@ -286,22 +291,12 @@ final class DisplayController: ObservableObject {
         // lifecycle/MetricKit reporting is parity-phase work.)
         var launchPending = true
         var loggedReply = false
-        // A launch after a crash/kill waits a random 0-30s before its
-        // first poll, so a fleet-wide restart does not stampede the
-        // service (OPS_RUNBOOK §5 post-production list). Clean exits and
-        // first-ever launches poll at once. ONCE per app run: this loop
-        // also restarts after a display reset + re-claim, and a user who
-        // just claimed the code is standing at the TV - making them wait
-        // up to 30s there is not a stampede guard, it is a broken screen
-        // (Dave, 2026-09-09: "why did it not reload?").
-        if !stampedeDelayDone {
-            stampedeDelayDone = true
-            if launchExitQuery.contains("lastexit=killed") {
-                let delay = Double.random(in: 0...30)
-                NSLog("[Mango] launch after kill - first poll in %.0fs", delay)
-                try? await Task.sleep(for: .seconds(delay))
-            }
-        }
+        // No post-kill launch delay: every launch polls at once, like the
+        // Roku channel. The random 0-30s stampede guard this loop used to
+        // impose after a crash/kill (OPS_RUNBOOK §5) cost a reviewer who
+        // force-quit and relaunched up to 30s of code screen, and Dave
+        // removed it from tvOS entirely (2026-09-25); the exit reason still
+        // rides the launch announcement below for the service to log.
         while !Task.isCancelled {
             // the exit reason only matters alongside the launch announcement
             let launch = launchPending ? "&launch=1" + launchExitQuery : ""
@@ -691,8 +686,9 @@ final class DisplayController: ObservableObject {
             // list. Ticks the user pressed survive this through the
             // held-override rule, exactly as on a rebuild; the strips
             // are untouched (their boxes ride the overlay set, whose
-            // change already forces a rebuild). DIVERGES from
-            // MainScene.loadPage's in-place path, which has this bug.
+            // change already forces a rebuild). Found here first; the
+            // Roku's in-place path had the same bug and now does the
+            // same (3069143).
             NSLog("[Mango] in-place refresh of page %d", index)
             interaction.setTargets(pg.targets, regions: pg.regions, pageIndex: index)
             armRotation()
@@ -801,8 +797,8 @@ final class DisplayController: ObservableObject {
             // give the page a FRESH full dwell before turning, so the
             // page just worked on stays readable for its usual time
             // rather than leaving the instant the dot goes (Dave's
-            // choice over turning immediately). DIVERGES from MainScene,
-            // whose pageTimer runs on regardless of the pointer.
+            // choice over turning immediately). MainScene.onPageTimer
+            // does the same since Roku 5f0ce93.
             if self.interaction.pointerActive {
                 while !Task.isCancelled, self.interaction.pointerActive {
                     try? await Task.sleep(for: .seconds(1))

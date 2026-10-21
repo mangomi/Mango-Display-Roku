@@ -61,6 +61,7 @@ per-GB processing.
 | 31 | Task definition | `roku-sim` (0.25 vCPU / 0.5 GB, same image, runs `sim-devices.js`) — the synthetic-device soak | ~$2/mo on Spot while running |
 | 32 | **Production** (2026-09-07): DynamoDB `roku-display-owner-prod`, log group `/ecs/roku-render-prod`, secret `roku-asset-prefix-secret-prod`, roles `roku-render-prod-task` / `roku-render-prod-execution`, target group `roku-control-prod-tg`, task definition `roku-render-prod:1` (image `prod-20260907`), ECR tag `prod-20260907` | — |
 | 33 | Environment tags | `Environment=test` / `Environment=prod` on services, task definitions, target groups and tables | free |
+| 34 | 2026-10-21: `roku-render-prod:12` = rev 11 with memory 16384 (2 vCPU / 16 GB, same image); scaling policy `roku-render-prod-memory-70` DisableScaleIn=true, `roku-render-prod-cpu-65` ScaleInCooldown 1800 s. Rollback: `update-service --task-definition roku-render-prod:11`; re-enable with put-scaling-policy. Test dry run: `roku-render:23` (4 GB) then back to 22. | ~same as 3-4 × 8 GB tasks (~$5/day) |
 
 **Live at** `https://roku-control.mangodisplay.com`
 — the only address compiled into the channel, and it survives an ALB

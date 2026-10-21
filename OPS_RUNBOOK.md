@@ -36,7 +36,7 @@ Golden rules:
 |---|---|---|
 | Control endpoint | `roku-control-test.mangodisplay.com` | `roku-control.mangodisplay.com` |
 | ECS service (cluster `roku-render`) | `roku-render` | `roku-render-prod` |
-| Task definition | `roku-render` (1 vCPU / 2 GB, image `latest`) | `roku-render-prod` (2 vCPU / 8 GB, image `prod-<sha>`) |
+| Task definition | `roku-render` (1 vCPU / 2 GB, image `latest`) | `roku-render-prod` (2 vCPU / **16 GB** since 2026-10-21 rev 12, image `prod-<sha>`) |
 | API / portal / socket | `testapi` / `testportal` / `testsocket` (v1.0.5) | `api` / `portal` / `socket` (v1.0.5) |
 | Assets | `mango-roku-assets/test/` | `mango-roku-assets/prod/` — both via `rokuassets.mangodisplay.com` |
 | Ownership table | `roku-display-owner-test` | `roku-display-owner-prod` |
@@ -178,11 +178,15 @@ Quick triage:
   refusing (memory ≥ 85 %, CPU ≥ 70 % for 30 s, 4+ portals booting, or
   20 claims in the last minute). Clean shutdowns release rows; sudden
   deaths recover within a lease.
-- ECS scales on real memory/CPU. **Capacity is CPU-bound: about 20
-  watched displays per 2 vCPU task** (measured 2026-09-07); 14 tasks ≈
-  250. The idle-repaint guard in the service and portal PR #74 lower
-  idle CPU per portal, which is the lever — re-measure with the
-  simulator after each such change.
+- ECS scales out on memory (target 70 %) and CPU (65 %), and scales
+  **in on CPU only** (30 min cooldown; memory scale-in disabled
+  2026-10-21). Why: a scale-out adds an empty task, nothing rebalances,
+  the average drops and a memory scale-in then killed a LOADED task
+  (28-39 portals) every hour or two - a reopen storm each time.
+- **Capacity is memory-bound: ~200 MB per portal, steady state** (the
+  12 h recycle keeps it there). An 8 GB task held ~35 portals before the
+  85 % refusal line; the 16 GB task (2026-10-21) holds ~70. CPU runs at
+  30-40 % except during reopen storms. 14 tasks ≈ 1,000 displays.
 - Simulator: `SIM_DISPLAYS=1` on a **test** task accepts `SIM*` device
   ids; `render-service/sim-devices.js` polls as N devices (task
   definition `roku-sim` runs it on the cluster). Exit code 2 = a double

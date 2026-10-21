@@ -189,6 +189,14 @@ sub startPairing()
         clearOverlays(m.slots[k].overlays)
         clearOverlays(m.slots[k].under)
     end for
+    ' display-wide layers live in the stage ABOVE the pairing screen and
+    ' were never cleared on a reset: Santa / leaves kept falling over the
+    ' device code until the app was restarted (users, 2026-10-21)
+    applyEffects(invalid)
+    m.interaction.targets = {}
+    m.interaction.regions = []
+    m.interaction.stripOverlays = []
+    applyNight(false)
     m.pairingGroup.visible = true
     ' the same group later becomes the "Connected" screen (onPaired), so a
     ' re-pair after a reset must put the code screen back
@@ -718,7 +726,12 @@ end sub
 sub applyPageTargets(index as integer)
     pg = m.pages[index]
     m.interaction.pageIndex = index
-    if pg.targets <> invalid
+    ' targets is an assocarray field: a night page carries targets: [] (an
+    ' ARRAY), which Roku silently refuses to assign, so onTargets never
+    ' ran and the checkboxes of the daytime page stayed on screen over
+    ' the black night clip (users, 2026-10-21). Anything that is not an
+    ' assocarray clears the boxes.
+    if pg.targets <> invalid and type(pg.targets) = "roAssociativeArray"
         m.interaction.targets = pg.targets
     else
         m.interaction.targets = {}

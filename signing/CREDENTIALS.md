@@ -15,7 +15,7 @@ when convenient, and scrub it from git history when you do.
 | Generated on | Roku Express X026001ENXR9, Roku OS 15.3.4, 2026-09-03 |
 | Signed package (rekey source) | `signing/MangoDisplay_1_0_test.pkg` (channel 1.0 build 1, TEST environment) |
 | Latest signed build | `signing/MangoDisplay_1_0_build5_test.pkg` (1.0 build 5, 2026-09-17: checkbox re-aim on in-place refresh, page rotation holds while the pointer is up) |
-| **Production** signed build | `signing/MangoDisplay_1_0_build5_prod.pkg` (1.0 build 5, 2026-09-17: `./package.sh prod`, API v1.0.5, controlBase roku-control.mangodisplay.com, setup at app.mangodisplay.com). Build 4: `MangoDisplay_1_0_build4_prod.pkg` |
+| **Production** signed build | `signing/MangoDisplay_1_0_build6_prod.pkg` (1.0 build 6, 2026-10-23: connected screen after pairing, night mode clears the day page's checkboxes, display reset clears effects; `./package.sh prod`, API v1.0.5). Build 5: `MangoDisplay_1_0_build5_prod.pkg` (2026-09-17, published 2026-09-19) |
 
 The key itself lives on the Roku that generated it. There is no key file.
 The **password plus any signed .pkg** together recreate it on another box.

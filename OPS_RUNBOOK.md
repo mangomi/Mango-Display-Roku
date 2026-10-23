@@ -200,16 +200,17 @@ Full design, drill results and numbers: `OPS_RUNBOOK_DETAIL.md` §9.
 
 ## 5a. Channel releases
 
-**1.0 build 5** is live on the Roku Channel Store (uploaded by Dave,
-published 2026-09-19; `signing/MangoDisplay_1_0_build5_{test,prod}.pkg`).
-Build 5 carries:
+**1.0 build 6** signed 2026-10-23 on Dave's Express
+(`signing/MangoDisplay_1_0_build6_prod.pkg`), handed to Dave for the
+PUBLIC channel (880780). Contents: `c305f78` Connected / Loading your
+display... after pairing; `42e9379` night mode clears the day page's
+checkboxes + a display reset clears effects. Verified by Dave on his
+Express (sideloaded dev channel) the same day. Beta channel (880499,
+still build 4, expires 2027-01-01) left alone per Dave.
+Store state read from the Roku dashboard 2026-10-21: public = 1.0
+build 5 published 2026-09-19.
 
-| Commit | Change | Verified |
-|---|---|---|
-| `3069143` (2026-09-15) | Checkboxes re-aimed on every in-place refresh, not only on a rebuild (tvOS `0215c47`) | Dave, on his production display |
-| `5f0ce93` (2026-09-16) | Page rotation holds while the remote pointer is on screen, then gives the page one more full dwell before turning (tvOS `690210d`/`170bc4b`) | runs on Dave's Roku; behaviour needs a rotating display with the pointer up |
-
-Waiting for **build 6** (not written yet):
+Still queued for build 7:
 
 | Item | What | Notes |
 |---|---|---|

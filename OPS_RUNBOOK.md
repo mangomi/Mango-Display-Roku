@@ -201,8 +201,8 @@ Full design, drill results and numbers: `OPS_RUNBOOK_DETAIL.md` §9.
 ## 5a. Channel releases
 
 **1.0 build 6** signed 2026-10-23 on Dave's Express
-(`signing/MangoDisplay_1_0_build6_prod.pkg`), handed to Dave for the
-PUBLIC channel (880780). Contents: `c305f78` Connected / Loading your
+(`signing/MangoDisplay_1_0_build6_prod.pkg`), SUBMITTED by Dave to the
+PUBLIC channel (880780) on 2026-10-23 (Roku review pending). Contents: `c305f78` Connected / Loading your
 display... after pairing; `42e9379` night mode clears the day page's
 checkboxes + a display reset clears effects. Verified by Dave on his
 Express (sideloaded dev channel) the same day. Beta channel (880499,

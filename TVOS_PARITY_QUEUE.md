@@ -322,8 +322,32 @@ strips are untouched (a strip change already rebuilds).
   `2937646` predates and covers it.
 - [x] Celebrations burst + finale — tvOS Phase B chunk 5.
 
+## VERIFY — Roku channel 1.0 build 6 fixes (submitted to the store 2026-10-23)
+
+Two user reports fixed in the Roku channel (`42e9379`); check the tvOS
+app does the right thing in the same situations:
+
+- [ ] **Night page must clear the checkboxes.** A night manifest page
+  carries `targets: []` and `regions: []`. On Roku the InteractionLayer's
+  `targets` field is an assocarray, the empty ARRAY was refused silently,
+  and the daytime page's checkboxes stayed drawn over the black clip.
+  On tvOS: with a to-do widget on the page, turn night mode on - no
+  checkbox may remain visible; turn it off - they come back.
+- [ ] **A display reset must clear display-wide layers.** `paired: false`
+  sends the TV back to the code screen; on Roku the effect layer (Santa,
+  leaves, snow...), the checkboxes/regions/scroll strips and night mode
+  were never cleared and kept drawing over the device code until an app
+  restart. On tvOS: enable a visual overlay, reset the display from the
+  webapp - the code screen must be clean.
+- [x] "Connected. Loading your display..." after pairing - already on the
+  tvOS branch (2026-09-25).
+
 ## NO client impact (noted so nobody re-checks)
 
+- Night-mode capture fix (`974fa5f`, prod 2026-10-23): the service waits
+  for the portal's night cover to agree with the setting before deciding
+  day or night; it used to publish a black day page right after night
+  mode was turned off. Manifest contract unchanged.
 - Version counter now continues across deploys (`display.json` carries
   `version`; a restarting task seeds from it) and a draining task stops
   publishing. Still a small integer; "differs from what I hold" semantics

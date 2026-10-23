@@ -570,7 +570,10 @@ async function capturePageInner(page, opts) {
 
   /* Night mode: the portal covers everything with a black video and a
    * badge; nothing underneath may be extracted or drawn (see night.js) */
-  if (portalFrame && (await night.isNightMode(portalFrame))) {
+  /* settle first: the cover lags the setting by a beat either way, and a
+   * capture inside that beat bakes the black cover into a day page (or
+   * misses it on a night page) - see night.settleNightCover */
+  if (portalFrame && (await night.settleNightCover(portalFrame, 6000))) {
     const pageMeta = await extractPageMeta(page);
     const n = await night.captureNight(page, portalFrame, {
       out,

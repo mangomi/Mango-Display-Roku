@@ -35,6 +35,44 @@ const BADGE_OPACITY = 0.85;
 /* portal randomOffset(): x in [-5, 15), y in [-3, 9) */
 const PAD = { left: 5, top: 3, right: 15, bottom: 9 };
 
+/* The portal's night cover (<div class="nightmode-container">, an ng-if
+ * on overlaySetting.nightMode) leaves the DOM a beat AFTER the setting
+ * flips - the overlay controller re-applies settings behind a $timeout
+ * and ngAnimate fades the badge - so a capture fired by the "overlay
+ * settings" change read nightMode === false while the black cover was
+ * still painted, and published a black day page with the badge baked
+ * in (Dave's display, 2026-10-23: v1025 at 14:36:11Z; nothing
+ * recaptured until the next scheduled render). Wait until the cover's
+ * presence agrees with the setting, bounded so a stuck portal cannot
+ * stall captures. Returns the settled night state. */
+async function settleNightCover(frame, maxMs) {
+  if (!frame) return false;
+  const deadline = Date.now() + (maxMs || 6000);
+  let last = null;
+  for (;;) {
+    let s = null;
+    try {
+      s = await frame.evaluate(() => {
+        const ctl = document.querySelector('[ng-controller="MainCtrl"]');
+        const sc = ctl && window.angular ? window.angular.element(ctl).scope() : null;
+        const setting = !!(sc && sc.overlaySetting && sc.overlaySetting.nightMode === true);
+        const cover = document.querySelector(".nightmode-container");
+        const visible = !!cover && getComputedStyle(cover).display !== "none" && parseFloat(getComputedStyle(cover).opacity) > 0.05;
+        return { setting, visible };
+      });
+    } catch (e) {
+      return false;
+    }
+    last = s;
+    if (!s || s.setting === s.visible) return !!(s && s.setting);
+    if (Date.now() >= deadline) {
+      console.log("night: cover " + (s.visible ? "still shown" : "not yet shown") + " after " + (maxMs || 6000) + "ms with nightMode=" + s.setting + " - capturing anyway");
+      return s.setting;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
 async function isNightMode(frame) {
   if (!frame) return false;
   try {
@@ -185,4 +223,4 @@ async function captureNight(page, frame, opts) {
   return { outPath, overlays: badge ? [badge] : [] };
 }
 
-module.exports = { isNightMode, captureNight, tracks, offsets };
+module.exports = { isNightMode, settleNightCover, captureNight, tracks, offsets };

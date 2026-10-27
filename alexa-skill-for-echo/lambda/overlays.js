@@ -11,6 +11,9 @@
 //     canvas    { width, height } of the manifest
 //     assetBase URL prefix for manifest file names
 //     idPrefix  unique per page+overlay ("p0o3"), for component ids
+//     pageIndex, refreshArgs, major, minor, overrides - for overlays that
+//               carry their own touch targets (scroll strips' checkboxes);
+//               same meaning as in touch.js
 // Unknown types draw nothing (a newer service may send types this client
 // does not know yet - a missing widget beats a broken screen).
 

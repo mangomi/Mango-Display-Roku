@@ -212,7 +212,10 @@ function displayScreen(vp, display, paired, overrides, busy, current) {
   let pending = overrides;
   const items = [pagesMod.swipeCatcher(vp)];
   pages.forEach((page, i) => {
-    const ov = overlays.pageOverlays(page, { place, canvas, assetBase, vp }, i);
+    const ov = overlays.pageOverlays(page, {
+      place, canvas, assetBase, vp, pageIndex: i, refreshArgs, major: paired.major, minor: paired.minor,
+      states: touch.applyOverrides(page, pending).states, overrides: pending,
+    }, i);
     const held = touch.applyOverrides(page, pending);
     const layerItems = [...ov.under];
     if (page && page.image) layerItems.push(...pageImages(view, i));

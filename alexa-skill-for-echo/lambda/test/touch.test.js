@@ -48,26 +48,31 @@ const ctx = (gestures, states = [false, true]) => ({
 
 test("checkboxes: drawn with the manifest's sprites, press ticks then tells the portal", () => {
   const comps = touch.touchComponents(ctx({ calendarScroll: false }));
-  assert.strictEqual(comps.length, 2);
-  const box = comps[0];
-  assert.strictEqual(box.type, "TouchWrapper");
-  assert.deepStrictEqual(box.bind.find((b) => b.name === "mmTicked").value, false);
-  assert.strictEqual(box.item.items[0].source, "${mmTicked ? mmChecked : mmEmpty}");
-  const [tick, hold, send, fast] = box.onPress;
-  assert.strictEqual(tick.property, "mmTicked");
-  assert.strictEqual(tick.value, "${!mmTicked}");
-  assert.match(hold.value, /\(mmTicked \? 1 : 0\)/);
+  assert.strictEqual(comps.length, 1); // the page's box layer
+  const layer = comps[0];
+  assert.deepStrictEqual(layer.bind.map((b) => [b.name, b.value]), [["mmBoxE", "https://a/box_empty.png"], ["mmBoxC", "https://a/box_checked.png"]]);
+  const box = layer.items[0];
+  assert.strictEqual(box.type, "MmBox");
+  assert.deepStrictEqual([box.id, box.mmT0, box.mmTid, box.mmPg, box.mmCx, box.mmCy], ["mmBox0_501", false, "501", "0", "115", "215"]);
+  assert.ok(JSON.stringify(box).length < 400, "a box instance stays small");
+  // the behaviour lives once, in the layout
+  const tw = touch.layouts(["refresh", "3", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}", "${mmLayout}", "${mmPageUrls}", "${mmCur}"], "1", "822").MmBox.items[0];
+  assert.strictEqual(tw.type, "TouchWrapper");
+  assert.deepStrictEqual(tw.bind, [{ name: "mmTicked", value: "${mmT0}" }]);
+  assert.strictEqual(tw.item.items[0].source, "${mmTicked ? mmBoxC : mmBoxE}");
+  const [tick, hold, send, fast, dwell] = tw.onPress;
+  assert.deepStrictEqual([tick.property, tick.value], ["mmTicked", "${!mmTicked}"]);
   assert.strictEqual(hold.componentId, touch.ROOT_ID);
-  assert.match(hold.value, /'501:'/);
+  assert.match(hold.value, /mmTid \+ ':' \+ \(mmTicked \? 1 : 0\)/);
   // ver + the presses ride along so the reply can be the result screen
-  assert.deepStrictEqual(send.arguments.slice(0, 10), ["touch", "tap", "0", "115", "215", "501", "1", "822", "3", "${overrides}"]);
+  assert.deepStrictEqual(send.arguments.slice(0, 10), ["touch", "tap", "${mmPg}", "${mmCx}", "${mmCy}", "${mmTid}", "1", "822", "3", "${overrides}"]);
   assert.strictEqual(fast.sequencer, "fastcheck");
+  assert.strictEqual(dwell.type, "MmRestartDwell");
 });
-
 test("calendar swipes only when the user allows calendar scrolling, and under the boxes", () => {
-  assert.strictEqual(touch.touchComponents(ctx({ calendarScroll: false })).length, 2);
+  assert.strictEqual(touch.touchComponents(ctx({ calendarScroll: false })).length, 1);
   const comps = touch.touchComponents(ctx({ calendarScroll: true }));
-  assert.strictEqual(comps.length, 3);
+  assert.strictEqual(comps.length, 2);
   const cal = comps[0]; // first = drawn underneath
   // onDown/onUp run in fast mode where SendEvent is ignored: they may only
   // record; the send happens in onPress (normal mode)
@@ -89,11 +94,15 @@ test("display screen carries the touch layer and the held presses", () => {
   assert.strictEqual(root.id, touch.ROOT_ID);
   assert.match(root.bind[0].value, /^501:1:/);
   const layer = root.items.find((i) => i.id === "mmP0").items;
-  assert.strictEqual(layer.filter((i) => i.type === "TouchWrapper").length, 3);
+  assert.strictEqual(layer.filter((i) => i.type === "TouchWrapper").length, 1); // the calendar
+  const boxes = layer.find((i) => i.bind && i.bind[0].name === "mmBoxE").items;
+  assert.strictEqual(boxes.length, 2);
+  assert.ok(d.document.layouts.MmBox, "the checkbox is defined once on the screen");
   assert.deepStrictEqual(root.onMount[0].commands[1].arguments,
     ["refresh", "${mmVer}", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}", "${mmLayout}", "${mmPageUrls}", "${mmCur}"]);
   assert.strictEqual(root.bind.find((b) => b.name === "mmVer").value, "3");
-  const tap = layer.find((i) => i.id === "mmBox0_501").onPress.find((c) => c.type === "SendEvent");
+  assert.strictEqual(boxes.find((b) => b.id === "mmBox0_501").mmT0, true); // the held press
+  const tap = d.document.layouts.MmBox.items[0].onPress.find((c) => c.type === "SendEvent");
   assert.deepStrictEqual(tap.arguments.slice(8), ["${mmVer}", "${overrides}", "${mmLayout}", "${mmPageUrls}", "${mmCur}"]);
 });
 

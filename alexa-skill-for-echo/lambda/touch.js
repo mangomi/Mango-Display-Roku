@@ -99,46 +99,30 @@ function touchComponents(ctx) {
   const t = page && page.targets;
   const sprites = t && t.sprites;
   if (t && Array.isArray(t.items) && sprites && sprites.empty && sprites.checked) {
+    // each box is an instance of the MmBox layout (layouts() below): only
+    // its place and identity travel per box (~250 bytes instead of ~1.3 KB
+    // - 16 boxes alone were 20 KB of a 70 KB screen); the sprite URLs are
+    // bound once on this page's box layer
+    const boxes = [];
     t.items.forEach((it, i) => {
       if (!it.rect) return;
       const id = targetId(it);
       const box = place.rect(it.rect);
       const pad = place.len(PAD);
-      const cx = Math.round(it.rect.x + it.rect.w / 2);
-      const cy = Math.round(it.rect.y + it.rect.h / 2);
-      out.push({
-        type: "TouchWrapper",
+      boxes.push({
+        type: "MmBox",
         ...(id ? { id: boxId(pageIndex, id) } : {}),
         position: "absolute",
-        left: box.x - pad, top: box.y - pad, width: box.w + pad * 2, height: box.h + pad * 2,
-        bind: [
-          // NOT "checked": that is a built-in state property of every APL
-          // component, and SetValue changed it instead of this variable -
-          // the box never flipped on the Echo (2026-10-27)
-          { name: "mmTicked", value: states[i] === true },
-          { name: "mmEmpty", value: assetBase + sprites.empty },
-          { name: "mmChecked", value: assetBase + sprites.checked },
-        ],
-        item: {
-          type: "Container", width: "100%", height: "100%",
-          items: [{
-            type: "Image", position: "absolute", left: pad, top: pad, width: box.w, height: box.h,
-            source: "${mmTicked ? mmChecked : mmEmpty}", scale: "fill",
-          }],
-        },
-        onPress: [
-          // tick now, ask later
-          { type: "SetValue", property: "mmTicked", value: "${!mmTicked}" },
-          ...(id ? [{
-            type: "SetValue", componentId: ROOT_ID, property: "overrides",
-            value: "${overrides + '" + id + ":' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",
-          }] : []),
-          { type: "SendEvent", arguments: ["touch", "tap", String(pageIndex), String(cx), String(cy), id, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8]] },
-          fastCheck(refreshArgs),
-          // a page being worked on is not turned away (pages.js)
-          { type: "MmRestartDwell" },
-        ],
+        left: r2(box.x - pad), top: r2(box.y - pad), width: r2(box.w + pad * 2), height: r2(box.h + pad * 2),
+        mmT0: states[i] === true, mmTid: id, mmPg: String(pageIndex),
+        mmCx: String(Math.round(it.rect.x + it.rect.w / 2)), mmCy: String(Math.round(it.rect.y + it.rect.h / 2)),
+        mmW: r2(box.w), mmH: r2(box.h), mmPad: r2(pad),
       });
+    });
+    out.push({
+      type: "Container", position: "absolute", left: 0, top: 0, width: "100%", height: "100%",
+      bind: [{ name: "mmBoxE", value: assetBase + sprites.empty }, { name: "mmBoxC", value: assetBase + sprites.checked }],
+      items: boxes,
     });
   }
   const regions = Array.isArray(page && page.regions) ? page.regions : [];
@@ -208,4 +192,47 @@ function touchComponents(ctx) {
   return under.concat(out);
 }
 
-module.exports = { ROOT_ID, touchComponents, applyOverrides, parseOverrides, targetId, boxId };
+const r2 = (v) => Math.round(v * 100) / 100;
+
+/** The checkbox, defined once per screen (APL layouts): a press ticks the
+ * box at once, records the press for the root's held `overrides`, tells
+ * the portal, checks for the result quickly and restarts the page's dwell.
+ * Instances carry mmT0 (ticked at build), mmTid (task id), mmPg/mmCx/mmCy
+ * (page, canvas centre for /interact) and mmW/mmH/mmPad (the drawn box).
+ * The sprite URLs come from mmBoxE/mmBoxC bound on the page's box layer. */
+function layouts(refreshArgs, major, minor) {
+  return {
+    MmBox: {
+      parameters: ["mmT0", "mmTid", "mmPg", "mmCx", "mmCy", "mmW", "mmH", "mmPad"],
+      items: [{
+        type: "TouchWrapper",
+        // NOT "checked": that is a built-in state property of every APL
+        // component, and SetValue changed it instead of this variable -
+        // the box never flipped on the Echo (2026-10-27)
+        bind: [{ name: "mmTicked", value: "${mmT0}" }],
+        item: {
+          type: "Container", width: "100%", height: "100%",
+          items: [{
+            type: "Image", position: "absolute", left: "${mmPad}", top: "${mmPad}", width: "${mmW}", height: "${mmH}",
+            source: "${mmTicked ? mmBoxC : mmBoxE}", scale: "fill",
+          }],
+        },
+        onPress: [
+          // tick now, ask later
+          { type: "SetValue", property: "mmTicked", value: "${!mmTicked}" },
+          {
+            type: "SetValue", componentId: ROOT_ID, property: "overrides", when: "${mmTid != ''}",
+            value: "${overrides + mmTid + ':' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",
+          },
+          { type: "SendEvent", arguments: ["touch", "tap", "${mmPg}", "${mmCx}", "${mmCy}", "${mmTid}", major, minor,
+            refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8]] },
+          fastCheck(refreshArgs),
+          // a page being worked on is not turned away (pages.js)
+          { type: "MmRestartDwell" },
+        ],
+      }],
+    },
+  };
+}
+
+module.exports = { ROOT_ID, touchComponents, applyOverrides, parseOverrides, targetId, boxId, layouts };

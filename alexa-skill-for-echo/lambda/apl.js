@@ -115,6 +115,7 @@ function doc(items, tickMs, args, overrides = "", busy = false, opts = {}) {
     },
   };
   if (opts.commands) d.commands = opts.commands;
+  if (opts.layouts) d.layouts = opts.layouts;
   return d;
 }
 
@@ -241,6 +242,7 @@ function displayScreen(vp, display, paired, overrides, busy, current) {
       { name: "mmPageUrls", value: view.urls.join("|") },
     ].concat(pagesMod.rootBinds(pages, cur, manifest.gestures)),
     commands: pagesMod.commandDefinitions(vp.w, vp.h),
+    layouts: touch.layouts(refreshArgs, paired.major, paired.minor),
     onMount: [{ type: "MmRotate" }],
   }));
 }

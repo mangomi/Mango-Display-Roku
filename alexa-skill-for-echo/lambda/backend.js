@@ -27,13 +27,13 @@ const HEADERS = {
 // Alexa expects an answer within 8s; leave room for the rest of the request
 const TIMEOUT_MS = 6000;
 
-async function request(url, postJson) {
+async function request(url, postJson, timeoutMs = TIMEOUT_MS, quietTimeout = false) {
   try {
     const r = await fetch(url, {
       method: postJson ? "POST" : "GET",
       headers: postJson ? { ...HEADERS, "Content-Type": "application/json" } : HEADERS,
       body: postJson ? JSON.stringify(postJson) : undefined,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
       cache: "no-store",
     });
     const text = await r.text();
@@ -41,7 +41,7 @@ async function request(url, postJson) {
     try { json = JSON.parse(text); } catch (e) {}
     return { status: r.status, json, headers: r.headers };
   } catch (e) {
-    console.log("[Mango] request failed:", url, e.message);
+    if (!(quietTimeout && e.name === "TimeoutError")) console.log("[Mango] request failed:", url, e.message);
     return null;
   }
 }
@@ -124,10 +124,37 @@ async function fetchDisplay(d, held, launch) {
  * parameters. A swipe's reply waits for the portal's redraw (up to 15s
  * service-side); the Lambda gives up first and the screen's fast checks
  * still pick the result up. */
-async function interact(d, g) {
+async function interact(d, g, timeoutMs) {
   return request(env.controlBase + "/interact?type=" + encodeURIComponent(g.type) +
     "&page=" + encodeURIComponent(g.page || "0") + "&x=" + encodeURIComponent(g.x) + "&y=" + encodeURIComponent(g.y) +
-    "&id=" + encodeURIComponent(g.id || "") + identity(d));
+    "&id=" + encodeURIComponent(g.id || "") + identity(d), undefined, timeoutMs, true);
+}
+
+/** The Roku's long-poll, for as long as one Alexa reply can wait: hold
+ * /wait?since=`held` until the service publishes a new version or
+ * `deadline` (epoch ms) passes. The service also answers when its busy
+ * flag flips (a swipe sets it); then re-arm with the new busy, as the
+ * Roku's VersionTask does. Returns a ready display (as fetchDisplay) or
+ * null when nothing new arrived in time. */
+async function waitForNewVersion(d, held, deadline) {
+  let busy = false;
+  while (Date.now() < deadline - 200) {
+    const url = env.controlBase + "/wait?since=" + held + "&busy=" + (busy ? 1 : 0) + "&mem=normal" + identity(d);
+    const r = await request(url, undefined, deadline - Date.now(), true);
+    if (!r || r.status !== 200 || !r.json) return null;
+    if (String(r.json.version) !== String(held)) {
+      const { version, assetBase } = r.json;
+      let manifest = r.json.manifest;
+      if (!manifest && assetBase) {
+        const m = await request(assetBase + "display.json?t=" + version, undefined, Math.max(500, deadline - Date.now()));
+        if (m && m.status === 200) manifest = m.json;
+      }
+      if (!manifest || manifest.paired === false) return null;
+      return { state: "ready", version, assetBase, manifest, busy: r.json.busy === true };
+    }
+    busy = r.json.busy === true;
+  }
+  return null;
 }
 
 /** Cheap check for "anything new?" - /version answers immediately with
@@ -138,4 +165,4 @@ async function currentVersion(d) {
   return r && r.status === 200 && r.json ? { version: r.json.version, busy: r.json.busy === true } : null;
 }
 
-module.exports = { pairingStep, fetchDisplay, currentVersion, interact };
+module.exports = { pairingStep, fetchDisplay, currentVersion, interact, waitForNewVersion };

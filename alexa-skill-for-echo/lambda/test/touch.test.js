@@ -59,7 +59,8 @@ test("checkboxes: drawn with the manifest's sprites, press ticks then tells the 
   assert.match(hold.value, /\(mmTicked \? 1 : 0\)/);
   assert.strictEqual(hold.componentId, touch.ROOT_ID);
   assert.match(hold.value, /'501:'/);
-  assert.deepStrictEqual(send.arguments, ["touch", "tap", "0", "115", "215", "501", "1", "822"]);
+  // ver + the presses ride along so the reply can be the result screen
+  assert.deepStrictEqual(send.arguments, ["touch", "tap", "0", "115", "215", "501", "1", "822", "3", "${overrides}"]);
   assert.strictEqual(fast.sequencer, "fastcheck");
 });
 

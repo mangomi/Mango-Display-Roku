@@ -123,7 +123,7 @@ function touchComponents(ctx) {
             type: "SetValue", componentId: ROOT_ID, property: "overrides",
             value: "${overrides + '" + id + ":' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",
           }] : []),
-          { type: "SendEvent", arguments: ["touch", "tap", String(pageIndex), String(cx), String(cy), id, major, minor] },
+          { type: "SendEvent", arguments: ["touch", "tap", String(pageIndex), String(cx), String(cy), id, major, minor, refreshArgs[1], "${overrides}"] },
           fastCheck(refreshArgs),
         ],
       });
@@ -146,7 +146,7 @@ function touchComponents(ctx) {
       const send = (kind) => [
         setSwiping(regId),
         { type: "Sequential", sequencer: "busyhide", commands: [{ type: "Idle", delay: BUSY_MAX_MS }, setSwiping("")] },
-        { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(cx), String(cy), regId, major, minor] },
+        { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(cx), String(cy), regId, major, minor, refreshArgs[1], "${overrides}"] },
         fastCheck(refreshArgs),
       ];
       // onDown/onUp run in FAST mode, where SendEvent is ignored - a first

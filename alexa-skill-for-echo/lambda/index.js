@@ -13,9 +13,10 @@
 //   ["refresh", ver, maj, min, overrides, busyShown]
 //                              -> every 10s on the display (1.5s after a
 //                                 touch): version moved? busy changed?
-//   ["touch", kind, page, x, y, id, maj, min]
+//   ["touch", kind, page, x, y, id, maj, min, ver, overrides]
 //                              -> a checkbox press or calendar swipe
-//                                 (touch.js): forward to /interact
+//                                 (touch.js): forward to /interact and
+//                                 answer with the result screen
 //   ["rotate", ...one of the above] -> the Echo Show 15 was turned: redraw
 //
 // The handler keeps no state between calls. Alexa closes the session ~30s
@@ -118,16 +119,34 @@ async function onUserEvent(envelope) {
   return respond();
 }
 
-/** A press or swipe: the screen already drew its own feedback, so only
- * the portal needs telling. The result arrives as a new version, which
- * the screen's fast checks pick up. */
+// How long one touch reply may wait for its result. Alexa allows ~8s per
+// reply and the Lambda's own limit is 8s; the rest is margin.
+const TOUCH_BUDGET_MS = 6500;
+
+/** A press or swipe. The screen already reacted (tick / spinner); tell the
+ * portal, then wait - like the Roku's held /wait - for the render that
+ * shows the result, and answer with it in this same reply, so it appears
+ * the moment it is published. A slower render is still caught by the
+ * screen's 1.5s fast checks. */
 async function onTouch(e, args) {
-  const [, kind, page, x, y, id, major, minor] = args;
+  const started = Date.now();
+  const deadline = started + TOUCH_BUDGET_MS;
+  const [, kind, page, x, y, id, major, minor, ver, overrides] = args;
   e.major = major; e.minor = minor;
-  const r = await backend.interact(e, { type: kind, page, x, y, id });
+  // wait from the version on screen; the gesture runs alongside
+  const result = ver ? backend.waitForNewVersion(e, ver, deadline) : Promise.resolve(null);
+  const r = await backend.interact(e, { type: kind, page, x, y, id }, deadline - Date.now());
   console.log("[Mango] touch " + kind + " " + e.code + " page " + page + " at " + x + "," + y +
-    (id ? " id " + id : "") + " -> " + (r ? r.status + " " + JSON.stringify(r.json || {}).slice(0, 120) : "no reply"));
-  return respond();
+    (id ? " id " + id : "") + " -> " + (r ? r.status + " " + JSON.stringify(r.json || {}).slice(0, 120) : "no reply yet") +
+    " (" + (Date.now() - started) + "ms)");
+  const d = await result;
+  if (!d) {
+    console.log("[Mango] touch " + kind + ": no new render within " + TOUCH_BUDGET_MS + "ms - the screen's fast checks take over");
+    return respond();
+  }
+  console.log("[Mango] " + e.code + " display v" + d.version + " in " + (Date.now() - started) + "ms after the touch" +
+    (overrides ? ", holding presses " + overrides : ""));
+  return respond({ directives: [apl.displayScreen(e.vp, d, e, overrides, d.busy)] });
 }
 
 exports.handler = async (envelope) => {

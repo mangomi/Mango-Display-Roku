@@ -191,6 +191,11 @@ Quick triage:
   ids; `render-service/sim-devices.js` polls as N devices (task
   definition `roku-sim` runs it on the cluster). Exit code 2 = a double
   owner was seen.
+- Which displays run the live portal is `PAINTED_DISPLAYS` on the task
+  definition (prefix list; test `RK,ATV,ET` since 2026-10-27, prod
+  `RK,ATV`). The native scroll / weather overlay lists are separate and
+  in code (`capture.js` NATIVE_*_PREFIXES): a new platform joins those
+  only once its client draws `scroll` and `motion` overlays.
 - Knobs (env): `OWNERSHIP`, `OWNERSHIP_TABLE`, `RENDER_CONCURRENCY`,
   `REFUSE_*`, `MAX_BOOTING`, `MAX_CLAIMS_PER_MIN`, `HEALTH_STALE_MS`.
 

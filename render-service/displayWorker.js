@@ -71,17 +71,26 @@ class DisplayWorker {
   applyOrientation(orientation) {
     const o = parseInt(orientation, 10) || 0;
     const rotation = o === 1 || o === 90 ? 90 : o === 2 || o === 270 ? 270 : 0;
-    const portrait = rotation !== 0;
+    const turned = rotation !== 0;
+    /* The canvas is the screen the device reports, AS REPORTED, so the
+     * picture fills it (Dave, 2026-10-27): an Echo Show mounted portrait
+     * says 1080x1920 and gets a portrait layout with nothing set. The old
+     * code normalised every report to landscape and needed the
+     * orientation setting to turn it - true only for Roku / Apple TV,
+     * which always report landscape, and for those nothing changes here.
+     * The orientation setting keeps its real meaning: the screen is
+     * mounted turned relative to what it reports (a TV on its side), so
+     * the layout is the reported size swapped and the device rotates. */
     const dev = this.deviceOut || { w: 1920, h: 1080 };
-    const long = Math.max(dev.w, dev.h);
-    const short = Math.min(dev.w, dev.h);
+    const w = turned ? dev.h : dev.w;
+    const h = turned ? dev.w : dev.h;
     const next = {
       rotation,
       /* the layout space: the device's own pixels */
-      canvasW: portrait ? short : long,
-      canvasH: portrait ? long : short,
-      outW: portrait ? short : long,
-      outH: portrait ? long : short,
+      canvasW: w,
+      canvasH: h,
+      outW: w,
+      outH: h,
     };
     const d = this.display;
     const changed = Object.keys(next).some((k) => d[k] !== next[k]);
@@ -99,7 +108,8 @@ class DisplayWorker {
       outH: opts.outH || 1080,
       rotation: 0,
     };
-    /* the device reports its own resolution in landscape; rotation swaps
+    /* the device's own screen as it reports it (landscape for Roku and
+     * Apple TV, portrait for a portrait-mounted Echo Show); rotation swaps
      * the working geometry but this stays as reported */
     this.deviceOut = { w: this.display.outW, h: this.display.outH };
     /* canvasW/H (the layout space) are set by applyOrientation */

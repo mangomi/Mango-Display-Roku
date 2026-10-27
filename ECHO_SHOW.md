@@ -1,8 +1,10 @@
 # Echo Show — Alexa skill (version 1)
 
-**Status (2026-10-26):** V1 code in `echo-show/`. Pairing verified against
-the test backend from a local run; the skill is not yet deployed to Alexa
-and has not run on an Echo.
+**Status (2026-10-27):** V1 code in `echo-show/`. Verified end to end from
+a local run against test: ET745724581 registered, claimed by Dave
+(major 1 / minor 822), "Connected" for ~15s while the fleet booted it,
+then the page with its background and live clock. Not yet deployed to
+Alexa; has not run on an Echo.
 
 V1 scope, as asked by Dave: **register the device, then show the
 display's clock widget.** No touch, effects, gifs, slideshows or page
@@ -49,8 +51,10 @@ node echo-show/tools/try-skill.js --out /tmp/echo --ticks 3            # mint + 
 node echo-show/tools/try-skill.js --code ET745724581 --out /tmp/echo   # resume as that Echo
 ```
 
-Each screen's APL document is written to `--out`; paste it into the APL
-authoring tool (developer console → Build → Multimodal Responses) to see
+Each screen's APL document is written to `--out`;
+`node echo-show/tools/preview-apl.js <out>/apl-display.json > p.html` turns
+one into a rough HTML preview (clock expressions evaluated). For the real
+renderer, paste the JSON into the APL authoring tool (developer console → Build → Multimodal Responses) to see
 it. Test code from the first run: **ET745724581** (registered on test
 2026-10-26).
 
@@ -88,8 +92,12 @@ Logs: CloudWatch, every line prefixed `[Mango]` as on the TVs.
   original (impersonation) pipeline.
 - **Fonts:** APL cannot load the manifest's Google Fonts, so the clock
   uses the Echo's system font at the measured size.
-- **Layered pages:** a PNG page with a `background` overlay behind it
-  shows over black in V1 (backgrounds are not drawn yet).
+- **Backgrounds:** a layered page's `background` shows its FIRST photo,
+  still (brightness and pageColor honored); rotating through the rest
+  comes with slideshows.
+- **Not drawn yet:** `gif` (weather icons, animated cells), `slideshow`,
+  `countdown`, `scroll`, `motion` overlays and effects - their spots on
+  the page are empty.
 - **Rotation:** `rotation` ≠ 0 is not applied yet. A portrait-mounted
   Echo Show 15 reports a portrait viewport, so it registers with portrait
   dimensions and should not need it.

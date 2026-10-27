@@ -72,6 +72,22 @@ function pairingScreen(vp, code, connected) {
   return directive("pairing", doc(items, PAIR_TICK_MS, connected ? "loading" : "pair"));
 }
 
+/** A `background` overlay: no rect means the whole canvas; the portal
+ * dims it with filter:brightness(n), redrawn as black at 1-n on top
+ * (SlideshowOverlayView.swift). */
+function backgroundComponents(o, canvas, place) {
+  const images = Array.isArray(o.images) ? o.images : [];
+  if (!images.length) return [];
+  const r = place.rect(o.rect || { x: 0, y: 0, w: canvas.width, h: canvas.height });
+  const box = { position: "absolute", left: r.x, top: r.y, width: r.w, height: r.h };
+  const out = [];
+  if (o.pageColor) out.push({ type: "Frame", ...box, backgroundColor: o.pageColor });
+  out.push({ type: "Image", ...box, source: images[0], scale: o.cropToFill ? "best-fill" : "best-fit" });
+  const brightness = typeof o.brightness === "number" ? o.brightness : 1;
+  if (brightness < 1) out.push({ type: "Frame", ...box, backgroundColor: "black", opacity: 1 - Math.max(0, brightness) });
+  return out;
+}
+
 /** First page that has a clock (else page 0): its image plus the live
  * clock(s) on top. V1 draws only `clock` overlays; everything else the
  * device would animate (gif, slideshow, effects...) is not drawn yet. */
@@ -81,6 +97,12 @@ function displayScreen(vp, display) {
   let page = pages.find((p) => (p.overlays || []).some((o) => o.type === "clock")) || pages[0];
   const place = placement(manifest.canvas || { width: 1920, height: 1080 }, vp);
   const items = [];
+  // a PNG page is layered: the page background is drawn BEHIND it
+  // (MANIFEST.md). V1 shows its first photo, still; the rotation through
+  // the rest comes with slideshows.
+  for (const o of (page && page.overlays) || []) {
+    if (o.type === "background") items.push(...backgroundComponents(o, manifest.canvas, place));
+  }
   if (page && page.image) {
     items.push({
       type: "Image",

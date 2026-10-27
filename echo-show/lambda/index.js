@@ -66,7 +66,8 @@ async function onLaunch(envelope) {
     return respond({}, { speech: "Mango Display needs an Echo with a screen, like the Echo Show.", end: true });
   }
   const vp = apl.viewportDp(envelope);
-  const code = identity.codeFor(envelope.context.System.device.deviceId);
+  const sys = envelope.context.System;
+  const code = identity.codeFor(sys.device.deviceId, sys.user && sys.user.userId);
   console.log("[Mango] launch on " + env.name + ": code " + code + ", screen " + vp.pw + "x" + vp.ph);
   const st = { code, w: vp.pw, h: vp.ph };
   return pairStep(st, vp, false);

@@ -4,9 +4,10 @@
 a local run against test: ET745724581 registered, claimed by Dave
 (major 1 / minor 822), "Connected" for ~15s while the fleet booted it,
 then the page with its background and live clock. Since then the code is
-derived from the Alexa device id instead of stored (no database), so the
-local fake Echo's code is now **ET871919413** (registered on test, not
-claimed); ET745724581 is an orphaned test record. Not yet deployed to
+derived from the Alexa device and user ids instead of stored (no
+database), so the local fake Echo's code is now **ET218914363**
+(registered on test, not claimed); ET745724581, ET871919413 and
+ET224532747 are orphaned test records. Not yet deployed to
 Alexa; has not run on an Echo.
 
 V1 scope, as asked by Dave: **register the device, then show the
@@ -25,7 +26,7 @@ and tvOS (`LIVE_PORTAL.md`, `MANIFEST.md`). Nothing server-side is new:
 
 | | Roku / Apple TV | Echo Show |
 |---|---|---|
-| Device code | `RK…` / `ATV…` + 9 digits 1–9, kept on the device | **`ET` + 9 digits 1–9**, derived from a hash of the Alexa device id (the Echo runs no code of ours and has no storage; the id is stable, so the code is too - nothing stored) |
+| Device code | `RK…` / `ATV…` + 9 digits 1–9, kept on the device | **`ET` + 9 digits 1–9**, derived from a hash of the Alexa device id + user id (the Echo has no storage of ours). Same on every launch; **disabling and re-enabling the skill rerolls it**, because Amazon issues a new user id then |
 | Pairing | loop: `mirrors/deviceId/{code}` every 5s, `saveMirror` once if unknown | same calls, one iteration per request; the pairing screen's APL `handleTick` sends a UserEvent every 5s |
 | Updates | `/wait` long-poll held 50s | Lambda cannot hold one, so `/wait?since=-1` (answers at once, manifest inline) and a 60s `/version` check from the display screen's tick |
 | Clock | device composes the time from manifest values every 5s | the manifest's rules become APL expressions over `utcTime + tzOffset`; the Echo re-evaluates them itself, no request per minute |
@@ -35,7 +36,7 @@ and tvOS (`LIVE_PORTAL.md`, `MANIFEST.md`). Nothing server-side is new:
 ```
 echo-show/
   lambda/index.js      request handler: launch, UserEvents (pair / loading / refresh)
-  lambda/identity.js   ET code per Echo, derived from the Alexa device id
+  lambda/identity.js   ET code per Echo, derived from the Alexa device + user ids
   lambda/backend.js    pairing step, /wait and /version against the render service
   lambda/clock.js      manifest clock -> APL Text with live time/date expressions
   lambda/apl.js        pairing and display screens; canvas -> viewport scaling
@@ -51,8 +52,9 @@ composition).
 ## Running it locally
 
 ```
-node echo-show/tools/try-skill.js --out /tmp/echo --ticks 3                 # the fake Echo (ET871919413)
+node echo-show/tools/try-skill.js --out /tmp/echo --ticks 3                  # the fake Echo (ET218914363)
 node echo-show/tools/try-skill.js --device amzn1.ask.device.X --out /tmp/echo  # a different Echo, new code
+node echo-show/tools/try-skill.js --user amzn1.ask.account.X --out /tmp/echo   # skill re-enabled, new code
 ```
 
 Each screen's APL document is written to `--out`;
@@ -94,9 +96,12 @@ service share stays under `Project=Roku` - it is shared.
 
 - **Shared codes:** 9 digits 1-9 is 387M codes. Like the random Roku and
   tvOS codes, N displays share one with odds ~N²/774M (about 1 in 800 at
-  1,000 Echos, ~13 pairs at 100,000). A derived code cannot be re-rolled,
-  so if one ever collides the fix is a per-device override (that would
-  bring back a small table). Same exposure as the other platforms today.
+  1,000 Echos, ~13 pairs at 100,000). Same exposure as the other
+  platforms today. The way out is the same as a reinstall: disable and
+  re-enable the skill, which rerolls the code.
+- **Verify on hardware** that re-enabling the skill really changes the
+  code (Amazon documents a new user id on re-enable) and that an
+  ordinary relaunch keeps it.
 
 - **Screen timeout.** The session is kept open (no `shouldEndSession`)
   and the screen ticks, but Alexa may still close a skill's screen after

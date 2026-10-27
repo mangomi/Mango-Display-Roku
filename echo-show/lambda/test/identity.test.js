@@ -7,9 +7,13 @@ test("codes are ET + 9 digits 1-9", () => {
 });
 
 test("same Echo, same code; different Echo, different code", () => {
-  const a = codeFor("amzn1.ask.device.A");
-  assert.strictEqual(codeFor("amzn1.ask.device.A"), a);
-  assert.notStrictEqual(codeFor("amzn1.ask.device.B"), a);
+  const a = codeFor("amzn1.ask.device.A", "amzn1.ask.account.U");
+  assert.strictEqual(codeFor("amzn1.ask.device.A", "amzn1.ask.account.U"), a);
+  assert.notStrictEqual(codeFor("amzn1.ask.device.B", "amzn1.ask.account.U"), a);
+});
+
+test("re-enabling the skill (new user id) rerolls the code", () => {
+  assert.notStrictEqual(codeFor("amzn1.ask.device.A", "amzn1.ask.account.U2"), codeFor("amzn1.ask.device.A", "amzn1.ask.account.U"));
 });
 
 // 9^9 codes: like the random Roku/tvOS codes, N displays share a code with

@@ -2,13 +2,14 @@
 // Drives the skill handler locally the way an Echo Show 15 would, against
 // the TEST backend and render service - no Alexa account needed.
 //
-//   node tools/try-skill.js [--device ID] [--portrait] [--out DIR] [--ticks N]
+//   node tools/try-skill.js [--device ID] [--user ID] [--portrait] [--out DIR] [--ticks N]
 //
-// The Echo's code is derived from its Alexa device id (identity.js); the
-// default fake id always gives the same code, so re-runs resume as the
-// same Echo. Pass another --device to be a different, unregistered Echo -
-// its first launch registers its code on the test backend, exactly what a
-// real Echo does. Each screen's APL document is written to --out,
+// The Echo's code is derived from its Alexa device and user ids
+// (identity.js); the default fake ids always give the same code, so
+// re-runs resume as the same Echo. Pass another --device (a different
+// Echo) or --user (the skill re-enabled) for a new, unregistered code -
+// its first launch registers it on the test backend, exactly what a real
+// Echo does. Each screen's APL document is written to --out,
 // ready to paste into the APL authoring tool in the Alexa developer console.
 
 const fs = require("fs");
@@ -21,6 +22,7 @@ const outDir = opt("--out") || ".";
 const ticks = parseInt(opt("--ticks") || "0", 10);
 const portrait = args.includes("--portrait");
 const DEVICE = opt("--device") || "amzn1.ask.device.LOCALTEST";
+const USER = opt("--user") || "amzn1.ask.account.LOCALTEST";
 
 const viewport = portrait
   ? { pixelWidth: 1080, pixelHeight: 1920, currentPixelWidth: 1080, currentPixelHeight: 1920, dpi: 160 }
@@ -31,7 +33,7 @@ function envelope(request, attributes) {
     version: "1.0",
     session: { new: !attributes, attributes: attributes || {} },
     context: {
-      System: { device: { deviceId: DEVICE, supportedInterfaces: { "Alexa.Presentation.APL": { runtime: { maxVersion: "2023.2" } } } } },
+      System: { user: { userId: USER }, device: { deviceId: DEVICE, supportedInterfaces: { "Alexa.Presentation.APL": { runtime: { maxVersion: "2023.2" } } } } },
       Viewport: viewport,
     },
     request: { requestId: "local", timestamp: new Date().toISOString(), ...request },

@@ -18,8 +18,12 @@ const path = require("path");
 const WebSocket = require("ws");
 const { InteractionSession } = require("./session");
 const { RenderPool } = require("./renderPool");
-const { AssetPublisher, derivePrefix, enabled: r2Enabled, publicRoot, publishFonts } = require("./assets");
+const { AssetPublisher, derivePrefix, enabled: r2Enabled, publicRoot, publishFonts, publishCelebrations } = require("./assets");
 const FONT_DIR = process.env.MANGO_FONT_DIR || "/usr/local/share/fonts/mangodisplay";
+/* the Roku channel's celebration art, baked into the image (Dockerfile)
+ * and published under <root>/celebrations/ for clients that cannot
+ * bundle it (Echo Show, 2026-10-27) */
+const CELEBRATION_DIR = process.env.MANGO_CELEBRATION_DIR || "/usr/local/share/mangodisplay/celebrations";
 
 /* The layout space is the device's own resolution (Dave, 2026-09-02): the
  * portal is opened at exactly the pixels the TV shows, so text is
@@ -173,6 +177,7 @@ class DisplayWorker {
     /* once per process; a display's first publish waits for it so its
      * manifest never names a fontBase with nothing behind it */
     if (r2Enabled() && fs.existsSync(FONT_DIR)) await publishFonts(FONT_DIR);
+    if (r2Enabled() && fs.existsSync(CELEBRATION_DIR)) await publishCelebrations(CELEBRATION_DIR);
     /* what the bucket already holds for this display, so the reaper can
      * prune art left behind by earlier processes (best effort) */
     const seeded = await this.publisher.seedFromRemote().catch(() => 0);

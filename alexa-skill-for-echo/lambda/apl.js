@@ -242,7 +242,8 @@ function displayScreen(vp, display, paired, overrides, busy, current) {
       { name: "mmPageUrls", value: view.urls.join("|") },
     ].concat(pagesMod.rootBinds(pages, cur, manifest.gestures)),
     commands: pagesMod.commandDefinitions(vp.w, vp.h),
-    layouts: touch.layouts(refreshArgs, paired.major, paired.minor),
+    // effects are layout instances too (effect-all.js), so they stay small
+    layouts: { ...touch.layouts(refreshArgs, paired.major, paired.minor), ...require("./effect-all").layouts() },
     onMount: [{ type: "MmRotate" }],
   }));
 }

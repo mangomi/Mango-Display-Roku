@@ -43,18 +43,18 @@ channel commit when this tracker started.
 | Unpaired in webapp → pairing screen | done | not yet seen on hardware |
 | Stay awake | in test | screenLock heartbeat; overnight run from 2026-10-27 13:48 |
 | Page image, canvas scaling | done | verified portrait, Echo Show 15; same-layout updates cross-fade in place (no full-screen redraw) |
-| Page background (`background`) | partial | first photo, still; no rotation through photos |
+| Page background (`background`) | built | cycles every photo on intervalSeconds with its transition, no empty frame; Unsplash at screen size |
 | Clock | done | verified on hardware |
-| Countdown | todo | |
+| Countdown | built | ticks on the Echo from utcTime, one second ahead like the Roku |
 | Touch: checkbox taps (targets → `/interact`) | built | instant tick, held until a render agrees; awaiting hardware test |
 | Touch: calendar swipes (regions) | built | honours `gestures.calendarScroll`; awaiting hardware test |
-| Touch: page swipes left/right | todo | comes with page rotation |
-| Page rotation + transitions | todo | |
-| GIF overlays (sprite sheets) | todo | |
-| Slideshows | todo | |
-| Motion weather icons | todo | |
-| Scrolling lists (`scroll`) | todo | |
-| Effects (particles, sprite movers, popups, droppers) | todo | |
-| Night mode | todo | |
+| Touch: page swipes left/right | built | horizontal swipe anywhere (and on calendars) when pageSwipe is allowed |
+| Page rotation + transitions | built | Roku dwell rules, entering page's transition 3s inOutCubic; touch restarts the dwell; verified rotating on hardware |
+| GIF overlays (sprite sheets) | built | one frame through a window, stepped by a tick handler |
+| Slideshows | built | same module as backgrounds |
+| Motion weather icons | built | keyframes as path() easings |
+| Scrolling lists (`scroll`) | built | checkboxes inside tick, held and updated in place |
+| Effects (particles, sprite movers, popups, droppers) | built | all eight Roku types, as layouts; checkbox celebrations built but off until their art is hosted |
+| Night mode | built | black screen + the moving badge (a motion overlay) |
 | Busy spinner | built | the Roku art and rules: Connected screen, service busy (75s watchdog), calendar swipe |
 | Fonts | won't match | APL has no custom fonts; option: server-rendered glyphs |

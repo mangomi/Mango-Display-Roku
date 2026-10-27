@@ -167,3 +167,28 @@ service share stays under `Project=Roku` - it is shared.
   dimensions and should not need it.
 - Next: touch (manifest `targets` → APL TouchWrapper → `/interact`),
   page rotation, gif/slideshow overlays, effects.
+
+## Certification review (2026-10-27) - fixes pending, after hardware testing
+
+No published Amazon rule forbids a screen that stays up; nothing below is
+a blocker. To do before submitting (Dave: after testing):
+
+- **Would fail today:** AMAZON.HelpIntent must explain, end with a question
+  and keep the session open; AMAZON.NavigateHomeIntent must exit (it
+  redraws today); AMAZON.FallbackIntent needs a helpful line; check the
+  request's skill id in the handler (security requirement).
+- **Tighten:** a short spoken line on the pairing screen (name + where to
+  enter the code); example phrases in the listing ("Alexa, open Mango
+  Display", "Alexa, ask Mango Display to show my display") - remove the
+  template's "hello world"; drop the sample "start"; declare only Echo
+  Show 15 (landscape XL, portrait medium) and Show 21 viewports;
+  distribute to Canada as well as the US.
+- **Listing:** privacy policy + terms URLs (personal data shown; mention
+  the device id used for the code); description naming the prerequisites
+  (Mango Display account, Echo Show 15/21) and the always-on purpose
+  ("until you say Alexa, stop"); testing instructions with a dedicated
+  production reviewer login and the claim steps; 108/512 icons; category
+  Productivity / Organizers & Assistants.
+- **Judgement risk:** a reviewer may see the always-on screen as a
+  screensaver. Mitigation is the description; the fallback is the
+  home-screen widget.

@@ -21,12 +21,15 @@
 // sent back with every refresh; the skill re-applies entries the manifest
 // does not reflect yet (applyOverrides) and drops agreed or stale ones.
 
+const { spinner, SIZE_PX: SPINNER_PX } = require("./spinner");
+
 const ROOT_ID = "mmRoot";
 const FAST_MS = 1500;
 const FAST_REPEATS = 10;
 const OVERRIDE_HOLD_MS = 30000; // a press the portal never confirms is dropped
 const SWIPE_MIN_DP = 40;
 const SWIPE_GAP_MS = 1200;
+const BUSY_MAX_MS = 15000; // = the fast checks; a redraw that never comes must not leave it up
 const PAD = 16; // canvas px of extra finger room around a checkbox (Roku highlight: 10)
 
 /** Parse "id:1:t,id:0:t," -> Map id -> { checked, t }; keeps each id's latest. */
@@ -133,8 +136,17 @@ function touchComponents(ctx) {
       const r = place.rect(reg.rect);
       const cx = Math.round(reg.rect.x + reg.rect.w / 2);
       const cy = Math.round(reg.rect.y + reg.rect.h / 2);
+      // busy: the Roku spinner centred on the calendar from the swipe
+      // until the redraw replaces the screen (InteractionLayer busyAt) - a
+      // swipe has no instant local effect, and without it the screen
+      // looked frozen (Dave 2026-10-27). mmSwiping also keeps the
+      // screen-centre busy spinner off meanwhile.
+      const regId = String(reg.id == null ? "" : reg.id).replace(/[^0-9A-Za-z_-]/g, "");
+      const setSwiping = (v) => ({ type: "SetValue", componentId: ROOT_ID, property: "mmSwiping", value: v });
       const send = (kind) => [
-        { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(cx), String(cy), String(reg.id == null ? "" : reg.id), major, minor] },
+        setSwiping(regId),
+        { type: "Sequential", sequencer: "busyhide", commands: [{ type: "Idle", delay: BUSY_MAX_MS }, setSwiping("")] },
+        { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(cx), String(cy), regId, major, minor] },
         fastCheck(refreshArgs),
       ];
       // onDown/onUp run in FAST mode, where SendEvent is ignored - a first
@@ -148,7 +160,10 @@ function touchComponents(ctx) {
         // second on the Echo Show 15 (2026-10-27), each moving the calendar;
         // a second swipe inside SWIPE_GAP_MS is dropped
         bind: [{ name: "mmDownY", value: 0 }, { name: "mmSwipe", value: "" }, { name: "mmLastSent", value: 0 }],
-        item: { type: "Container", width: "100%", height: "100%" },
+        item: {
+          type: "Container", width: "100%", height: "100%",
+          items: [spinner(r.w / 2, r.h / 2, place.len(SPINNER_PX), "${mmSwiping == '" + regId + "' ? 1 : 0}")],
+        },
         onDown: [
           { type: "SetValue", property: "mmDownY", value: "${event.component.y}" },
           { type: "SetValue", property: "mmSwipe", value: "" },

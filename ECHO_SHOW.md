@@ -79,9 +79,12 @@ All tagged `Project=echo show app`, `Environment=test`,
 direct invoke: pairing screen in ~1s. Redeploy after a code change:
 
 ```
-cd alexa-skill-for-echo/lambda && zip -q -r /tmp/lambda.zip index.js env.js identity.js backend.js clock.js apl.js package.json
-aws lambda update-function-code --region us-east-1 --function-name echo-show-app-test --zip-file fileb:///tmp/lambda.zip
+alexa-skill-for-echo/tools/deploy.sh
 ```
+
+(runs the unit tests first; the zip carries a copy of the Roku's
+`images/spinner.png`). An Echo picks up new screen code on its next redraw -
+any change in the webapp, or reopening the skill.
 
 Remove everything: delete the function, the log group, detach the policy
 and delete the role (and the skill in the developer console).

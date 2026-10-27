@@ -116,7 +116,7 @@ async function fetchDisplay(d, held, launch) {
   }
   if (!manifest) return { state: "loading" };
   if (manifest.paired === false) return { state: "unpaired" };
-  return { state: "ready", version, assetBase, manifest };
+  return { state: "ready", version, assetBase, manifest, busy: r.json.busy === true };
 }
 
 /** Forward a touch: tap (with the task's payload id) or swipeup /
@@ -130,10 +130,12 @@ async function interact(d, g) {
     "&id=" + encodeURIComponent(g.id || "") + identity(d));
 }
 
-/** Cheap check for "anything new?" - /version answers immediately. */
+/** Cheap check for "anything new?" - /version answers immediately with
+ * { version, busy } (busy: the service is applying an edit). null when
+ * the service could not be asked. */
 async function currentVersion(d) {
   const r = await request(env.controlBase + "/version?v=1" + identity(d));
-  return r && r.status === 200 && r.json ? r.json.version : null;
+  return r && r.status === 200 && r.json ? { version: r.json.version, busy: r.json.busy === true } : null;
 }
 
 module.exports = { pairingStep, fetchDisplay, currentVersion, interact };

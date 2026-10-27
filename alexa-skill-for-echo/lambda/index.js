@@ -10,9 +10,9 @@
 //                                 straight to its page
 //   ["pair"]                   -> every 5s on the pairing screen
 //   ["loading", "", maj, min]  -> every 5s on "Connected": first page yet?
-//   ["refresh", ver, maj, min, overrides]
+//   ["refresh", ver, maj, min, overrides, busyShown]
 //                              -> every 10s on the display (1.5s after a
-//                                 touch): version moved?
+//                                 touch): version moved? busy changed?
 //   ["touch", kind, page, x, y, id, maj, min]
 //                              -> a checkbox press or calendar swipe
 //                                 (touch.js): forward to /interact
@@ -56,7 +56,7 @@ async function showDisplay(e, held, launch, quiet, overrides) {
     if (quiet && held !== null && String(d.version) === String(held)) return respond();
     console.log("[Mango] " + e.code + " display v" + d.version + ", " + (d.manifest.pages || []).length + " page(s)" +
       (overrides ? " holding presses " + overrides : ""));
-    return respond({ directives: [apl.displayScreen(e.vp, d, e, overrides)] });
+    return respond({ directives: [apl.displayScreen(e.vp, d, e, overrides, d.busy)] });
   }
   if (d.state === "unpaired") {
     // removed in the webapp: same code, pairing screen again
@@ -92,7 +92,7 @@ async function onUserEvent(envelope) {
   const rotate = args[0] === "rotate";
   if (rotate) args = args.slice(1);
   if (args[0] === "touch") return onTouch(e, args);
-  const [what, ver, major, minor, overrides] = args;
+  const [what, ver, major, minor, overrides, busyShown] = args;
   // the stay-awake test's evidence: does the heartbeat still arrive, in
   // which session, and how long after launch (CloudWatch)
   console.log("[Mango] event " + (rotate ? "rotate/" : "") + what + " " + e.code +
@@ -105,8 +105,15 @@ async function onUserEvent(envelope) {
   if (what === "refresh") {
     if (rotate) return showDisplay(e, null, false, false, overrides);
     const v = await backend.currentVersion(e);
-    if (v === null || String(v) === ver) return respond();
-    return showDisplay(e, ver, false, true, overrides);
+    if (v === null) return respond();
+    if (String(v.version) !== ver) return showDisplay(e, ver, false, true, overrides);
+    // same pictures, but the service started/finished applying an edit:
+    // flip the spinner without a redraw (the Roku's onBusyChange)
+    if ((v.busy ? "1" : "0") !== busyShown && busyShown !== undefined) {
+      console.log("[Mango] " + e.code + " busy -> " + v.busy);
+      return respond({ directives: [apl.busyCommands(v.busy)] });
+    }
+    return respond();
   }
   return respond();
 }

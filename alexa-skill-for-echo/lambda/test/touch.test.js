@@ -76,7 +76,8 @@ test("calendar swipes only when the user allows calendar scrolling, and under th
   const gate = cal.onPress[0];
   assert.match(gate.when, /utcTime - mmLastSent > 1200/); // one swipe, one send
   const up = gate.commands.find((c) => /'swipeup'/.test(c.when || ""));
-  assert.deepStrictEqual(up.commands[0].arguments.slice(0, 6), ["touch", "swipeup", "0", "700", "500", "31"]);
+  const ev = up.commands.find((c) => c.type === "SendEvent");
+  assert.deepStrictEqual(ev.arguments.slice(0, 6), ["touch", "swipeup", "0", "700", "500", "31"]);
 });
 
 test("display screen carries the touch layer and the held presses", () => {
@@ -87,7 +88,7 @@ test("display screen carries the touch layer and the held presses", () => {
   assert.strictEqual(root.id, touch.ROOT_ID);
   assert.match(root.bind[0].value, /^501:1:/);
   assert.strictEqual(root.items.filter((i) => i.type === "TouchWrapper").length, 3);
-  assert.deepStrictEqual(root.onMount[0].commands[1].arguments, ["refresh", "3", "1", "822", "${overrides}"]);
+  assert.deepStrictEqual(root.onMount[0].commands[1].arguments, ["refresh", "3", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}"]);
 });
 
 // APL component properties a bind/SetValue name must never shadow: SetValue
@@ -109,4 +110,17 @@ test("no bound variable or SetValue target shadows a built-in component property
   })(d.document);
   assert.ok(names.length > 3);
   for (const nm of names) assert.ok(!RESERVED.includes(nm), "reserved name used: " + nm);
+});
+
+test("swipe: the Roku spinner centred on the calendar at once, cleared after 15s if no redraw", () => {
+  const cal = touch.touchComponents(ctx({ calendarScroll: true }))[0];
+  const sp = cal.item.items[0];
+  assert.match(sp.source, /^data:image\/png;base64,/);
+  assert.strictEqual(sp.opacity, "${mmSwiping == '31' ? 1 : 0}");
+  assert.strictEqual(sp.left + sp.width / 2, 600 / 2); // centre of the 600-wide region
+  const send = cal.onPress[0].commands.find((c) => /'swipeup'/.test(c.when || "")).commands;
+  assert.deepStrictEqual([send[0].componentId, send[0].property, send[0].value], [touch.ROOT_ID, "mmSwiping", "31"]);
+  assert.ok(send.findIndex((c) => c.type === "SendEvent") > 0); // spinner before the round trip
+  const hide = send.find((c) => c.sequencer === "busyhide");
+  assert.strictEqual(hide.commands[0].delay, 15000);
 });

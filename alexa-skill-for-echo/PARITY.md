@@ -56,5 +56,5 @@ channel commit when this tracker started.
 | Scrolling lists (`scroll`) | todo | |
 | Effects (particles, sprite movers, popups, droppers) | todo | |
 | Night mode | todo | |
-| Busy spinner | todo | |
+| Busy spinner | built | the Roku art and rules: Connected screen, service busy (75s watchdog), calendar swipe |
 | Fonts | won't match | APL has no custom fonts; option: server-rendered glyphs |

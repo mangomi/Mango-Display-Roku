@@ -20,6 +20,7 @@
 const env = require("./env");
 const { clockComponents } = require("./clock");
 const touch = require("./touch");
+const { spinner, SIZE_PX: SPINNER_PX } = require("./spinner");
 
 const APL_VERSION = "2023.2";
 const PAIR_TICK_MS = 5000;     // the TVs' pairing poll cadence
@@ -72,7 +73,7 @@ function heartbeat(ms, args) {
  * "rotate" + the same, so the skill redraws for the new viewport.
  * `overrides` seeds the root's pending-press variable (touch.js); the
  * heartbeat runs from the root container so its events can carry it. */
-function doc(items, tickMs, args, overrides = "") {
+function doc(items, tickMs, args, overrides = "", busy = false) {
   return {
     type: "APL",
     version: APL_VERSION,
@@ -87,7 +88,9 @@ function doc(items, tickMs, args, overrides = "") {
         type: "Frame", width: "100vw", height: "100vh", backgroundColor: "black",
         items: [{
           type: "Container", id: touch.ROOT_ID, width: "100%", height: "100%",
-          bind: [{ name: "overrides", value: overrides }],
+          // mmBusy: the render service's busy flag as this screen shows it
+          // (spinner.js); mmSwiping: the calendar id a swipe is waiting on
+          bind: [{ name: "overrides", value: overrides }, { name: "mmBusy", value: busy }, { name: "mmSwiping", value: "" }],
           onMount: heartbeat(tickMs, args),
           items,
         }],
@@ -116,6 +119,8 @@ function pairingScreen(vp, code, connected, paired) {
     col.push({ type: "Text", text: "Setup at " + env.setupHost + " using any browser", color: "#CCCCCC", fontSize: 28 * k, textAlign: "center" });
   }
   const items = [{ type: "Container", width: "100%", alignItems: "center", paddingTop: 230 * k, items: col }];
+  // below the text, not over it (Roku busyAt at 78% of the screen height)
+  if (connected) items.push(spinner(vp.w / 2, vp.h * 0.78, SPINNER_PX * k));
   const args = connected ? ["loading", "", paired.major, paired.minor] : ["pair"];
   return directive("pairing", doc(items, PAIR_TICK_MS, args));
 }
@@ -140,7 +145,7 @@ function backgroundComponents(o, canvas, place) {
  * clock(s) and the touch layer on top. Still to come: gif, slideshow,
  * effects... (PARITY.md). `overrides` are the presses the screen sent
  * back that a render may not reflect yet (touch.js). */
-function displayScreen(vp, display, paired, overrides) {
+function displayScreen(vp, display, paired, overrides, busy) {
   const { manifest, assetBase } = display;
   const pages = manifest.pages || [];
   let pageIndex = pages.findIndex((p) => (p.overlays || []).some((o) => o.type === "clock"));
@@ -169,13 +174,27 @@ function displayScreen(vp, display, paired, overrides) {
   for (const o of (page && page.overlays) || []) {
     if (o.type === "clock") items.push(...clockComponents(o, place));
   }
-  const refreshArgs = ["refresh", String(display.version), paired.major, paired.minor, "${overrides}"];
+  // the last argument tells the skill which busy state the screen shows
+  const refreshArgs = ["refresh", String(display.version), paired.major, paired.minor, "${overrides}", "${mmBusy ? 1 : 0}"];
   const held = touch.applyOverrides(page, overrides);
   items.push(...touch.touchComponents({
     page, pageIndex, place, assetBase, states: held.states, gestures: manifest.gestures,
     refreshArgs, major: paired.major, minor: paired.minor,
   }));
-  return directive("display", doc(items, DISPLAY_TICK_MS, refreshArgs, held.overrides));
+  // busy spinner on top of everything, centred on the screen; a swipe
+  // shows the calendar's own instead (touch.js), never both
+  items.push(spinner(vp.w / 2, vp.h / 2, place.len(SPINNER_PX), "${mmBusy && mmSwiping == '' ? 1 : 0}"));
+  return directive("display", doc(items, DISPLAY_TICK_MS, refreshArgs, held.overrides, busy === true));
 }
 
-module.exports = { viewportDp, placement, pairingScreen, displayScreen };
+/** Turn the busy spinner on the display screen on or off without a
+ * redraw (ExecuteCommands against the screen's "display" token); on
+ * carries the Roku's 75s watchdog. */
+function busyCommands(on) {
+  const set = (v) => ({ type: "SetValue", componentId: touch.ROOT_ID, property: "mmBusy", value: v });
+  const cmds = [set(on)];
+  if (on) cmds.push({ type: "Sequential", sequencer: "busywatch", commands: [{ type: "Idle", delay: require("./spinner").WATCHDOG_MS }, set(false)] });
+  return { type: "Alexa.Presentation.APL.ExecuteCommands", token: "display", commands: cmds };
+}
+
+module.exports = { viewportDp, placement, pairingScreen, displayScreen, busyCommands };

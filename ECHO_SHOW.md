@@ -1,6 +1,6 @@
 # Echo Show — Alexa skill (version 1)
 
-**Status (2026-10-27):** V1 code in `echo-show/`. Verified end to end from
+**Status (2026-10-27):** V1 code in `alexa-skill-for-echo/`. Verified end to end from
 a local run against test: ET745724581 registered, claimed by Dave
 (major 1 / minor 822), "Connected" for ~15s while the fleet booted it,
 then the page with its background and live clock. Since then the code is
@@ -31,10 +31,13 @@ and tvOS (`LIVE_PORTAL.md`, `MANIFEST.md`). Nothing server-side is new:
 | Updates | `/wait` long-poll held 50s | Lambda cannot hold one, so `/wait?since=-1` (answers at once, manifest inline) and a 60s `/version` check from the display screen's tick |
 | Clock | device composes the time from manifest values every 5s | the manifest's rules become APL expressions over `utcTime + tzOffset`; the Echo re-evaluates them itself, no request per minute |
 
+Parity with the Roku channel is tracked in `alexa-skill-for-echo/PARITY.md`.
+
 ## Files
 
 ```
-echo-show/
+alexa-skill-for-echo/
+  PARITY.md            what of the Roku client the skill does yet
   lambda/index.js      request handler: launch, UserEvents (pair / loading / refresh)
   lambda/identity.js   ET code per Echo, derived from the Alexa device + user ids
   lambda/backend.js    pairing step, /wait and /version against the render service
@@ -46,19 +49,19 @@ echo-show/
   tools/preview-apl.js rough HTML preview of a screen try-skill.js wrote
 ```
 
-`cd echo-show/lambda && npm test` runs the unit tests (code format, clock
+`cd alexa-skill-for-echo/lambda && npm test` runs the unit tests (code format, clock
 composition).
 
 ## Running it locally
 
 ```
-node echo-show/tools/try-skill.js --out /tmp/echo --ticks 3                  # the fake Echo (ET218914363)
-node echo-show/tools/try-skill.js --device amzn1.ask.device.X --out /tmp/echo  # a different Echo, new code
-node echo-show/tools/try-skill.js --user amzn1.ask.account.X --out /tmp/echo   # skill re-enabled, new code
+node alexa-skill-for-echo/tools/try-skill.js --out /tmp/echo --ticks 3                  # the fake Echo (ET218914363)
+node alexa-skill-for-echo/tools/try-skill.js --device amzn1.ask.device.X --out /tmp/echo  # a different Echo, new code
+node alexa-skill-for-echo/tools/try-skill.js --user amzn1.ask.account.X --out /tmp/echo   # skill re-enabled, new code
 ```
 
 Each screen's APL document is written to `--out`;
-`node echo-show/tools/preview-apl.js <out>/apl-display.json > p.html` turns
+`node alexa-skill-for-echo/tools/preview-apl.js <out>/apl-display.json > p.html` turns
 one into a rough HTML preview (clock expressions evaluated). For the real
 renderer, paste the JSON into the APL authoring tool (developer console →
 Build → Multimodal Responses).
@@ -76,7 +79,7 @@ All tagged `Project=echo show app`, `Environment=test`,
 direct invoke: pairing screen in ~1s. Redeploy after a code change:
 
 ```
-cd echo-show/lambda && zip -q -r /tmp/lambda.zip index.js env.js identity.js backend.js clock.js apl.js package.json
+cd alexa-skill-for-echo/lambda && zip -q -r /tmp/lambda.zip index.js env.js identity.js backend.js clock.js apl.js package.json
 aws lambda update-function-code --region us-east-1 --function-name echo-show-app-test --zip-file fileb:///tmp/lambda.zip
 ```
 
@@ -106,7 +109,7 @@ AWS account 945710099949, us-east-1. Every resource tagged
    (AWSLambdaBasicExecutionRole).
 2. **Log group** `/aws/lambda/echo-show-app-test`, 14-day retention.
 3. **Lambda** `echo-show-app-test`, Node.js 22, 256 MB, handler
-   `index.handler`, timeout 8s, code = `echo-show/lambda/` zipped (no
+   `index.handler`, timeout 8s, code = `alexa-skill-for-echo/lambda/` zipped (no
    dependencies). Optional env `LOGO_URL=<public https png>` for the logo;
    without it the pairing screen shows a "Mango Display" wordmark.
 4. **Skill** in the Alexa developer console (the Amazon account the

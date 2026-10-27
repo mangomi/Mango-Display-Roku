@@ -63,6 +63,7 @@ per-GB processing.
 | 33 | Environment tags | `Environment=test` / `Environment=prod` on services, task definitions, target groups and tables | free |
 | 34 | 2026-10-21: `roku-render-prod:12` = rev 11 with memory 16384 (2 vCPU / 16 GB, same image); scaling policy `roku-render-prod-memory-70` DisableScaleIn=true, `roku-render-prod-cpu-65` ScaleInCooldown 1800 s. Rollback: `update-service --task-definition roku-render-prod:11`; re-enable with put-scaling-policy. Test dry run: `roku-render:23` (4 GB) then back to 22. | ~same as 3-4 × 8 GB tasks (~$5/day) |
 | 35 | 2026-10-27: TEST task definition `roku-render:24` = rev 22 + `PAINTED_DISPLAYS=RK,ATV,ET` (ET displays on the live-portal pipeline, test only; image `latest`). Prod stays `RK,ATV`. | free |
+| 36 | 2026-10-27: the service publishes `render-service/static/celebrations/*` once per task under `<root>/celebrations/` (same mechanism as `<root>/fonts/`, `assets.js publishStatic`), for the Echo Show client: `https://rokuassets.mangodisplay.com/test/celebrations/burst.png` (prod once approved). | ~0.5 MB in the bucket |
 
 **Live at** `https://roku-control.mangodisplay.com`
 — the only address compiled into the channel, and it survives an ALB

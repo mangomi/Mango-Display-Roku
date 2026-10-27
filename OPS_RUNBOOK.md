@@ -191,6 +191,10 @@ Quick triage:
   ids; `render-service/sim-devices.js` polls as N devices (task
   definition `roku-sim` runs it on the cluster). Exit code 2 = a double
   owner was seen.
+- Static files the service publishes once per task under the asset root:
+  `fonts/` (Google Fonts for the clients) and, since 2026-10-27,
+  `celebrations/` (the burst art, for the Echo Show). Both come from the
+  image; adding a file = add it to the repo folder and deploy.
 - Which displays run the live portal is `PAINTED_DISPLAYS` on the task
   definition (prefix list; test `RK,ATV,ET` since 2026-10-27, prod
   `RK,ATV`). The native scroll / weather overlay lists are separate and

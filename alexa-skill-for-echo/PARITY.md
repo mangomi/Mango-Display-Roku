@@ -42,7 +42,7 @@ channel commit when this tracker started.
 | Display updates (calendar edits, layouts) | done | ≤10s; verified on hardware 2026-10-27 |
 | Unpaired in webapp → pairing screen | done | not yet seen on hardware |
 | Stay awake | in test | screenLock heartbeat; overnight run from 2026-10-27 13:48 |
-| Page image, canvas scaling | done | verified portrait, Echo Show 15 |
+| Page image, canvas scaling | done | verified portrait, Echo Show 15; same-layout updates cross-fade in place (no full-screen redraw) |
 | Page background (`background`) | partial | first photo, still; no rotation through photos |
 | Clock | done | verified on hardware |
 | Countdown | todo | |

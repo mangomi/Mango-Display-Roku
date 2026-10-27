@@ -21,6 +21,17 @@ const env = require("./env");
 const { clockComponents } = require("./clock");
 const touch = require("./touch");
 const { spinner, SIZE_PX: SPINNER_PX } = require("./spinner");
+const crypto = require("crypto");
+
+// A new render whose LAYOUT matches the screen's (same widgets, places,
+// formats, background, checkboxes) updates the screen in place instead of
+// replacing it: a whole new document made the Echo rebuild everything and
+// reload every image, which blinked the full screen on each calendar
+// swipe (Dave, 2026-10-27). The Roku avoids it with A/B slots; here the
+// page image cross-fades (pageImages) and checkbox states are set in place.
+const FADE_MS = 200;
+const PAGE_ID = "mmPage";
+const PREV_ID = "mmPagePrev";
 
 const APL_VERSION = "2023.2";
 const PAIR_TICK_MS = 5000;     // the TVs' pairing poll cadence
@@ -73,7 +84,7 @@ function heartbeat(ms, args) {
  * "rotate" + the same, so the skill redraws for the new viewport.
  * `overrides` seeds the root's pending-press variable (touch.js); the
  * heartbeat runs from the root container so its events can carry it. */
-function doc(items, tickMs, args, overrides = "", busy = false) {
+function doc(items, tickMs, args, overrides = "", busy = false, extraBinds) {
   return {
     type: "APL",
     version: APL_VERSION,
@@ -90,7 +101,8 @@ function doc(items, tickMs, args, overrides = "", busy = false) {
           type: "Container", id: touch.ROOT_ID, width: "100%", height: "100%",
           // mmBusy: the render service's busy flag as this screen shows it
           // (spinner.js); mmSwiping: the calendar id a swipe is waiting on
-          bind: [{ name: "overrides", value: overrides }, { name: "mmBusy", value: busy }, { name: "mmSwiping", value: "" }],
+          bind: [{ name: "overrides", value: overrides }, { name: "mmBusy", value: busy }, { name: "mmSwiping", value: "" }]
+            .concat(extraBinds || []),
           onMount: heartbeat(tickMs, args),
           items,
         }],
@@ -141,17 +153,63 @@ function backgroundComponents(o, canvas, place) {
   return out;
 }
 
-/** First page that has a clock (else page 0): its image, the live
- * clock(s) and the touch layer on top. Still to come: gif, slideshow,
- * effects... (PARITY.md). `overrides` are the presses the screen sent
- * back that a render may not reflect yet (touch.js). */
-function displayScreen(vp, display, paired, overrides, busy) {
+/** The page this screen shows (first with a clock, else page 0), where it
+ * goes, its image URL, and the layout fingerprint: everything drawn
+ * EXCEPT the page pixels and the checkbox ticks. */
+function pageView(vp, display) {
   const { manifest, assetBase } = display;
   const pages = manifest.pages || [];
   let pageIndex = pages.findIndex((p) => (p.overlays || []).some((o) => o.type === "clock"));
   if (pageIndex < 0) pageIndex = 0;
   const page = pages[pageIndex];
-  const place = placement(manifest.canvas || { width: 1920, height: 1080 }, vp);
+  const canvas = manifest.canvas || { width: 1920, height: 1080 };
+  const place = placement(canvas, vp);
+  // the hash busts the Echo's image cache only when the pixels changed
+  const url = page && page.image ? assetBase + page.image + (page.imageHash ? "?h=" + page.imageHash : "") : "";
+  const t = page && page.targets;
+  // The clock's `sample` text and `textRect` (the measured width of that
+  // text) change every minute with the time itself; the Echo draws from
+  // the fixed `rect`, so they are not layout - counting them turned every
+  // update across a minute boundary into a full blinking redraw.
+  const stable = (k, v) => (k === "sample" || k === "textRect" ? undefined : v);
+  const layout = crypto.createHash("sha1").update(JSON.stringify({
+    vp: [vp.w, vp.h], canvas, pageIndex, gestures: manifest.gestures || null, assetBase,
+    image: page && page.image, overlays: (page && page.overlays) || [], regions: (page && page.regions) || [],
+    sprites: (t && t.sprites) || null,
+    targets: ((t && t.items) || []).map((it) => [touch.targetId(it), it.rect, it.kind]),
+  }, stable)).digest("hex").slice(0, 12);
+  return { manifest, assetBase, page, pageIndex, place, url, layout };
+}
+
+/** The page image as two stacked layers: mmPagePrev (on top, normally
+ * transparent) holds the OLD picture while mmPage loads the new one, then
+ * fades out - never an empty frame. The chain: prev loads the old URL ->
+ * its onLoad hands mmPage the new URL (mmNext) -> mmPage's onLoad fades
+ * prev. inPlaceUpdate also sets mmPage directly after a delay, so a device
+ * that never fires onLoad still updates (only less smoothly). */
+function pageImages(view) {
+  const { place, manifest, url } = view;
+  const box = {
+    type: "Image", position: "absolute",
+    left: place.ox, top: place.oy,
+    width: manifest.canvas.width * place.scale, height: manifest.canvas.height * place.scale,
+    scale: "fill",
+  };
+  return [
+    { ...box, id: PAGE_ID, source: url,
+      onLoad: [{ type: "AnimateItem", componentId: PREV_ID, duration: FADE_MS, value: [{ property: "opacity", to: 0 }] }] },
+    { ...box, id: PREV_ID, source: "", opacity: 0, bind: [{ name: "mmNext", value: "" }],
+      onLoad: [{ type: "SetValue", componentId: PAGE_ID, property: "source", value: "${mmNext}" }] },
+  ];
+}
+
+/** First page that has a clock (else page 0): its image, the live
+ * clock(s) and the touch layer on top. Still to come: gif, slideshow,
+ * effects... (PARITY.md). `overrides` are the presses the screen sent
+ * back that a render may not reflect yet (touch.js). */
+function displayScreen(vp, display, paired, overrides, busy) {
+  const view = pageView(vp, display);
+  const { manifest, assetBase, page, pageIndex, place } = view;
   const items = [];
   // a PNG page is layered: the page background is drawn BEHIND it
   // (MANIFEST.md). V1 shows its first photo, still; the rotation through
@@ -159,23 +217,14 @@ function displayScreen(vp, display, paired, overrides, busy) {
   for (const o of (page && page.overlays) || []) {
     if (o.type === "background") items.push(...backgroundComponents(o, manifest.canvas, place));
   }
-  if (page && page.image) {
-    items.push({
-      type: "Image",
-      position: "absolute",
-      left: place.ox, top: place.oy,
-      width: manifest.canvas.width * place.scale,
-      height: manifest.canvas.height * place.scale,
-      // the hash busts the Echo's image cache only when the pixels changed
-      source: assetBase + page.image + (page.imageHash ? "?h=" + page.imageHash : ""),
-      scale: "fill",
-    });
-  }
+  if (page && page.image) items.push(...pageImages(view));
   for (const o of (page && page.overlays) || []) {
     if (o.type === "clock") items.push(...clockComponents(o, place));
   }
-  // the last argument tells the skill which busy state the screen shows
-  const refreshArgs = ["refresh", String(display.version), paired.major, paired.minor, "${overrides}", "${mmBusy ? 1 : 0}"];
+  // what the screen shows, so the skill can tell what changed: version,
+  // presses, busy, layout fingerprint, page image (all bound on the root,
+  // so an in-place update keeps them current)
+  const refreshArgs = ["refresh", "${mmVer}", paired.major, paired.minor, "${overrides}", "${mmBusy ? 1 : 0}", "${mmLayout}", "${mmPageUrl}"];
   const held = touch.applyOverrides(page, overrides);
   items.push(...touch.touchComponents({
     page, pageIndex, place, assetBase, states: held.states, gestures: manifest.gestures,
@@ -184,7 +233,48 @@ function displayScreen(vp, display, paired, overrides, busy) {
   // busy spinner on top of everything, centred on the screen; a swipe
   // shows the calendar's own instead (touch.js), never both
   items.push(spinner(vp.w / 2, vp.h / 2, place.len(SPINNER_PX), "${mmBusy && mmSwiping == '' ? 1 : 0}"));
-  return directive("display", doc(items, DISPLAY_TICK_MS, refreshArgs, held.overrides, busy === true));
+  return directive("display", doc(items, DISPLAY_TICK_MS, refreshArgs, held.overrides, busy === true, [
+    { name: "mmVer", value: String(display.version) },
+    { name: "mmLayout", value: view.layout },
+    { name: "mmPageUrl", value: view.url },
+  ]));
+}
+
+/** The new render as an update to the screen already up, or null when the
+ * layout differs (then a full displayScreen is needed). `shown` is what
+ * the screen reported: { layout, url }. */
+function inPlaceUpdate(vp, display, paired, overrides, busy, shown) {
+  const view = pageView(vp, display);
+  if (!shown || !shown.layout || shown.layout !== view.layout) return null;
+  const root = (property, value) => ({ type: "SetValue", componentId: touch.ROOT_ID, property, value });
+  const held = touch.applyOverrides(view.page, overrides);
+  const cmds = [
+    root("mmVer", String(display.version)),
+    root("overrides", held.overrides),
+    root("mmBusy", busy === true),
+    root("mmSwiping", ""), // a swipe's result has arrived
+  ];
+  const items = (view.page && view.page.targets && view.page.targets.items) || [];
+  items.forEach((it, i) => {
+    const id = touch.targetId(it);
+    if (id) cmds.push({ type: "SetValue", componentId: touch.boxId(id), property: "mmTicked", value: held.states[i] === true });
+  });
+  if (view.url && view.url !== shown.url) {
+    cmds.push(
+      root("mmPageUrl", view.url),
+      { type: "SetValue", componentId: PREV_ID, property: "mmNext", value: view.url },
+      { type: "SetValue", componentId: PREV_ID, property: "opacity", value: 1 },
+      { type: "SetValue", componentId: PREV_ID, property: "source", value: shown.url },
+      // fallback if onLoad never fires: switch and clear after a moment
+      { type: "Sequential", sequencer: "pageswap", commands: [
+        { type: "Idle", delay: 1500 },
+        { type: "SetValue", componentId: PAGE_ID, property: "source", value: view.url },
+        { type: "Idle", delay: 1500 },
+        { type: "SetValue", componentId: PREV_ID, property: "opacity", value: 0 },
+      ] },
+    );
+  }
+  return { type: "Alexa.Presentation.APL.ExecuteCommands", token: "display", commands: cmds };
 }
 
 /** Turn the busy spinner on the display screen on or off without a
@@ -197,4 +287,4 @@ function busyCommands(on) {
   return { type: "Alexa.Presentation.APL.ExecuteCommands", token: "display", commands: cmds };
 }
 
-module.exports = { viewportDp, placement, pairingScreen, displayScreen, busyCommands };
+module.exports = { viewportDp, placement, pairingScreen, displayScreen, busyCommands, inPlaceUpdate, pageView };

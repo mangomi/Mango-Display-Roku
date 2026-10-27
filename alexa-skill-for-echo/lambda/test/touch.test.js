@@ -60,7 +60,7 @@ test("checkboxes: drawn with the manifest's sprites, press ticks then tells the 
   assert.strictEqual(hold.componentId, touch.ROOT_ID);
   assert.match(hold.value, /'501:'/);
   // ver + the presses ride along so the reply can be the result screen
-  assert.deepStrictEqual(send.arguments, ["touch", "tap", "0", "115", "215", "501", "1", "822", "3", "${overrides}"]);
+  assert.deepStrictEqual(send.arguments, ["touch", "tap", "0", "115", "215", "501", "1", "822", "3", "${overrides}", undefined, undefined]);
   assert.strictEqual(fast.sequencer, "fastcheck");
 });
 
@@ -89,7 +89,11 @@ test("display screen carries the touch layer and the held presses", () => {
   assert.strictEqual(root.id, touch.ROOT_ID);
   assert.match(root.bind[0].value, /^501:1:/);
   assert.strictEqual(root.items.filter((i) => i.type === "TouchWrapper").length, 3);
-  assert.deepStrictEqual(root.onMount[0].commands[1].arguments, ["refresh", "3", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}"]);
+  assert.deepStrictEqual(root.onMount[0].commands[1].arguments,
+    ["refresh", "${mmVer}", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}", "${mmLayout}", "${mmPageUrl}"]);
+  assert.strictEqual(root.bind.find((b) => b.name === "mmVer").value, "3");
+  const tap = root.items.find((i) => i.id === "mmBox501").onPress.find((c) => c.type === "SendEvent");
+  assert.deepStrictEqual(tap.arguments.slice(8), ["${mmVer}", "${overrides}", "${mmLayout}", "${mmPageUrl}"]);
 });
 
 // APL component properties a bind/SetValue name must never shadow: SetValue

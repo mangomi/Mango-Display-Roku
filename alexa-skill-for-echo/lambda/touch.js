@@ -45,6 +45,11 @@ function parseOverrides(s) {
   return m;
 }
 
+/** The component id of a task's checkbox, so an update can set it in place. */
+function boxId(id) {
+  return "mmBox" + id;
+}
+
 function targetId(item) {
   const id = item && item.payload && item.payload.id;
   return id == null ? "" : String(id).replace(/[^0-9A-Za-z_-]/g, "");
@@ -99,6 +104,7 @@ function touchComponents(ctx) {
       const cy = Math.round(it.rect.y + it.rect.h / 2);
       out.push({
         type: "TouchWrapper",
+        ...(id ? { id: boxId(id) } : {}),
         position: "absolute",
         left: box.x - pad, top: box.y - pad, width: box.w + pad * 2, height: box.h + pad * 2,
         bind: [
@@ -123,7 +129,7 @@ function touchComponents(ctx) {
             type: "SetValue", componentId: ROOT_ID, property: "overrides",
             value: "${overrides + '" + id + ":' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",
           }] : []),
-          { type: "SendEvent", arguments: ["touch", "tap", String(pageIndex), String(cx), String(cy), id, major, minor, refreshArgs[1], "${overrides}"] },
+          { type: "SendEvent", arguments: ["touch", "tap", String(pageIndex), String(cx), String(cy), id, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7]] },
           fastCheck(refreshArgs),
         ],
       });
@@ -146,7 +152,7 @@ function touchComponents(ctx) {
       const send = (kind) => [
         setSwiping(regId),
         { type: "Sequential", sequencer: "busyhide", commands: [{ type: "Idle", delay: BUSY_MAX_MS }, setSwiping("")] },
-        { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(cx), String(cy), regId, major, minor, refreshArgs[1], "${overrides}"] },
+        { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(cx), String(cy), regId, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7]] },
         fastCheck(refreshArgs),
       ];
       // onDown/onUp run in FAST mode, where SendEvent is ignored - a first
@@ -191,4 +197,4 @@ function touchComponents(ctx) {
   return under.concat(out);
 }
 
-module.exports = { ROOT_ID, touchComponents, applyOverrides, parseOverrides, targetId };
+module.exports = { ROOT_ID, touchComponents, applyOverrides, parseOverrides, targetId, boxId };

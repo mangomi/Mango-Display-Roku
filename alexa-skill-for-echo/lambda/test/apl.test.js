@@ -47,8 +47,9 @@ for (const [name, d] of Object.entries(screens)) {
 
 test("display: background, photo, page and clock all inside the one container", () => {
   const layers = screens.display.document.mainTemplate.items[0].items[0].items;
-  const kinds = layers.map((l) => l.type + (l.source ? ":" + (/^data:/.test(l.source) ? "spinner" : l.source.split("/").pop().split("?")[0]) : ""));
-  assert.deepStrictEqual(kinds, ["Frame", "Image:a.jpg", "Frame", "Image:display_p0.png", "Text", "Text", "Image:spinner"]);
+  const kinds = layers.map((l) => l.type + (l.source !== undefined ? ":" + (/^data:/.test(l.source) ? "spinner" : String(l.source).split("/").pop().split("?")[0]) : ""));
+  // the page is two stacked layers (mmPage + the cross-fade's mmPagePrev, empty until an update)
+  assert.deepStrictEqual(kinds, ["Frame", "Image:a.jpg", "Frame", "Image:display_p0.png", "Image:", "Text", "Text", "Image:spinner"]);
 });
 
 test("display: portrait canvas on a portrait Echo fills the screen, rotation ignored", () => {
@@ -82,4 +83,59 @@ test("busy flips without a redraw; on carries the 75s watchdog", () => {
   assert.strictEqual(on.commands[0].value, true);
   assert.strictEqual(on.commands[1].commands[0].delay, 75000);
   assert.strictEqual(apl.busyCommands(false).commands.length, 1);
+});
+
+const v3 = { manifest, assetBase: "https://assets/", version: 3 };
+const shownFor = (d) => { const v = apl.pageView(vp, d); return { layout: v.layout, url: v.url }; };
+
+test("in place: a new render with the same layout updates the screen instead of replacing it", () => {
+  const swiped = { ...v3, version: 4, manifest: { ...manifest, pages: [{ ...manifest.pages[0], imageHash: "new" }] } };
+  const shown = shownFor(v3);
+  const up = apl.inPlaceUpdate(vp, swiped, paired, "", false, shown);
+  assert.strictEqual(up.type, "Alexa.Presentation.APL.ExecuteCommands");
+  assert.strictEqual(up.token, "display");
+  const set = (id, prop) => up.commands.find((c) => c.componentId === id && c.property === prop);
+  assert.strictEqual(set("mmRoot", "mmVer").value, "4");
+  assert.strictEqual(set("mmRoot", "mmSwiping").value, "");
+  // cross-fade: the old picture goes on the top layer, the new one is handed over via mmNext
+  assert.strictEqual(set("mmPagePrev", "source").value, shown.url);
+  assert.match(set("mmPagePrev", "mmNext").value, /\?h=new$/);
+  assert.strictEqual(set("mmPagePrev", "opacity").value, 1);
+});
+
+test("in place: a moved or resized widget needs a whole new screen", () => {
+  const moved = JSON.parse(JSON.stringify(manifest));
+  moved.pages[0].overlays[0].elements.time.rect.y += 40;
+  assert.strictEqual(apl.inPlaceUpdate(vp, { ...v3, version: 4, manifest: moved }, paired, "", false, shownFor(v3)), null);
+  assert.strictEqual(apl.inPlaceUpdate(vp, v3, paired, "", false, { layout: "", url: "" }), null); // older screen: no fingerprint
+});
+
+test("in place: checkbox states set on their own boxes; a tick change alone keeps the layout", () => {
+  const withBoxes = JSON.parse(JSON.stringify(manifest));
+  withBoxes.pages[0].targets = { sprites: { empty: "e.png", checked: "c.png" },
+    items: [{ rect: { x: 10, y: 10, w: 20, h: 20 }, checked: false, payload: { id: 77 } }] };
+  const before = { ...v3, manifest: withBoxes };
+  const after = JSON.parse(JSON.stringify(before)); after.version = 4; after.manifest.pages[0].targets.items[0].checked = true;
+  const up = apl.inPlaceUpdate(vp, after, paired, "", false, shownFor(before));
+  const box = up.commands.find((c) => c.componentId === "mmBox77");
+  assert.deepStrictEqual([box.property, box.value], ["mmTicked", true]);
+  // and the page image did not change: no cross-fade
+  assert.ok(!up.commands.some((c) => c.componentId === "mmPagePrev"));
+});
+
+test("page layers: the new picture loads behind the old one, which then fades", () => {
+  const items = screens.display.document.mainTemplate.items[0].items[0].items;
+  const page = items.find((i) => i.id === "mmPage"), prev = items.find((i) => i.id === "mmPagePrev");
+  assert.ok(items.indexOf(prev) > items.indexOf(page), "prev drawn above");
+  assert.strictEqual(prev.opacity, 0);
+  assert.deepStrictEqual([prev.onLoad[0].componentId, prev.onLoad[0].value], ["mmPage", "${mmNext}"]);
+  assert.strictEqual(page.onLoad[0].componentId, "mmPagePrev");
+  assert.strictEqual(page.onLoad[0].value[0].to, 0);
+});
+
+test("in place: the clock's per-minute sample text and its measured width are not layout", () => {
+  const next = JSON.parse(JSON.stringify(manifest));
+  next.pages[0].overlays[0].elements.time.sample = "2:41";
+  next.pages[0].overlays[0].elements.time.textRect = { x: 71, y: 103, w: 203, h: 300 };
+  assert.ok(apl.inPlaceUpdate(vp, { ...v3, version: 4, manifest: next }, paired, "", false, shownFor(v3)));
 });

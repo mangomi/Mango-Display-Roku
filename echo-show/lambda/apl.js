@@ -77,7 +77,15 @@ function doc(items, tickMs, args) {
     settings: { idleTimeout: IDLE_TIMEOUT_MS },
     onMount: heartbeat(tickMs, args),
     onConfigChange: [{ type: "SendEvent", sequencer: "rotate", arguments: ["rotate"].concat(args) }],
-    mainTemplate: { items: [{ type: "Frame", width: "100vw", height: "100vh", backgroundColor: "black", items }] },
+    // A Frame draws ONE child; extra items are silently dropped (on the
+    // Echo only the first layer - the background color - showed). The
+    // layers go in a Container, which stacks any number.
+    mainTemplate: {
+      items: [{
+        type: "Frame", width: "100vw", height: "100vh", backgroundColor: "black",
+        items: [{ type: "Container", width: "100%", height: "100%", items }],
+      }],
+    },
   };
 }
 

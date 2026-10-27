@@ -54,7 +54,7 @@ channel commit when this tracker started.
 | Slideshows | built | same module as backgrounds |
 | Motion weather icons | built | keyframes as path() easings |
 | Scrolling lists (`scroll`) | built | checkboxes inside tick, held and updated in place |
-| Effects (particles, sprite movers, popups, droppers) | built | all eight Roku types, as layouts; checkbox celebrations built but off until their art is hosted |
+| Effects (particles, sprite movers, popups, droppers) | built | all eight Roku types, as layouts; checkbox celebrations on (test: CELEBRATION_URL) |
 | Night mode | built | black screen + the moving badge (a motion overlay) |
 | Busy spinner | built | the Roku art and rules: Connected screen, service busy (75s watchdog), calendar swipe |
 | Fonts | won't match | APL has no custom fonts; option: server-rendered glyphs |

@@ -86,6 +86,11 @@ alexa-skill-for-echo/tools/deploy.sh
 `images/spinner.png`). An Echo picks up new screen code on its next redraw -
 any change in the webapp, or reopening the skill.
 
+Lambda environment: `CELEBRATION_URL=https://rokuassets.mangodisplay.com/test/celebrations/burst.png`
+(the checkbox confetti sheet, published by the render service next to its
+fonts; production's will be `/prod/celebrations/burst.png`). Unset, the
+skill simply has no celebrations.
+
 Remove everything: delete the function, the log group, detach the policy
 and delete the role (and the skill in the developer console).
 

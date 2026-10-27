@@ -3,7 +3,8 @@
 // its commands with a tiny interpreter (the expressions it uses -
 // ternary, %, &&, array index - are also JavaScript) to check what shows:
 // the old photo stays until the new one has loaded, failed loads are
-// skipped, and the loop waits for a transition in flight.
+// skipped, and a load that never ends is given up on. Image onLoad/onFail
+// only record (they run in fast mode on the Echo); the loop does the rest.
 const test = require("node:test");
 const assert = require("node:assert");
 const { build, sized, affixes } = require("../overlay-slideshow");
@@ -24,8 +25,9 @@ function walk(node, fn) {
   }
 }
 
-/** Runs the built slideshow's commands: vars are the container's binds,
- * comps the Images' props. */
+/** Steps the built slideshow's mount sequence: vars are the container's
+ * binds, props the Images'. The sequence pauses at each Idle; load/fail
+ * play the Images' handlers in between. */
 function machine(cfg) {
   const [box] = build(cfg, ctx);
   const vars = Object.fromEntries(box.bind.map((b) => [b.name, b.value]));
@@ -35,10 +37,12 @@ function machine(cfg) {
     if (typeof v !== "string" || !v.startsWith("${")) return v;
     return new Function(...Object.keys(vars), "return (" + v.slice(2, -1) + ")")(...Object.values(vars));
   };
-  const run = (cmds) => {
+  function* run(cmds) {
     for (const c of cmds) {
       if (c.when !== undefined && !evalv(c.when)) continue;
-      if (c.type === "Sequential" || c.type === "Parallel") run(c.commands);
+      if (c.type === "Sequential" || c.type === "Parallel") {
+        for (let k = 0; k < (c.repeatCount || 0) + 1; k++) yield* run(c.commands);
+      } else if (c.type === "Idle") yield c.delay;
       else if (c.type === "SetValue") {
         if (c.componentId === box.id) vars[c.property] = evalv(c.value);
         else props[c.componentId][c.property] = evalv(c.value);
@@ -46,64 +50,88 @@ function machine(cfg) {
         for (const v of c.value) if (v.property === "opacity") props[c.componentId].opacity = v.to;
       }
     }
-  };
+  }
+  const gen = run(box.onMount);
+  const handle = (cmds) => { for (const _ of run(cmds)); };
   const [A, B] = Object.keys(imgs);
-  const shown = () => {
-    // B draws over A; the photo on show is the top visible one
-    const top = props[B].opacity > 0 ? B : props[A].opacity > 0 ? A : null;
-    return top && props[top].source;
+  const interval = Math.max(3, Number(cfg.intervalSeconds) || 60) * 1000;
+  const m = {
+    vars, props, A, B, box,
+    shown: () => {
+      // B draws over A; the photo on show is the top visible one
+      const top = props[B].opacity > 0 ? B : props[A].opacity > 0 ? A : null;
+      return top && props[top].source;
+    },
+    load: (id) => handle(imgs[id].onLoad),
+    fail: (id) => handle(imgs[id].onFail),
+    // run until the loop rests on its interval (or the sequence ends);
+    // returns how many 250ms polls it spent waiting on a load
+    rest: () => {
+      let polls = 0;
+      for (;;) {
+        const r = gen.next();
+        if (r.done || r.value === interval) return polls;
+        polls++;
+      }
+    },
+    // the interval passes: the next photo is handed out and waited for
+    tick: () => gen.next(),
+    // the Image the loop is waiting on
+    loading: () => (vars.mmSsNext || "A") === "A" ? A : B,
   };
-  return {
-    vars, props, A, B, shown, box,
-    tick: () => run(box.onMount[0].commands),
-    load: (id) => run(imgs[id].onLoad),
-    fail: (id) => run(imgs[id].onFail),
-    // the Image whose source the last tick changed
-    loading: () => [A, B].find((id) => props[id].source && props[id].opacity === 0),
-  };
+  m.tick(); // the mount sequence starts waiting for the first photo
+  return m;
 }
 
 test("cycles A/B; the old photo stays up until the new one loads", () => {
   const m = machine(widget());
   assert.strictEqual(m.shown(), null);
   m.load(m.A);
+  m.rest();
   assert.strictEqual(m.shown(), photos(3)[0]);
   m.tick();
   assert.strictEqual(m.props[m.B].source, photos(3)[1]);
   assert.strictEqual(m.shown(), photos(3)[0], "no empty frame while loading");
   m.load(m.B);
+  m.rest();
   assert.strictEqual(m.shown(), photos(3)[1]);
   m.tick();
   assert.strictEqual(m.props[m.A].source, photos(3)[2]);
   assert.strictEqual(m.shown(), photos(3)[1]);
   m.load(m.A);
+  m.rest();
   assert.strictEqual(m.shown(), photos(3)[2]);
   m.tick();
   m.load(m.B);
+  m.rest();
   assert.strictEqual(m.shown(), photos(3)[0], "wraps around");
 });
 
 test("a failed photo is skipped, the old one stays", () => {
   const m = machine(widget());
   m.load(m.A);
+  m.rest();
   m.tick();
   m.fail(m.B);
+  m.rest();
   assert.strictEqual(m.shown(), photos(3)[0]);
   m.tick();
   assert.strictEqual(m.props[m.B].source, photos(3)[2]);
   m.load(m.B);
+  m.rest();
   assert.strictEqual(m.shown(), photos(3)[2]);
 });
 
-test("the loop waits for a load in flight, then gives up on it", () => {
-  const m = machine(widget({ intervalSeconds: 10 })); // 30s give-up = 3 ticks
+test("a load that never ends is given up on after ~30s, then the loop goes on", () => {
+  const m = machine(widget());
   m.load(m.A);
+  m.rest();
   m.tick();
+  const polls = m.rest(); // B never loads
+  assert.strictEqual(polls, 30000 / 250 - 1, "waited ~30s in 250ms polls");
+  assert.strictEqual(m.shown(), photos(3)[0], "the old photo stayed");
   m.tick();
-  m.tick();
-  assert.strictEqual(m.vars.mmSsIdx, 1, "still waiting on photo 1");
-  m.tick();
-  assert.strictEqual(m.vars.mmSsIdx, 2, "gave up, moved on");
+  assert.strictEqual(m.vars.mmSsIdx, 2, "moved on");
   assert.strictEqual(m.props[m.B].source, photos(3)[2]);
 });
 
@@ -111,13 +139,21 @@ test("every transition leaves exactly the new photo visible", () => {
   for (const transition of ["fade", "slideleft", "slideright", "slideup", "slidedown", "flip", "pop"]) {
     const m = machine(widget({ transition }));
     m.load(m.A);
+    m.rest();
     for (let i = 1; i <= 4; i++) {
       m.tick();
-      const id = m.loading();
-      m.load(id);
+      m.load(m.loading());
+      m.rest();
       assert.strictEqual(m.shown(), photos(3)[i % 3], transition);
       assert.strictEqual([m.A, m.B].filter((x) => m.props[x].opacity > 0).length, 1, transition);
     }
+  }
+});
+
+test("the photos' load handlers only record - they run in fast mode on the Echo", () => {
+  const [box] = build(widget(), ctx);
+  for (const img of box.items.filter((c) => c.type === "Image")) {
+    for (const c of [...img.onLoad, ...img.onFail]) assert.strictEqual(c.type, "SetValue");
   }
 });
 
@@ -153,7 +189,7 @@ test("layers: page color, the two photos, dimming on top, at the rect", () => {
 });
 
 test("interval: min 3s, default 60s", () => {
-  const idle = (extra) => build(widget(extra), ctx)[0].onMount[0].commands[0].delay;
+  const idle = (extra) => build(widget(extra), ctx)[0].onMount[0].commands.find((c) => c.repeatCount === 1000000).commands[0].delay;
   assert.strictEqual(idle({ intervalSeconds: 1 }), 3000);
   assert.strictEqual(idle({ intervalSeconds: undefined }), 60000);
   assert.strictEqual(idle({ intervalSeconds: 15 }), 15000);
@@ -163,9 +199,10 @@ test("background: whole canvas; one photo sent as a pair is a still; a lone one 
   const bg = { type: "background", images: ["https://example.com/a.jpg", "https://example.com/a.jpg"], intervalSeconds: 86400, brightness: 1 };
   const [box] = build(bg, ctx);
   assert.deepStrictEqual([box.left, box.top, box.width, box.height], [0, 0, 960, 540]);
-  assert.deepStrictEqual(box.onMount, [], "nothing to cycle");
+  assert.ok(!JSON.stringify(box.onMount).includes("1000000"), "nothing to cycle");
   const m = machine(bg);
   m.load(m.A);
+  m.rest();
   assert.strictEqual(m.shown(), "https://example.com/a.jpg");
   // fewer than two: nothing here, overlays.js draws the still
   assert.deepStrictEqual(build({ ...bg, images: ["https://example.com/a.jpg"] }, ctx), []);

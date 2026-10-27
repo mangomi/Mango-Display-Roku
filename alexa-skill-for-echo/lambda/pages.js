@@ -19,6 +19,10 @@
 //                     autoRotates; a non-rotating page simply stays.
 //   MmPageNext/Prev   a horizontal swipe (when the user allows page swipes):
 //                     turn, then a FRESH dwell on the page landed on.
+//   MmGoTo(to)        a layout edit names the page being edited (manifest
+//                     showPage): turn there and give it a fresh dwell, so
+//                     the user watches the page they are changing (Roku
+//                     b0c3f90, MainScene latestShowPage).
 //   MmRestartDwell    any touch on a page restarts its dwell, so a page
 //                     being worked on is not turned away (Roku 5f0ce93:
 //                     the page rotated as Dave ticked a box).
@@ -122,6 +126,7 @@ function commandDefinitions(W, H) {
     MmPageNext: { parameters: [], commands: [onRotation("${mmPageSwipe && mmN > 1 && !mmTurning}", [turn("${(mmCur + 1) % mmN}"), loop])] },
     MmPagePrev: { parameters: [], commands: [onRotation("${mmPageSwipe && mmN > 1 && !mmTurning}", [turn("${(mmCur + mmN - 1) % mmN}"), loop])] },
     MmRestartDwell: { parameters: [], commands: [onRotation("${mmN > 1 && !mmTurning}", [loop])] },
+    MmGoTo: { parameters: ["to"], commands: [onRotation("${mmN > 1 && !mmTurning && to != mmCur}", [turn("${to}"), loop])] },
   };
 }
 

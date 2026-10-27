@@ -97,3 +97,23 @@ test("scroll-strip checkboxes: ticks are contents (in place), held presses survi
   const behind = apl.inPlaceUpdate(vp, withStrip, paired, press, false, shown);
   assert.strictEqual(behind.commands.find((c) => c.property === "overrides").value, press);
 });
+
+test("a layout edit takes the screen to the page being edited (showPage)", () => {
+  const edited = JSON.parse(JSON.stringify(display));
+  edited.version = 8;
+  edited.manifest.showPage = 0;
+  // a whole new screen: starts where it was, then turns to the edited page
+  const d = apl.displayScreen(vp, edited, paired, "", false, 1);
+  assert.strictEqual(bind(d, "mmCur"), 1);
+  assert.deepStrictEqual(rootOf(d).onMount.find((c) => /^Mm/.test(c.type)), { type: "MmGoTo", to: 0 });
+  assert.ok(d.document.commands.MmGoTo);
+  // in place: the same turn, appended to the update
+  const v = apl.displayView(vp, display);
+  const up = apl.inPlaceUpdate(vp, edited, paired, "", false, { layout: v.layout, url: v.urls.join("|"), page: "2" });
+  assert.deepStrictEqual(up.commands[up.commands.length - 1], { type: "MmGoTo", to: 0 });
+  // already there, out of range, or absent: no turn
+  assert.ok(!apl.inPlaceUpdate(vp, edited, paired, "", false, { layout: v.layout, url: v.urls.join("|"), page: "0" }).commands.some((c) => c.type === "MmGoTo"));
+  edited.manifest.showPage = 9;
+  assert.ok(!apl.inPlaceUpdate(vp, edited, paired, "", false, { layout: v.layout, url: v.urls.join("|"), page: "2" }).commands.some((c) => c.type === "MmGoTo"));
+  assert.ok(rootOf(apl.displayScreen(vp, display, paired, "", false, 1)).onMount.some((c) => c.type === "MmRotate"));
+});

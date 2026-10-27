@@ -71,7 +71,8 @@ async function showDisplay(e, held, launch, quiet, overrides, shown) {
 function screenFor(e, d, overrides, shown) {
   const update = apl.inPlaceUpdate(e.vp, d, e, overrides, d.busy, shown);
   console.log("[Mango] " + e.code + " display v" + d.version + ", " + (d.manifest.pages || []).length + " page(s)" +
-    (update ? " in place" : " new screen") + (overrides ? ", holding presses " + overrides : ""));
+    (update ? " in place" : " new screen") + (d.manifest.showPage != null ? ", edit on page " + d.manifest.showPage : "") +
+    (overrides ? ", holding presses " + overrides : ""));
   // a whole new screen starts on the page the old one was showing
   return update || apl.displayScreen(e.vp, d, e, overrides, d.busy, shown && shown.page);
 }

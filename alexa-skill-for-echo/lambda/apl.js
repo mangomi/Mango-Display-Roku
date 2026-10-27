@@ -47,8 +47,7 @@ const crypto = require("crypto");
 // replacing it: a whole new document made the Echo rebuild everything and
 // reload every image, which blinked the full screen on each calendar
 // swipe (Dave, 2026-10-27). The Roku avoids it with A/B slots; here the
-// page image cross-fades (pageImages) and checkbox states are set in place.
-const FADE_MS = 200;
+// page image is swapped under the old one (pageImages) and checkbox states are set in place.
 const PAGE_ID = "mmPage";
 const PREV_ID = "mmPagePrev";
 
@@ -196,9 +195,9 @@ function displayView(vp, display) {
 
 /** One page's image as two stacked layers: mmPagePrev<i> (on top, normally
  * transparent) holds the OLD picture while mmPage<i> loads the new one,
- * then fades out - never an empty frame. The chain: prev loads the old URL
+ * then is lifted - never an empty frame. The chain: prev loads the old URL
  * -> its onLoad hands the page the new URL (mmNext) -> the page's onLoad
- * fades prev. inPlaceUpdate also sets the page directly after a delay, so
+ * hides prev. inPlaceUpdate also sets the page directly after a delay, so
  * a device that never fires onLoad still updates (only less smoothly). */
 function pageImages(view, i) {
   const { place, canvas, urls } = view;
@@ -209,7 +208,9 @@ function pageImages(view, i) {
   };
   return [
     { ...box, id: PAGE_ID + i, source: urls[i],
-      onLoad: [{ type: "AnimateItem", componentId: PREV_ID + i, duration: FADE_MS, value: [{ property: "opacity", to: 0 }] }] },
+      // onLoad runs in fast mode, where AnimateItem is dropped: the old
+      // picture is simply lifted once the new one has loaded beneath it
+      onLoad: [{ type: "SetValue", componentId: PREV_ID + i, property: "opacity", value: 0 }] },
     { ...box, id: PREV_ID + i, source: "", opacity: 0, bind: [{ name: "mmNext", value: "" }],
       onLoad: [{ type: "SetValue", componentId: PAGE_ID + i, property: "source", value: "${mmNext}" }] },
   ];
@@ -261,9 +262,11 @@ function displayScreen(vp, display, paired, overrides, busy, current) {
       { name: "mmPageUrls", value: view.urls.join("|") },
     ].concat(pagesMod.rootBinds(pages, cur, manifest.gestures)).concat(L.binds),
     commands: { ...pagesMod.commandDefinitions(vp.w, vp.h), ...celebrations.commandDefinitions() },
+    // after an edit, turn from where the screen was to the page edited;
+    // otherwise just start the dwell
     // effects are layout instances too (effect-all.js), so they stay small
     layouts: { ...touch.layouts(refreshArgs, paired.major, paired.minor, celebrateAfterTick(L)), ...require("./effect-all").layouts() },
-    onMount: [{ type: "MmRotate" }],
+    onMount: editedPage(manifest, cur) !== null ? [{ type: "MmGoTo", to: editedPage(manifest, cur) }] : [{ type: "MmRotate" }],
   }));
 }
 
@@ -276,6 +279,15 @@ function allTargets(page) {
   const items = ((page && page.targets && page.targets.items) || []).slice();
   for (const { o } of strips(page)) items.push(...(Array.isArray(o.boxes) ? o.boxes : []));
   return { targets: { items } };
+}
+
+/** The page a layout edit wants shown (manifest showPage, one-shot per
+ * render), when it is a real page other than `current`; else null. */
+function editedPage(manifest, current) {
+  const sp = Number(manifest && manifest.showPage);
+  const n = ((manifest && manifest.pages) || []).length;
+  if (!Number.isInteger(sp) || sp < 0 || sp >= n || String(sp) === String(current)) return null;
+  return sp;
 }
 
 /** The pending presses still to hold across every page. */
@@ -332,6 +344,9 @@ function inPlaceUpdate(vp, display, paired, overrides, busy, shown) {
     }
   });
   cmds.push(root("mmPageUrls", view.urls.join("|")));
+  // a layout edit on another page: go and show it (pages.js MmGoTo)
+  const sp = editedPage(view.manifest, shown.page);
+  if (sp !== null) cmds.push({ type: "MmGoTo", to: sp });
   // the lists' open-box counts follow the render (the finale check)
   for (const b of listsOf(view.pages, overrides).binds) cmds.push(root(b.name, b.value));
   return { type: "Alexa.Presentation.APL.ExecuteCommands", token: "display", commands: cmds };

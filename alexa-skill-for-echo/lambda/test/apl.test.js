@@ -129,14 +129,15 @@ test("in place: checkbox states set on their own boxes; a tick change alone keep
   assert.ok(!up.commands.some((c) => c.componentId === "mmPagePrev0"));
 });
 
-test("page layers: the new picture loads behind the old one, which then fades", () => {
+test("page layers: the new picture loads behind the old one, which is then lifted", () => {
   const items = layerOf(screens.display);
   const page = items.find((i) => i.id === "mmPage0"), prev = items.find((i) => i.id === "mmPagePrev0");
   assert.ok(items.indexOf(prev) > items.indexOf(page), "prev drawn above");
   assert.strictEqual(prev.opacity, 0);
   assert.deepStrictEqual([prev.onLoad[0].componentId, prev.onLoad[0].value], ["mmPage0", "${mmNext}"]);
-  assert.strictEqual(page.onLoad[0].componentId, "mmPagePrev0");
-  assert.strictEqual(page.onLoad[0].value[0].to, 0);
+  // fast mode: the old picture is lifted with a SetValue, not animated
+  assert.deepStrictEqual([page.onLoad[0].type, page.onLoad[0].componentId, page.onLoad[0].property, page.onLoad[0].value],
+    ["SetValue", "mmPagePrev0", "opacity", 0]);
 });
 
 test("in place: the clock's per-minute sample text and its measured width are not layout", () => {
@@ -144,4 +145,49 @@ test("in place: the clock's per-minute sample text and its measured width are no
   next.pages[0].overlays[0].elements.time.sample = "2:41";
   next.pages[0].overlays[0].elements.time.textRect = { x: 71, y: 103, w: 203, h: 300 };
   assert.ok(apl.inPlaceUpdate(vp, { ...v3, version: 4, manifest: next }, paired, "", false, shownFor(v3)));
+});
+
+// Fast-mode handlers (touch down/up/move/cancel, image load/fail, ticks)
+// silently drop commands that take time or reach the skill: on the Echo a
+// swipe never arrived (SendEvent in onUp) and no photo ever showed
+// (AnimateItem in onLoad). Nothing in any screen may put them there.
+const FAST = ["onDown", "onUp", "onMove", "onCancel", "onLoad", "onFail", "handleTick"];
+const SLOW = /"type":"(AnimateItem|Idle|SendEvent|Sequential|Parallel|Mm[A-Za-z]+)"/;
+function fastModeViolations(document) {
+  const bad = [];
+  (function walk(n, path) {
+    if (Array.isArray(n)) return n.forEach((c, i) => walk(c, path + "[" + i + "]"));
+    if (!n || typeof n !== "object") return;
+    for (const [k, v] of Object.entries(n)) {
+      if (FAST.includes(k)) {
+        const cmds = k === "handleTick" ? (v || []).map((h) => h.commands) : v;
+        const m = JSON.stringify(cmds || []).match(SLOW);
+        if (m) bad.push(path + "." + k + ": " + m[1]);
+      }
+      walk(v, path + "." + k);
+    }
+  })(document, "");
+  return bad;
+}
+
+test("no animation, wait, event or named command in a fast-mode handler, on any screen", () => {
+  const rich = JSON.parse(JSON.stringify(manifest));
+  rich.gestures = { pageSwipe: true, calendarScroll: true };
+  rich.pages[0].regions = [{ kind: "calendar", rect: { x: 100, y: 100, w: 500, h: 600 }, id: 9 }];
+  rich.pages[0].targets = { sprites: { empty: "e.png", checked: "c.png" }, items: [{ rect: { x: 10, y: 10, w: 20, h: 20 }, payload: { id: 1 } }] };
+  rich.pages[0].overlays.push(
+    { type: "slideshow", rect: { x: 0, y: 0, w: 400, h: 300 }, images: ["https://x/a.jpg", "https://x/b.jpg"], intervalSeconds: 15, transition: "slideleft" },
+    { type: "gif", rect: { x: 0, y: 400, w: 200, h: 200 }, stripFile: "g.png", frameW: 200, frameH: 200, cols: 3, rows: 1, frameCount: 3, frameMs: 100 },
+    { type: "countdown", elements: {} },
+  );
+  rich.effects = [{ type: "snow" }];
+  rich.pages.push(JSON.parse(JSON.stringify(rich.pages[0])));
+  for (const d of [
+    screens.pairing, screens.connected,
+    apl.displayScreen(vp, { manifest: rich, assetBase: "https://assets/", version: 3 }, paired, "", true, 0),
+  ]) {
+    assert.deepStrictEqual(fastModeViolations(d.document), []);
+    assert.deepStrictEqual(fastModeViolations(d.document.layouts || {}), []);
+    assert.deepStrictEqual(fastModeViolations(d.document.commands || {}), []);
+  }
 });

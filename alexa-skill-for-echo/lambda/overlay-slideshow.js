@@ -8,17 +8,20 @@
 //
 // It all runs on the Echo, like the clock: the skill only builds the
 // document. Two Images, A (below) and B (above), take turns as the photo
-// on show. A loop started on mount waits the interval, then hands the
-// next URL to the hidden one; only that Image's onLoad starts the
+// on show. A loop started on mount waits the interval, hands the next URL
+// to the hidden one and waits for it to load; only then does it play the
 // transition, so the old photo stays up until the new one is decoded -
-// never an empty frame (the idea of apl.js pageImages). The state lives
-// on the slideshow's container:
+// never an empty frame. Image onLoad/onFail run in FAST mode, where
+// AnimateItem and Idle are dropped (a first version started the
+// transition from onLoad and no photo ever appeared on the Echo,
+// 2026-10-27), so they only record what loaded; the loop, in normal mode,
+// does the animating. The state lives on the slideshow's container:
 //
 //   mmSsUrls   the photo list (mmSsPre + each + mmSsSuf: see affixes)
 //   mmSsIdx    the photo shown or loading
 //   mmSsFront  "A" | "B" | "" (none yet - the first reveal)
-//   mmSsBusy   a load + transition is in flight; the loop waits for it
-//   mmSsWait   ticks spent waiting (a load that never ends is given up)
+//   mmSsLoaded which Image last finished loading ("A" | "B" | "")
+//   mmSsFailed the photo being loaded failed
 //
 // APL has no z-order control, so B always draws over A. The transitions
 // are built so that does not matter: fade animates whichever of the two is
@@ -35,6 +38,7 @@ const DEFAULT_INTERVAL_S = 60;
 const MIN_INTERVAL_S = 3;
 const SWAP_MS = 3000;     // every transition, as on the Roku
 const GIVE_UP_MS = 30000; // a load still pending this long is abandoned
+const POLL_MS = 250;      // how often the loop looks for the load
 
 // One transform shape everywhere, so every AnimateItem's from/to match.
 const T = (tx = 0, ty = 0, sx = 1) => [{ translateX: tx }, { translateY: ty }, { scaleX: sx }];
@@ -130,32 +134,43 @@ function build(cfg, ctx) {
   const full = { position: "absolute", left: 0, top: 0, width: r.w, height: r.h };
   const set = (property, value, when) => ({ type: "SetValue", componentId: ids.box, property, value, when });
 
-  // Image `x` loaded: if it is the photo being waited for, bring it in
-  // (on its own sequencer, so a touch on the main one cannot cut the
-  // transition short), then hide the old one and let the loop go on
-  const image = (x, y) => ({
+  // An Image only reports (fast mode): which one loaded, or that it failed
+  const image = (x) => ({
     type: "Image", id: ids[x], ...full,
     source: x === "A" ? urls[0] : "",
     scale: crop ? "best-fill" : "best-fit",
     opacity: 0,
-    onLoad: [{
-      type: "Sequential", sequencer: "slideshow" + p + "fx", when: "${mmSsBusy && mmSsFront != '" + x + "'}",
-      commands: [
-        { type: "Sequential", when: "${mmSsFront == ''}", commands: [place(ids[x], T(), 0), anim(ids[x], SWAP_MS, EASE, null, null, 0, 1)] },
-        { type: "Sequential", when: "${mmSsFront != ''}", commands: swapCommands(transition, ids[x], ids[y], x === "B", r.w, r.h) },
-        { type: "SetValue", componentId: ids[y], property: "opacity", value: 0 },
-        set("mmSsFront", x), set("mmSsBusy", false), set("mmSsWait", 0),
-      ],
-    }],
-    // a broken URL: the old photo stays, the next tick moves past it
-    onFail: [set("mmSsBusy", false), set("mmSsWait", 0)],
+    onLoad: [set("mmSsLoaded", x)],
+    onFail: [set("mmSsFailed", true)],
   });
 
+  // wait (normal mode) until Image `x` has loaded, failed, or GIVE_UP_MS
+  const waitFor = (x) => ({
+    type: "Sequential", repeatCount: Math.ceil(GIVE_UP_MS / POLL_MS) - 1, // repeats after the first
+    commands: [{ type: "Idle", delay: POLL_MS, when: "${mmSsLoaded != '" + x + "' && !mmSsFailed}" }],
+  });
+  // hand the hidden Image `x` the next photo, wait for it, bring it in over
+  // `y`. Which one runs is decided once per pass (mmSsNext): checking
+  // mmSsFront here would run both, the second right after the first had
+  // swapped the front.
+  const advance = (x, y) => ({
+    type: "Sequential", when: "${mmSsNext == '" + x + "'}",
+    commands: [
+      set("mmSsLoaded", ""), set("mmSsFailed", false),
+      { type: "SetValue", componentId: ids[x], property: "source", value: "${mmSsPre + mmSsUrls[mmSsIdx] + mmSsSuf}" },
+      waitFor(x),
+      { type: "Sequential", when: "${mmSsLoaded == '" + x + "'}", commands: [
+        ...swapCommands(transition, ids[x], ids[y], x === "B", r.w, r.h),
+        { type: "SetValue", componentId: ids[y], property: "opacity", value: 0 },
+        set("mmSsFront", x),
+      ] },
+    ],
+  });
   const items = [];
   // page color sits under the photos (the layered page render is
   // transparent where they show through)
   if (cfg.pageColor) items.push({ type: "Frame", ...full, backgroundColor: cfg.pageColor });
-  items.push(image("A", "B"), image("B", "A"));
+  items.push(image("A"), image("B"));
   // the portal dims with filter:brightness(n): black at 1-n on top
   const brightness = typeof cfg.brightness === "number" ? cfg.brightness : 1;
   if (brightness < 1) items.push({ type: "Frame", ...full, backgroundColor: "black", opacity: 1 - Math.max(0, brightness) });
@@ -163,19 +178,25 @@ function build(cfg, ctx) {
   // one photo sent as a pair: nothing to cycle (and re-setting an Image to
   // the URL it already shows would never fire onLoad)
   const cycles = new Set(urls).size > 1;
-  const giveUp = Math.max(1, Math.ceil(GIVE_UP_MS / intervalMs));
-  const loop = {
-    type: "Sequential", sequencer: "slideshow" + p, repeatCount: 1000000,
+  const run = {
+    type: "Sequential", sequencer: "slideshow" + p,
     commands: [
-      { type: "Idle", delay: intervalMs },
-      set("mmSsWait", "${mmSsBusy ? mmSsWait + 1 : 0}"),
-      set("mmSsBusy", "${mmSsBusy && mmSsWait < " + giveUp + "}"),
-      { type: "Sequential", when: "${!mmSsBusy}", commands: [
-        set("mmSsIdx", "${(mmSsIdx + 1) % mmSsN}"),
-        set("mmSsBusy", true),
-        { type: "SetValue", componentId: ids.A, property: "source", value: "${mmSsPre + mmSsUrls[mmSsIdx] + mmSsSuf}", when: "${mmSsFront != 'A'}" },
-        { type: "SetValue", componentId: ids.B, property: "source", value: "${mmSsPre + mmSsUrls[mmSsIdx] + mmSsSuf}", when: "${mmSsFront == 'A'}" },
+      // the first photo always fades in (nothing meaningful to slide from)
+      waitFor("A"),
+      { type: "Sequential", when: "${mmSsLoaded == 'A'}", commands: [
+        place(ids.A, T(), 0), anim(ids.A, SWAP_MS, EASE, null, null, 0, 1), set("mmSsFront", "A"),
       ] },
+      ...(cycles ? [{
+        type: "Sequential", repeatCount: 1000000,
+        commands: [
+          { type: "Idle", delay: intervalMs },
+          set("mmSsIdx", "${(mmSsIdx + 1) % mmSsN}"),
+          set("mmSsNext", "${mmSsFront == 'A' ? 'B' : 'A'}"),
+          // a photo that failed (or never showed) is simply passed over
+          advance("B", "A"),
+          advance("A", "B"),
+        ],
+      }] : []),
     ],
   };
 
@@ -189,10 +210,11 @@ function build(cfg, ctx) {
       { name: "mmSsN", value: urls.length },
       { name: "mmSsIdx", value: 0 },
       { name: "mmSsFront", value: "" },
-      { name: "mmSsBusy", value: true }, // A is loading the first photo
-      { name: "mmSsWait", value: 0 },
+      { name: "mmSsLoaded", value: "" },
+      { name: "mmSsFailed", value: false },
+      { name: "mmSsNext", value: "" },
     ],
-    onMount: cycles ? [loop] : [],
+    onMount: [run],
     items,
   }];
 }

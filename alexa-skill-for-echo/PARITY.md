@@ -47,7 +47,6 @@ channel commit when this tracker started.
 | Clock | done | verified on hardware |
 | Countdown | todo | |
 | Touch: checkbox taps (targets → `/interact`) | built | instant tick, held until a render agrees; awaiting hardware test |
-
 | Touch: calendar swipes (regions) | built | honours `gestures.calendarScroll`; awaiting hardware test |
 | Touch: page swipes left/right | todo | comes with page rotation |
 | Page rotation + transitions | todo | |

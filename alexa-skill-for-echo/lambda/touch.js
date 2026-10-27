@@ -26,6 +26,7 @@ const FAST_MS = 1500;
 const FAST_REPEATS = 10;
 const OVERRIDE_HOLD_MS = 30000; // a press the portal never confirms is dropped
 const SWIPE_MIN_DP = 40;
+const SWIPE_GAP_MS = 1200;
 const PAD = 16; // canvas px of extra finger room around a checkbox (Roku highlight: 10)
 
 /** Parse "id:1:t,id:0:t," -> Map id -> { checked, t }; keeps each id's latest. */
@@ -143,7 +144,10 @@ function touchComponents(ctx) {
       under.push({
         type: "TouchWrapper",
         position: "absolute", left: r.x, top: r.y, width: r.w, height: r.h,
-        bind: [{ name: "mmDownY", value: 0 }, { name: "mmSwipe", value: "" }],
+        // mmLastSent: one finger swipe reached the skill 2-3 times within a
+        // second on the Echo Show 15 (2026-10-27), each moving the calendar;
+        // a second swipe inside SWIPE_GAP_MS is dropped
+        bind: [{ name: "mmDownY", value: 0 }, { name: "mmSwipe", value: "" }, { name: "mmLastSent", value: 0 }],
         item: { type: "Container", width: "100%", height: "100%" },
         onDown: [
           { type: "SetValue", property: "mmDownY", value: "${event.component.y}" },
@@ -155,8 +159,15 @@ function touchComponents(ctx) {
           { type: "SetValue", property: "mmSwipe", when: "${event.component.y - mmDownY > " + SWIPE_MIN_DP + "}", value: "swipedown" },
         ],
         onPress: [
-          { type: "Sequential", when: "${mmSwipe == 'swipeup'}", commands: send("swipeup") },
-          { type: "Sequential", when: "${mmSwipe == 'swipedown'}", commands: send("swipedown") },
+          {
+            type: "Sequential",
+            when: "${mmSwipe != '' && utcTime - mmLastSent > " + SWIPE_GAP_MS + "}",
+            commands: [
+              { type: "SetValue", property: "mmLastSent", value: "${utcTime}" },
+              { type: "Sequential", when: "${mmSwipe == 'swipeup'}", commands: send("swipeup") },
+              { type: "Sequential", when: "${mmSwipe == 'swipedown'}", commands: send("swipedown") },
+            ],
+          },
           { type: "SetValue", property: "mmSwipe", value: "" },
         ],
       });

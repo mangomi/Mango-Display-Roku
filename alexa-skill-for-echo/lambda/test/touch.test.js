@@ -73,7 +73,9 @@ test("calendar swipes only when the user allows calendar scrolling, and under th
   const sends = (cmds) => JSON.stringify(cmds || []).includes("SendEvent");
   assert.ok(!sends(cal.onDown) && !sends(cal.onUp), "SendEvent in a fast-mode handler");
   assert.strictEqual(cal.onUp.find((c) => /mmDownY - event/.test(c.when)).value, "swipeup");
-  const up = cal.onPress.find((c) => /'swipeup'/.test(c.when));
+  const gate = cal.onPress[0];
+  assert.match(gate.when, /utcTime - mmLastSent > 1200/); // one swipe, one send
+  const up = gate.commands.find((c) => /'swipeup'/.test(c.when || ""));
   assert.deepStrictEqual(up.commands[0].arguments.slice(0, 6), ["touch", "swipeup", "0", "700", "500", "31"]);
 });
 

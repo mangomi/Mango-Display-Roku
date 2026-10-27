@@ -1,0 +1,11 @@
+{
+  "name": "mango-display-echo",
+  "version": "0.1.0",
+  "description": "Mango Display Alexa skill for Echo Show - Lambda handler",
+  "main": "index.js",
+  "private": true,
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

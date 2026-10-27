@@ -7,6 +7,7 @@ TV that cannot run the portal itself:
 |---|---|
 | `components/`, `source/`, `manifest`, `images/`, `fonts/` | The **Roku channel** (BrightScript / SceneGraph). |
 | `tvos/` | The **Apple TV app** (Swift, Xcode project `tvos/MangoDisplayTV.xcodeproj`). |
+| `echo-show/` | The **Echo Show Alexa skill** (Node Lambda + APL), V1: pairing and the clock. See `ECHO_SHOW.md`. |
 | `render-service/` | The **render service** (Node + headless Chromium on ECS) that runs each display's live portal, captures the pages, extracts native widget overlays and answers the devices' long-polls. Shared by both TV clients. |
 | `signing/` | Roku packages that were uploaded to the Roku dashboard, plus signing notes. |
 | `tools/` | Device simulator and other helpers. |
@@ -117,5 +118,6 @@ Home → Settings → Theme → Screensaver wait time → Disable screensaver.
 | `MANIFEST.md` | the manifest the devices consume |
 | `NATIVE_WIDGETS.md` | how overlays (clock, slideshow, gif, strips…) are extracted |
 | `APPLE_TV.md`, `tvos/PARITY.md`, `TVOS_PARITY_QUEUE.md` | the Apple TV port and what it still lacks vs. Roku |
+| `ECHO_SHOW.md` | the Echo Show skill: how it maps onto the TV clients, local runs, deploy steps |
 | `ROKU_EXCLUSIONS.md` | webapp options gated off for painted TVs |
 | `HANDOFF.md` | the original fleet/pairing/HTTPS write-up (rendering sections superseded by `LIVE_PORTAL.md`) |

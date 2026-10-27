@@ -1,0 +1,33 @@
+{
+  "manifest": {
+    "publishingInformation": {
+      "locales": {
+        "en-US": {
+          "name": "Mango Display",
+          "summary": "Shows your Mango Display on your Echo Show.",
+          "description": "Turns your Echo Show into a Mango Display. Open the skill, enter the code it shows at app.mangodisplay.com, and your display appears on the screen.",
+          "examplePhrases": ["Alexa, open Mango Display", "Alexa, ask Mango Display to show my display"],
+          "keywords": ["display", "calendar", "clock", "dashboard"]
+        }
+      },
+      "isAvailableWorldwide": false,
+      "distributionCountries": ["US"],
+      "category": "ORGANIZERS_AND_ASSISTANTS",
+      "testingInstructions": "Open the skill on an Echo Show. Claim the code shown at testapp.mangodisplay.com."
+    },
+    "apis": {
+      "custom": {
+        "endpoint": { "uri": "arn:aws:lambda:us-east-1:ACCOUNT_ID:function:mango-display-echo-test" },
+        "interfaces": [
+          {
+            "type": "ALEXA_PRESENTATION_APL",
+            "supportedViewports": [
+              { "mode": "HUB", "shape": "RECTANGLE", "minWidth": 480, "maxWidth": 2560, "minHeight": 480, "maxHeight": 2560 }
+            ]
+          }
+        ]
+      }
+    },
+    "manifestVersion": "1.0"
+  }
+}

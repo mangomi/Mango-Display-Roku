@@ -3,7 +3,10 @@
 **Status (2026-10-27):** V1 code in `echo-show/`. Verified end to end from
 a local run against test: ET745724581 registered, claimed by Dave
 (major 1 / minor 822), "Connected" for ~15s while the fleet booted it,
-then the page with its background and live clock. Not yet deployed to
+then the page with its background and live clock. Since then the code is
+derived from the Alexa device id instead of stored (no database), so the
+local fake Echo's code is now **ET871919413** (registered on test, not
+claimed); ET745724581 is an orphaned test record. Not yet deployed to
 Alexa; has not run on an Echo.
 
 V1 scope, as asked by Dave: **register the device, then show the
@@ -22,7 +25,7 @@ and tvOS (`LIVE_PORTAL.md`, `MANIFEST.md`). Nothing server-side is new:
 
 | | Roku / Apple TV | Echo Show |
 |---|---|---|
-| Device code | `RK…` / `ATV…` + 9 digits 1–9, kept on the device | **`ET` + 9 digits 1–9**, kept in DynamoDB keyed by the Alexa device id (the Echo runs no code of ours and has no storage) |
+| Device code | `RK…` / `ATV…` + 9 digits 1–9, kept on the device | **`ET` + 9 digits 1–9**, derived from a hash of the Alexa device id (the Echo runs no code of ours and has no storage; the id is stable, so the code is too - nothing stored) |
 | Pairing | loop: `mirrors/deviceId/{code}` every 5s, `saveMirror` once if unknown | same calls, one iteration per request; the pairing screen's APL `handleTick` sends a UserEvent every 5s |
 | Updates | `/wait` long-poll held 50s | Lambda cannot hold one, so `/wait?since=-1` (answers at once, manifest inline) and a 60s `/version` check from the display screen's tick |
 | Clock | device composes the time from manifest values every 5s | the manifest's rules become APL expressions over `utcTime + tzOffset`; the Echo re-evaluates them itself, no request per minute |
@@ -32,13 +35,14 @@ and tvOS (`LIVE_PORTAL.md`, `MANIFEST.md`). Nothing server-side is new:
 ```
 echo-show/
   lambda/index.js      request handler: launch, UserEvents (pair / loading / refresh)
-  lambda/identity.js   ET code per Echo (DynamoDB, or memory for local runs)
+  lambda/identity.js   ET code per Echo, derived from the Alexa device id
   lambda/backend.js    pairing step, /wait and /version against the render service
   lambda/clock.js      manifest clock -> APL Text with live time/date expressions
   lambda/apl.js        pairing and display screens; canvas -> viewport scaling
   lambda/env.js        test by default; MANGO_ENV=production on the prod function only
   skill-package/       skill manifest + interaction model ("Alexa, open Mango Display")
   tools/try-skill.js   run the handler locally as an Echo Show 15
+  tools/preview-apl.js rough HTML preview of a screen try-skill.js wrote
 ```
 
 `cd echo-show/lambda && npm test` runs the unit tests (code format, clock
@@ -47,41 +51,52 @@ composition).
 ## Running it locally
 
 ```
-node echo-show/tools/try-skill.js --out /tmp/echo --ticks 3            # mint + register a new ET code
-node echo-show/tools/try-skill.js --code ET745724581 --out /tmp/echo   # resume as that Echo
+node echo-show/tools/try-skill.js --out /tmp/echo --ticks 3                 # the fake Echo (ET871919413)
+node echo-show/tools/try-skill.js --device amzn1.ask.device.X --out /tmp/echo  # a different Echo, new code
 ```
 
 Each screen's APL document is written to `--out`;
 `node echo-show/tools/preview-apl.js <out>/apl-display.json > p.html` turns
 one into a rough HTML preview (clock expressions evaluated). For the real
-renderer, paste the JSON into the APL authoring tool (developer console → Build → Multimodal Responses) to see
-it. Test code from the first run: **ET745724581** (registered on test
-2026-10-26).
+renderer, paste the JSON into the APL authoring tool (developer console →
+Build → Multimodal Responses).
 
 ## Deploying to a real Echo Show (test)
 
-1. **DynamoDB** table `mango-display-echo-devices`, partition key
-   `alexaDeviceId` (String), on-demand.
-2. **Lambda** `mango-display-echo-test`, Node.js 20, handler
-   `index.handler`, timeout 8s, code = `echo-show/lambda/` zipped. Env:
-   `DEVICE_TABLE=mango-display-echo-devices` (optional
-   `LOGO_URL=<public https png>` for the logo; without it the pairing
-   screen shows a "Mango Display" wordmark). Role needs
-   `dynamodb:GetItem`/`PutItem` on the table.
-3. **Skill** in the Alexa developer console (the Amazon account the
+AWS account 945710099949, us-east-1. Every resource tagged
+`Project=echo show app`, `Environment=test`,
+`Purpose=Mango Display Alexa skill for Echo Show`.
+
+1. **IAM role** `echo-show-app-test-lambda`: Lambda trust, logs only
+   (AWSLambdaBasicExecutionRole).
+2. **Log group** `/aws/lambda/echo-show-app-test`, 14-day retention.
+3. **Lambda** `echo-show-app-test`, Node.js 22, 256 MB, handler
+   `index.handler`, timeout 8s, code = `echo-show/lambda/` zipped (no
+   dependencies). Optional env `LOGO_URL=<public https png>` for the logo;
+   without it the pairing screen shows a "Mango Display" wordmark.
+4. **Skill** in the Alexa developer console (the Amazon account the
    Echo is signed into): custom skill, own-provisioned backend. Paste
    `skill-package/skill.json` (put the Lambda ARN in `endpoint.uri`) and
    `interactionModels/custom/en-US.json`; enable the **Alexa
    Presentation Language** interface; build.
-4. On the Lambda, add an **Alexa Skills Kit** trigger restricted to the
+5. On the Lambda, add an **Alexa Skills Kit** trigger restricted to the
    skill id.
-5. Developer console → Test → enable testing in **Development**. On the
+6. Developer console → Test → enable testing in **Development**. On the
    Echo Show: "Alexa, open Mango Display". The code appears; claim it
    at testapp.mangodisplay.com.
 
 Logs: CloudWatch, every line prefixed `[Mango]` as on the TVs.
 
+Cost: about $0/month while testing (Lambda free tier). The render
+service share stays under `Project=Roku` - it is shared.
+
 ## Open items / risks to check on hardware
+
+- **Shared codes:** 9 digits 1-9 is 387M codes. Like the random Roku and
+  tvOS codes, N displays share one with odds ~N²/774M (about 1 in 800 at
+  1,000 Echos, ~13 pairs at 100,000). A derived code cannot be re-rolled,
+  so if one ever collides the fix is a per-device override (that would
+  bring back a small table). Same exposure as the other platforms today.
 
 - **Screen timeout.** The session is kept open (no `shouldEndSession`)
   and the screen ticks, but Alexa may still close a skill's screen after

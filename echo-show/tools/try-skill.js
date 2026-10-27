@@ -2,16 +2,17 @@
 // Drives the skill handler locally the way an Echo Show 15 would, against
 // the TEST backend and render service - no Alexa account needed.
 //
-//   node tools/try-skill.js [--code ET123456789] [--portrait] [--out DIR] [--ticks N]
+//   node tools/try-skill.js [--device ID] [--portrait] [--out DIR] [--ticks N]
 //
-// Without --code it mints a new code and registers it on the test backend
-// (exactly what a real Echo does on first launch). Pass the same code back
-// to resume as that Echo. Each screen's APL document is written to --out,
+// The Echo's code is derived from its Alexa device id (identity.js); the
+// default fake id always gives the same code, so re-runs resume as the
+// same Echo. Pass another --device to be a different, unregistered Echo -
+// its first launch registers its code on the test backend, exactly what a
+// real Echo does. Each screen's APL document is written to --out,
 // ready to paste into the APL authoring tool in the Alexa developer console.
 
 const fs = require("fs");
 const path = require("path");
-const identity = require("../lambda/identity");
 const { handler } = require("../lambda/index");
 
 const args = process.argv.slice(2);
@@ -19,8 +20,7 @@ const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1
 const outDir = opt("--out") || ".";
 const ticks = parseInt(opt("--ticks") || "0", 10);
 const portrait = args.includes("--portrait");
-const DEVICE = "amzn1.ask.device.LOCALTEST";
-identity.setStore(identity.memoryStore(opt("--code") ? { [DEVICE]: opt("--code") } : {}));
+const DEVICE = opt("--device") || "amzn1.ask.device.LOCALTEST";
 
 const viewport = portrait
   ? { pixelWidth: 1080, pixelHeight: 1920, currentPixelWidth: 1080, currentPixelHeight: 1920, dpi: 160 }

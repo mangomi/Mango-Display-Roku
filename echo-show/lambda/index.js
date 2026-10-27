@@ -5,7 +5,7 @@
 // does ONE step of what a TV client does in a loop, then answers with the
 // next screen, or with nothing to leave the current one up:
 //
-//   launch   -> code for this Echo (identity.js), one pairing step; a
+//   launch   -> this Echo's code (identity.js), one pairing step; a
 //               claimed display goes straight to its page
 //   "pair"   -> every 5s on the pairing screen: one pairing step
 //   "loading"-> every 5s on "Connected": is the first page published yet?
@@ -66,7 +66,7 @@ async function onLaunch(envelope) {
     return respond({}, { speech: "Mango Display needs an Echo with a screen, like the Echo Show.", end: true });
   }
   const vp = apl.viewportDp(envelope);
-  const code = await identity.getOrCreateCode(envelope.context.System.device.deviceId);
+  const code = identity.codeFor(envelope.context.System.device.deviceId);
   console.log("[Mango] launch on " + env.name + ": code " + code + ", screen " + vp.pw + "x" + vp.ph);
   const st = { code, w: vp.pw, h: vp.ph };
   return pairStep(st, vp, false);

@@ -1,70 +1,32 @@
-// The display's permanent identity: "ET" + 9 digits, generated once per
-// Echo and kept forever. The Roku keeps its code in roRegistry and tvOS in
-// the Keychain; an Alexa skill has no storage ON the device, so the code
-// lives in the skill's table keyed by the Alexa device id
-// (context.System.device.deviceId - stable for this skill on this Echo,
-// survives the skill being disabled and re-enabled only if Amazon keeps
-// the id, which it does for the same account + device).
+// The display's permanent identity: "ET" + 9 digits, the same for an Echo
+// forever. The Roku keeps a random code in roRegistry and tvOS in the
+// Keychain; an Alexa skill has no storage on the device, so instead of
+// storing a code we DERIVE it from the Alexa device id
+// (context.System.device.deviceId), which Alexa sends with every request
+// and keeps stable for this skill on this Echo. Same Echo -> same code,
+// no table to keep (Dave, 2026-10-27).
+//
+// What changes the code: anything that changes the Alexa device id - the
+// Echo deregistered and set up again, or the skill recreated under a new
+// skill id. Either way the Echo shows a new code to claim, just as a
+// reinstalled Roku would without its registry.
 
 const crypto = require("crypto");
 
 const PREFIX = "ET";
+const DIGITS = 9;
 
-/** "ET" + 9 random digits 1-9 - the Roku/Tizen/tvOS generator's range,
- * so codes never contain a zero. The prefix is the only backend-visible
- * difference from the other painted TVs. */
-function generateCode() {
+/** "ET" + 9 digits 1-9 from a hash of the Alexa device id - the
+ * Roku/Tizen/tvOS digit range, so codes never contain a zero. 9^9 (387M)
+ * codes; the hash spreads device ids evenly across them. */
+function codeFor(alexaDeviceId) {
+  let n = BigInt("0x" + crypto.createHash("sha256").update(alexaDeviceId).digest("hex"));
   let digits = "";
-  for (let i = 0; i < 9; i++) digits += String(crypto.randomInt(1, 10));
+  for (let i = 0; i < DIGITS; i++) {
+    digits += String(Number(n % 9n) + 1);
+    n /= 9n;
+  }
   return PREFIX + digits;
 }
 
-/** DynamoDB store: table with partition key `alexaDeviceId` (string).
- * Table name from DEVICE_TABLE; the SDK ships with the Lambda runtime. */
-function dynamoStore(table) {
-  const { DynamoDBClient, GetItemCommand, PutItemCommand } = require("@aws-sdk/client-dynamodb");
-  const db = new DynamoDBClient({});
-  return {
-    async get(alexaDeviceId) {
-      const r = await db.send(new GetItemCommand({ TableName: table, Key: { alexaDeviceId: { S: alexaDeviceId } } }));
-      return r.Item && r.Item.code ? r.Item.code.S : null;
-    },
-    async put(alexaDeviceId, code) {
-      // conditional: two simultaneous first launches must not mint two codes
-      try {
-        await db.send(new PutItemCommand({
-          TableName: table,
-          Item: { alexaDeviceId: { S: alexaDeviceId }, code: { S: code }, createdAt: { S: new Date().toISOString() } },
-          ConditionExpression: "attribute_not_exists(alexaDeviceId)",
-        }));
-        return code;
-      } catch (e) {
-        if (e.name === "ConditionalCheckFailedException") return this.get(alexaDeviceId);
-        throw e;
-      }
-    },
-  };
-}
-
-/** In-memory store for local runs (tools/try-skill.js). */
-function memoryStore(seed = {}) {
-  const m = new Map(Object.entries(seed));
-  return {
-    async get(id) { return m.get(id) || null; },
-    async put(id, code) { if (!m.has(id)) m.set(id, code); return m.get(id); },
-  };
-}
-
-let store = null;
-function defaultStore() {
-  if (!store) store = process.env.DEVICE_TABLE ? dynamoStore(process.env.DEVICE_TABLE) : memoryStore();
-  return store;
-}
-
-async function getOrCreateCode(alexaDeviceId, s = defaultStore()) {
-  const existing = await s.get(alexaDeviceId);
-  if (existing) return existing;
-  return s.put(alexaDeviceId, generateCode());
-}
-
-module.exports = { PREFIX, generateCode, getOrCreateCode, memoryStore, setStore: (s) => { store = s; } };
+module.exports = { PREFIX, codeFor };

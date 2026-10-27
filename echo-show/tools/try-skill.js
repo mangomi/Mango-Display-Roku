@@ -28,10 +28,10 @@ const viewport = portrait
   ? { pixelWidth: 1080, pixelHeight: 1920, currentPixelWidth: 1080, currentPixelHeight: 1920, dpi: 160 }
   : { pixelWidth: 1920, pixelHeight: 1080, currentPixelWidth: 1920, currentPixelHeight: 1080, dpi: 160 };
 
-function envelope(request, attributes) {
+function envelope(request) {
   return {
     version: "1.0",
-    session: { new: !attributes, attributes: attributes || {} },
+    session: { new: request.type === "LaunchRequest", sessionId: "amzn1.echo-api.session.LOCAL" },
     context: {
       System: { user: { userId: USER }, device: { deviceId: DEVICE, supportedInterfaces: { "Alexa.Presentation.APL": { runtime: { maxVersion: "2023.2" } } } } },
       Viewport: viewport,
@@ -54,11 +54,14 @@ function report(step, res) {
 (async () => {
   let res = await handler(envelope({ type: "LaunchRequest" }));
   report("launch", res);
+  // what the screen on display would send: its heartbeat's SendEvent
+  let screen = res.response.directives[0].document;
   for (let i = 0; i < ticks; i++) {
-    await new Promise((r) => setTimeout(r, 5000));
-    const arg = res.sessionAttributes.major ? (res.sessionAttributes.version == null ? "loading" : "refresh") : "pair";
-    res = await handler(envelope({ type: "Alexa.Presentation.APL.UserEvent", arguments: [arg] }, res.sessionAttributes));
-    report("tick " + (i + 1) + " (" + arg + ")", res);
+    const loop = screen.onMount[0];
+    await new Promise((r) => setTimeout(r, Math.min(loop.commands[0].delay, 5000)));
+    const args = loop.commands[1].arguments;
+    res = await handler(envelope({ type: "Alexa.Presentation.APL.UserEvent", arguments: args }));
+    report("tick " + (i + 1) + " " + JSON.stringify(args), res);
+    if (res.response.directives.length) screen = res.response.directives[0].document;
   }
-  console.log("session:", JSON.stringify(res.sessionAttributes));
 })();

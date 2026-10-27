@@ -1,30 +1,33 @@
 // Mango Display for Echo Show - the skill's Lambda handler.
 //
 // The Echo runs no code of ours; Alexa calls this handler on launch and on
-// every APL UserEvent the screens send back (apl.js handleTick). Each call
+// every APL UserEvent the screens send back (apl.js heartbeat). Each call
 // does ONE step of what a TV client does in a loop, then answers with the
 // next screen, or with nothing to leave the current one up:
 //
-//   launch   -> this Echo's code (identity.js), one pairing step; a
-//               claimed display goes straight to its page
-//   "pair"   -> every 5s on the pairing screen: one pairing step
-//   "loading"-> every 5s on "Connected": is the first page published yet?
-//   "refresh"-> every 60s on the display: did the version move?
+//   launch                     -> this Echo's code (identity.js), one
+//                                 pairing step; a claimed display goes
+//                                 straight to its page
+//   ["pair"]                   -> every 5s on the pairing screen
+//   ["loading", "", maj, min]  -> every 5s on "Connected": first page yet?
+//   ["refresh", ver, maj, min] -> every 10s on the display: version moved?
+//   ["rotate", ...one of the above] -> the Echo Show 15 was turned: redraw
 //
-// What a step needs to remember lives in the session attributes. The
-// response never sets shouldEndSession, so the session stays open behind
-// the screen without the microphone listening.
+// The handler keeps no state between calls. Alexa closes the session ~30s
+// after a response while the screen stays up, so each event carries what
+// is needed to answer it, and the code is re-derived from the request.
+// The response never sets shouldEndSession, so the microphone stays shut.
 
 const env = require("./env");
 const identity = require("./identity");
 const backend = require("./backend");
 const apl = require("./apl");
 
-function respond(sessionAttributes, { directives = [], speech, end } = {}) {
+function respond({ directives = [], speech, end } = {}) {
   const response = { directives };
   if (speech) response.outputSpeech = { type: "PlainText", text: speech };
   if (end !== undefined) response.shouldEndSession = end;
-  return { version: "1.0", sessionAttributes, response };
+  return { version: "1.0", response };
 }
 
 function supportsApl(envelope) {
@@ -32,65 +35,73 @@ function supportsApl(envelope) {
   return !!(ifs && ifs["Alexa.Presentation.APL"]);
 }
 
-/** Paired: fetch the display and show it, or "Connected" while it boots. */
-async function showDisplay(st, vp, launch) {
-  const d = await backend.fetchDisplay(st, launch ? null : st.version, launch);
+/** This request's Echo: code, registration size, viewport. */
+function echoOf(envelope) {
+  const sys = envelope.context.System;
+  const vp = apl.viewportDp(envelope);
+  return { code: identity.codeFor(sys.device.deviceId, sys.user && sys.user.userId), w: vp.pw, h: vp.ph, vp };
+}
+
+/** Paired: show the display if it moved past `held` (null = always), or
+ * "Connected" while the fleet boots it. `quiet`: answer with nothing
+ * instead of redrawing a screen that is already up. */
+async function showDisplay(e, held, launch, quiet) {
+  const d = await backend.fetchDisplay(e, held, launch);
   if (d.state === "ready") {
-    st.version = d.version;
-    console.log("[Mango] " + st.code + " display v" + d.version + ", " + (d.manifest.pages || []).length + " page(s)");
-    return respond(st, { directives: [apl.displayScreen(vp, d)] });
+    if (quiet && held !== null && String(d.version) === String(held)) return respond();
+    console.log("[Mango] " + e.code + " display v" + d.version + ", " + (d.manifest.pages || []).length + " page(s)");
+    return respond({ directives: [apl.displayScreen(e.vp, d, e)] });
   }
-  if (d.state === "unpaired") return backToPairing(st, vp);
-  return respond(st, { directives: [apl.pairingScreen(vp, st.code, true)] });
+  if (d.state === "unpaired") {
+    // removed in the webapp: same code, pairing screen again
+    console.log("[Mango] " + e.code + " unpaired - back to pairing");
+    return respond({ directives: [apl.pairingScreen(e.vp, e.code, false)] });
+  }
+  if (quiet) return respond(); // still booting (or a hiccup): leave the screen up
+  return respond({ directives: [apl.pairingScreen(e.vp, e.code, true, e)] });
 }
 
-/** Removed in the webapp: same code, pairing screen again (manifest `paired:false`). */
-function backToPairing(st, vp) {
-  console.log("[Mango] " + st.code + " unpaired - back to pairing");
-  delete st.major; delete st.minor; delete st.version;
-  return respond(st, { directives: [apl.pairingScreen(vp, st.code, false)] });
-}
-
-async function pairStep(st, vp, onScreen) {
-  const p = await backend.pairingStep(st.code, st.w, st.h);
+/** One pairing iteration. `onScreen`: the pairing screen is already up. */
+async function pairStep(e, onScreen) {
+  const p = await backend.pairingStep(e.code, e.w, e.h);
   if (p.state === "linked") {
-    st.major = p.major; st.minor = p.minor;
-    return showDisplay(st, vp, true);
+    e.major = p.major; e.minor = p.minor;
+    return showDisplay(e, null, true, false);
   }
-  // still waiting: leave the pairing screen up (or put it up on launch)
-  return respond(st, onScreen ? {} : { directives: [apl.pairingScreen(vp, st.code, false)] });
+  return respond(onScreen ? {} : { directives: [apl.pairingScreen(e.vp, e.code, false)] });
 }
 
 async function onLaunch(envelope) {
   if (!supportsApl(envelope)) {
-    return respond({}, { speech: "Mango Display needs an Echo with a screen, like the Echo Show.", end: true });
+    return respond({ speech: "Mango Display needs an Echo with a screen, like the Echo Show.", end: true });
   }
-  const vp = apl.viewportDp(envelope);
-  const sys = envelope.context.System;
-  const code = identity.codeFor(sys.device.deviceId, sys.user && sys.user.userId);
-  console.log("[Mango] launch on " + env.name + ": code " + code + ", screen " + vp.pw + "x" + vp.ph);
-  const st = { code, w: vp.pw, h: vp.ph };
-  return pairStep(st, vp, false);
+  const e = echoOf(envelope);
+  console.log("[Mango] launch on " + env.name + ": code " + e.code + ", screen " + e.w + "x" + e.h);
+  return pairStep(e, false);
 }
 
 async function onUserEvent(envelope) {
-  const st = (envelope.session && envelope.session.attributes) || {};
-  const vp = apl.viewportDp(envelope);
-  const what = (envelope.request.arguments || [])[0];
-  if (!st.code) return onLaunch(envelope); // lost session state: start over
-  if (what === "pair") return pairStep(st, vp, true);
-  if (!st.major) return pairStep(st, vp, false);
-  if (what === "loading") {
-    const r = await showDisplay(st, vp, false);
-    // still booting: the "Connected" screen is already up, don't redraw it
-    return r.response.directives[0] && r.response.directives[0].token === "display" ? r : respond(st);
-  }
+  const e = echoOf(envelope);
+  let args = (envelope.request.arguments || []).map((a) => (a == null ? "" : String(a)));
+  const rotate = args[0] === "rotate";
+  if (rotate) args = args.slice(1);
+  const [what, ver, major, minor] = args;
+  // the stay-awake test's evidence: does the heartbeat still arrive, in
+  // which session, and how long after launch (CloudWatch)
+  console.log("[Mango] event " + (rotate ? "rotate/" : "") + what + " " + e.code +
+    " session=" + (envelope.session ? String(envelope.session.sessionId).slice(-8) + (envelope.session.new ? " (new)" : "") : "none") +
+    " screen=" + e.w + "x" + e.h);
+  if (major) { e.major = major; e.minor = minor; }
+
+  if (what === "pair" || !e.major) return pairStep(e, !rotate);
+  if (what === "loading") return showDisplay(e, null, false, !rotate);
   if (what === "refresh") {
-    const v = await backend.currentVersion(st);
-    if (v !== null && v !== st.version) return showDisplay(st, vp, false);
-    return respond(st);
+    if (rotate) return showDisplay(e, null, false, false);
+    const v = await backend.currentVersion(e);
+    if (v === null || String(v) === ver) return respond();
+    return showDisplay(e, ver, false, true);
   }
-  return respond(st);
+  return respond();
 }
 
 exports.handler = async (envelope) => {
@@ -103,11 +114,9 @@ exports.handler = async (envelope) => {
         return await onUserEvent(envelope);
       case "IntentRequest": {
         const name = req.intent.name;
-        if (name === "AMAZON.StopIntent" || name === "AMAZON.CancelIntent") return respond({}, { end: true });
+        if (name === "AMAZON.StopIntent" || name === "AMAZON.CancelIntent") return respond({ end: true });
         if (name === "AMAZON.HelpIntent") {
-          return respond((envelope.session && envelope.session.attributes) || {}, {
-            speech: "Mango Display shows your display on this screen. Enter the code on the screen at " + env.setupHost + " to connect it.",
-          });
+          return respond({ speech: "Mango Display shows your display on this screen. Enter the code on the screen at " + env.setupHost + " to connect it." });
         }
         return await onLaunch(envelope);
       }
@@ -115,10 +124,10 @@ exports.handler = async (envelope) => {
         console.log("[Mango] session ended:", req.reason, req.error ? JSON.stringify(req.error) : "");
         return { version: "1.0", response: {} };
       default:
-        return respond({});
+        return respond();
     }
-  } catch (e) {
-    console.log("[Mango] handler failed:", e.stack || e.message);
-    return respond({}, { speech: "Sorry, Mango Display had a problem. Please try again.", end: true });
+  } catch (err) {
+    console.log("[Mango] handler failed:", err.stack || err.message);
+    return respond({ speech: "Sorry, Mango Display had a problem. Please try again.", end: true });
   }
 };

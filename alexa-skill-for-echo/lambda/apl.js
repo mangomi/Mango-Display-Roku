@@ -22,6 +22,7 @@ const touch = require("./touch");
 const overlays = require("./overlays");
 const pagesMod = require("./pages");
 const effects = require("./effects");
+const scroll = require("./overlay-scroll");
 const { spinner, SIZE_PX: SPINNER_PX } = require("./spinner");
 const crypto = require("crypto");
 
@@ -157,7 +158,9 @@ function displayView(vp, display) {
   // text) change every minute with the time itself; the Echo draws from
   // the fixed `rect`, so they are not layout - counting them turned every
   // update across a minute boundary into a full blinking redraw.
-  const stable = (k, v) => (k === "sample" || k === "textRect" ? undefined : v);
+  // Checkbox ticks are contents too (set in place), including the boxes
+  // riding scroll strips.
+  const stable = (k, v) => (k === "sample" || k === "textRect" || k === "checked" ? undefined : v);
   const layout = crypto.createHash("sha1").update(JSON.stringify({
     vp: [vp.w, vp.h], canvas, gestures: manifest.gestures || null, assetBase, effects: manifest.effects || [],
     night: manifest.night === true,
@@ -242,11 +245,22 @@ function displayScreen(vp, display, paired, overrides, busy, current) {
   }));
 }
 
+/** Every checkbox a page carries: its own targets and the boxes riding
+ * its scroll strips (overlay-scroll.js). */
+function strips(page) {
+  return ((page && page.overlays) || []).map((o, oi) => ({ o, oi })).filter(({ o }) => o && o.type === "scroll");
+}
+function allTargets(page) {
+  const items = ((page && page.targets && page.targets.items) || []).slice();
+  for (const { o } of strips(page)) items.push(...(Array.isArray(o.boxes) ? o.boxes : []));
+  return { targets: { items } };
+}
+
 /** The pending presses still to hold across every page. */
 function allHeld(pages, overrides) {
   const keep = new Set();
   for (const page of pages) {
-    const h = touch.applyOverrides(page, overrides).overrides;
+    const h = touch.applyOverrides(allTargets(page), overrides).overrides;
     for (const part of h.split(",")) if (part) keep.add(part);
   }
   return keep.size ? [...keep].join(",") + "," : "";
@@ -273,6 +287,12 @@ function inPlaceUpdate(vp, display, paired, overrides, busy, shown) {
       const id = touch.targetId(it);
       if (id) cmds.push({ type: "SetValue", componentId: touch.boxId(p, id), property: "mmTicked", value: held.states[i] === true });
     });
+    for (const { o, oi } of strips(page)) {
+      const states = touch.applyOverrides({ targets: { items: o.boxes } }, overrides).states;
+      for (const { index } of scroll.pressable(o)) {
+        cmds.push({ type: "SetValue", componentId: scroll.boxId("p" + p + "o" + oi, index), property: "mmTicked", value: states[index] === true });
+      }
+    }
     const url = view.urls[p];
     if (url && url !== shownUrls[p]) {
       cmds.push(

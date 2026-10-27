@@ -73,3 +73,27 @@ test("in place across pages: only the pages whose pictures changed cross-fade", 
   slower.manifest.pages[0].delaySeconds = 30;
   assert.strictEqual(apl.inPlaceUpdate(vp, slower, paired, "", false, shown), null);
 });
+
+test("scroll-strip checkboxes: ticks are contents (in place), held presses survive, set by id", () => {
+  const strip = {
+    type: "scroll", rect: { x: 0, y: 0, w: 300, h: 400 }, segments: [{ file: "s0.png", h: 1200 }], stripFile: "s0.png",
+    stripW: 300, stripH: 1200, fromY: 400, toY: -1200, durationMs: 20000, loop: true,
+    sprites: { empty: "e.png", checked: "c.png" },
+    boxes: [{ x: 10, y: 50, w: 24, h: 24, checked: false, payload: { id: 901 } }],
+  };
+  const withStrip = JSON.parse(JSON.stringify(display));
+  withStrip.manifest.pages[0].overlays = [strip];
+  const v = apl.displayView(vp, withStrip);
+  const shown = { layout: v.layout, url: v.urls.join("|") };
+  const ticked = JSON.parse(JSON.stringify(withStrip));
+  ticked.version = 8;
+  ticked.manifest.pages[0].overlays[0].boxes[0].checked = true;
+  const press = "901:1:" + Date.now() + ",";
+  const up = apl.inPlaceUpdate(vp, ticked, paired, press, false, shown);
+  assert.ok(up, "a tick inside a strip does not force a whole new screen");
+  const set = up.commands.find((c) => c.componentId === "mmp0o0Box0");
+  assert.deepStrictEqual([set.property, set.value], ["mmTicked", true]);
+  // a press the render has not caught up with is still held on the screen
+  const behind = apl.inPlaceUpdate(vp, withStrip, paired, press, false, shown);
+  assert.strictEqual(behind.commands.find((c) => c.property === "overrides").value, press);
+});

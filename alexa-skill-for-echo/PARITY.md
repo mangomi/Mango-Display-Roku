@@ -46,9 +46,10 @@ channel commit when this tracker started.
 | Page background (`background`) | partial | first photo, still; no rotation through photos |
 | Clock | done | verified on hardware |
 | Countdown | todo | |
-| Touch: taps (targets → `/interact`) | in progress | |
-| Touch: checkboxes, instant tick | todo | |
-| Touch: swipes (page, calendar scroll) | todo | |
+| Touch: checkbox taps (targets → `/interact`) | built | instant tick, held until a render agrees; awaiting hardware test |
+
+| Touch: calendar swipes (regions) | built | honours `gestures.calendarScroll`; awaiting hardware test |
+| Touch: page swipes left/right | todo | comes with page rotation |
 | Page rotation + transitions | todo | |
 | GIF overlays (sprite sheets) | todo | |
 | Slideshows | todo | |

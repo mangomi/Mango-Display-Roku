@@ -10,7 +10,12 @@
 //                                 straight to its page
 //   ["pair"]                   -> every 5s on the pairing screen
 //   ["loading", "", maj, min]  -> every 5s on "Connected": first page yet?
-//   ["refresh", ver, maj, min] -> every 10s on the display: version moved?
+//   ["refresh", ver, maj, min, overrides]
+//                              -> every 10s on the display (1.5s after a
+//                                 touch): version moved?
+//   ["touch", kind, page, x, y, id, maj, min]
+//                              -> a checkbox press or calendar swipe
+//                                 (touch.js): forward to /interact
 //   ["rotate", ...one of the above] -> the Echo Show 15 was turned: redraw
 //
 // The handler keeps no state between calls. Alexa closes the session ~30s
@@ -45,12 +50,13 @@ function echoOf(envelope) {
 /** Paired: show the display if it moved past `held` (null = always), or
  * "Connected" while the fleet boots it. `quiet`: answer with nothing
  * instead of redrawing a screen that is already up. */
-async function showDisplay(e, held, launch, quiet) {
+async function showDisplay(e, held, launch, quiet, overrides) {
   const d = await backend.fetchDisplay(e, held, launch);
   if (d.state === "ready") {
     if (quiet && held !== null && String(d.version) === String(held)) return respond();
-    console.log("[Mango] " + e.code + " display v" + d.version + ", " + (d.manifest.pages || []).length + " page(s)");
-    return respond({ directives: [apl.displayScreen(e.vp, d, e)] });
+    console.log("[Mango] " + e.code + " display v" + d.version + ", " + (d.manifest.pages || []).length + " page(s)" +
+      (overrides ? " holding presses " + overrides : ""));
+    return respond({ directives: [apl.displayScreen(e.vp, d, e, overrides)] });
   }
   if (d.state === "unpaired") {
     // removed in the webapp: same code, pairing screen again
@@ -85,7 +91,8 @@ async function onUserEvent(envelope) {
   let args = (envelope.request.arguments || []).map((a) => (a == null ? "" : String(a)));
   const rotate = args[0] === "rotate";
   if (rotate) args = args.slice(1);
-  const [what, ver, major, minor] = args;
+  if (args[0] === "touch") return onTouch(e, args);
+  const [what, ver, major, minor, overrides] = args;
   // the stay-awake test's evidence: does the heartbeat still arrive, in
   // which session, and how long after launch (CloudWatch)
   console.log("[Mango] event " + (rotate ? "rotate/" : "") + what + " " + e.code +
@@ -96,11 +103,23 @@ async function onUserEvent(envelope) {
   if (what === "pair" || !e.major) return pairStep(e, !rotate);
   if (what === "loading") return showDisplay(e, null, false, !rotate);
   if (what === "refresh") {
-    if (rotate) return showDisplay(e, null, false, false);
+    if (rotate) return showDisplay(e, null, false, false, overrides);
     const v = await backend.currentVersion(e);
     if (v === null || String(v) === ver) return respond();
-    return showDisplay(e, ver, false, true);
+    return showDisplay(e, ver, false, true, overrides);
   }
+  return respond();
+}
+
+/** A press or swipe: the screen already drew its own feedback, so only
+ * the portal needs telling. The result arrives as a new version, which
+ * the screen's fast checks pick up. */
+async function onTouch(e, args) {
+  const [, kind, page, x, y, id, major, minor] = args;
+  e.major = major; e.minor = minor;
+  const r = await backend.interact(e, { type: kind, page, x, y, id });
+  console.log("[Mango] touch " + kind + " " + e.code + " page " + page + " at " + x + "," + y +
+    (id ? " id " + id : "") + " -> " + (r ? r.status + " " + JSON.stringify(r.json || {}).slice(0, 120) : "no reply"));
   return respond();
 }
 

@@ -119,10 +119,21 @@ async function fetchDisplay(d, held, launch) {
   return { state: "ready", version, assetBase, manifest };
 }
 
+/** Forward a touch: tap (with the task's payload id) or swipeup /
+ * swipedown on a calendar region - the Roku's InteractTask call, same
+ * parameters. A swipe's reply waits for the portal's redraw (up to 15s
+ * service-side); the Lambda gives up first and the screen's fast checks
+ * still pick the result up. */
+async function interact(d, g) {
+  return request(env.controlBase + "/interact?type=" + encodeURIComponent(g.type) +
+    "&page=" + encodeURIComponent(g.page || "0") + "&x=" + encodeURIComponent(g.x) + "&y=" + encodeURIComponent(g.y) +
+    "&id=" + encodeURIComponent(g.id || "") + identity(d));
+}
+
 /** Cheap check for "anything new?" - /version answers immediately. */
 async function currentVersion(d) {
   const r = await request(env.controlBase + "/version?v=1" + identity(d));
   return r && r.status === 200 && r.json ? r.json.version : null;
 }
 
-module.exports = { pairingStep, fetchDisplay, currentVersion };
+module.exports = { pairingStep, fetchDisplay, currentVersion, interact };

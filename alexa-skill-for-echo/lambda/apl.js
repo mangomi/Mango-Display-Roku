@@ -19,6 +19,7 @@
 
 const env = require("./env");
 const { clockComponents } = require("./clock");
+const touch = require("./touch");
 
 const APL_VERSION = "2023.2";
 const PAIR_TICK_MS = 5000;     // the TVs' pairing poll cadence
@@ -68,14 +69,15 @@ function heartbeat(ms, args) {
 }
 
 /** `args` is what the heartbeat sends; a rotation (Echo Show 15) sends
- * "rotate" + the same, so the skill redraws for the new viewport. */
-function doc(items, tickMs, args) {
+ * "rotate" + the same, so the skill redraws for the new viewport.
+ * `overrides` seeds the root's pending-press variable (touch.js); the
+ * heartbeat runs from the root container so its events can carry it. */
+function doc(items, tickMs, args, overrides = "") {
   return {
     type: "APL",
     version: APL_VERSION,
     theme: "dark",
     settings: { idleTimeout: IDLE_TIMEOUT_MS },
-    onMount: heartbeat(tickMs, args),
     onConfigChange: [{ type: "SendEvent", sequencer: "rotate", arguments: ["rotate"].concat(args) }],
     // A Frame draws ONE child; extra items are silently dropped (on the
     // Echo only the first layer - the background color - showed). The
@@ -83,7 +85,12 @@ function doc(items, tickMs, args) {
     mainTemplate: {
       items: [{
         type: "Frame", width: "100vw", height: "100vh", backgroundColor: "black",
-        items: [{ type: "Container", width: "100%", height: "100%", items }],
+        items: [{
+          type: "Container", id: touch.ROOT_ID, width: "100%", height: "100%",
+          bind: [{ name: "overrides", value: overrides }],
+          onMount: heartbeat(tickMs, args),
+          items,
+        }],
       }],
     },
   };
@@ -129,13 +136,16 @@ function backgroundComponents(o, canvas, place) {
   return out;
 }
 
-/** First page that has a clock (else page 0): its image plus the live
- * clock(s) on top. V1 draws only `clock` overlays; everything else the
- * device would animate (gif, slideshow, effects...) is not drawn yet. */
-function displayScreen(vp, display, paired) {
+/** First page that has a clock (else page 0): its image, the live
+ * clock(s) and the touch layer on top. Still to come: gif, slideshow,
+ * effects... (PARITY.md). `overrides` are the presses the screen sent
+ * back that a render may not reflect yet (touch.js). */
+function displayScreen(vp, display, paired, overrides) {
   const { manifest, assetBase } = display;
   const pages = manifest.pages || [];
-  let page = pages.find((p) => (p.overlays || []).some((o) => o.type === "clock")) || pages[0];
+  let pageIndex = pages.findIndex((p) => (p.overlays || []).some((o) => o.type === "clock"));
+  if (pageIndex < 0) pageIndex = 0;
+  const page = pages[pageIndex];
   const place = placement(manifest.canvas || { width: 1920, height: 1080 }, vp);
   const items = [];
   // a PNG page is layered: the page background is drawn BEHIND it
@@ -159,7 +169,13 @@ function displayScreen(vp, display, paired) {
   for (const o of (page && page.overlays) || []) {
     if (o.type === "clock") items.push(...clockComponents(o, place));
   }
-  return directive("display", doc(items, DISPLAY_TICK_MS, ["refresh", String(display.version), paired.major, paired.minor]));
+  const refreshArgs = ["refresh", String(display.version), paired.major, paired.minor, "${overrides}"];
+  const held = touch.applyOverrides(page, overrides);
+  items.push(...touch.touchComponents({
+    page, pageIndex, place, assetBase, states: held.states, gestures: manifest.gestures,
+    refreshArgs, major: paired.major, minor: paired.minor,
+  }));
+  return directive("display", doc(items, DISPLAY_TICK_MS, refreshArgs, held.overrides));
 }
 
 module.exports = { viewportDp, placement, pairingScreen, displayScreen };

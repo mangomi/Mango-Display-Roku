@@ -136,16 +136,28 @@ function touchComponents(ctx) {
         { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(cx), String(cy), String(reg.id == null ? "" : reg.id), major, minor] },
         fastCheck(refreshArgs),
       ];
+      // onDown/onUp run in FAST mode, where SendEvent is ignored - a first
+      // version sent from onUp and no swipe ever reached the skill. So
+      // onUp only records the direction; onPress (normal mode, runs right
+      // after onUp when the finger lifts inside the area) sends it.
       under.push({
         type: "TouchWrapper",
         position: "absolute", left: r.x, top: r.y, width: r.w, height: r.h,
-        bind: [{ name: "downY", value: 0 }],
+        bind: [{ name: "mmDownY", value: 0 }, { name: "mmSwipe", value: "" }],
         item: { type: "Container", width: "100%", height: "100%" },
-        onDown: [{ type: "SetValue", property: "downY", value: "${event.component.y}" }],
+        onDown: [
+          { type: "SetValue", property: "mmDownY", value: "${event.component.y}" },
+          { type: "SetValue", property: "mmSwipe", value: "" },
+        ],
         // finger moves UP -> swipeup (the portal's own gesture names)
         onUp: [
-          { type: "Sequential", when: "${downY - event.component.y > " + SWIPE_MIN_DP + "}", commands: send("swipeup") },
-          { type: "Sequential", when: "${event.component.y - downY > " + SWIPE_MIN_DP + "}", commands: send("swipedown") },
+          { type: "SetValue", property: "mmSwipe", when: "${mmDownY - event.component.y > " + SWIPE_MIN_DP + "}", value: "swipeup" },
+          { type: "SetValue", property: "mmSwipe", when: "${event.component.y - mmDownY > " + SWIPE_MIN_DP + "}", value: "swipedown" },
+        ],
+        onPress: [
+          { type: "Sequential", when: "${mmSwipe == 'swipeup'}", commands: send("swipeup") },
+          { type: "Sequential", when: "${mmSwipe == 'swipedown'}", commands: send("swipedown") },
+          { type: "SetValue", property: "mmSwipe", value: "" },
         ],
       });
     }

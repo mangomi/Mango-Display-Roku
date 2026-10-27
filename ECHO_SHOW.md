@@ -192,3 +192,15 @@ a blocker. To do before submitting (Dave: after testing):
 - **Judgement risk:** a reviewer may see the always-on screen as a
   screensaver. Mitigation is the description; the fallback is the
   home-screen widget.
+
+## Next build after testing: home-screen widget (Dave, 2026-10-27)
+
+Echo Show 15/21 home screens take skill widgets (APL packages the user
+adds once). Ours: a small live preview of the display (clock / page image)
+that opens the full-screen skill on a tap - the Echo's "app icon", and the
+fallback if a reviewer objects to the always-on screen. Needs a widget APL
+package, its Data Store updates from the skill (the server can refresh a
+widget without a request), and the widget metadata for certification.
+Also: recommend an Alexa Routine ("open Mango Display" at a time or on
+"Alexa, good morning") in the setup instructions and listing - it also
+restores the display after an interruption.

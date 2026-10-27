@@ -23,6 +23,22 @@ const overlays = require("./overlays");
 const pagesMod = require("./pages");
 const effects = require("./effects");
 const scroll = require("./overlay-scroll");
+const celebrations = require("./celebrations");
+
+/** The confetti a box press runs after its tick: its list's open count
+ * moves, then a burst on the box - or the finale when that emptied the
+ * list (InteractionLayer.activateUnderPointer). Nothing until the burst
+ * art is hosted (celebrations.js, CELEBRATION_URL). */
+function celebrateAfterTick(L) {
+  const play = celebrations.commandsFor({ kind: L.kind("mmL"), x: "${mmBx}", y: "${mmBy}" });
+  if (!play.length) return [];
+  return [...L.onTick("mmL", touch.ROOT_ID), { type: "Sequential", when: "${mmTicked}", commands: play }];
+}
+
+/** The screen's checkbox lists, from the ticks it will show. */
+function listsOf(pages, overrides) {
+  return celebrations.lists(pages, pages.map((page) => touch.applyOverrides(page, overrides).states));
+}
 const { spinner, SIZE_PX: SPINNER_PX } = require("./spinner");
 const crypto = require("crypto");
 
@@ -214,6 +230,7 @@ function displayScreen(vp, display, paired, overrides, busy, current) {
   const refreshArgs = ["refresh", "${mmVer}", paired.major, paired.minor, "${overrides}", "${mmBusy ? 1 : 0}",
     "${mmLayout}", "${mmPageUrls}", "${mmCur}"];
   let pending = overrides;
+  const L = listsOf(pages, overrides);
   const items = [pagesMod.swipeCatcher(vp)];
   pages.forEach((page, i) => {
     const ov = overlays.pageOverlays(page, {
@@ -226,7 +243,7 @@ function displayScreen(vp, display, paired, overrides, busy, current) {
     layerItems.push(...ov.over);
     layerItems.push(...touch.touchComponents({
       page, pageIndex: i, place, assetBase, states: held.states, gestures: manifest.gestures,
-      refreshArgs, major: paired.major, minor: paired.minor,
+      refreshArgs, major: paired.major, minor: paired.minor, listIndex: (item) => L.index(i, item),
     }));
     items.push(pagesMod.layer(i, cur, vp, layerItems));
   });
@@ -235,15 +252,17 @@ function displayScreen(vp, display, paired, overrides, busy, current) {
   // busy spinner on top of everything, centred on the screen; a swipe
   // shows the calendar's own instead (touch.js), never both
   items.push(spinner(vp.w / 2, vp.h / 2, place.len(SPINNER_PX), "${mmBusy && mmSwiping == '' ? 1 : 0}"));
+  // confetti on top of everything, like the portal's canvas at zIndex 999
+  items.push(...celebrations.layer({ place, canvas, vp }));
   return directive("display", doc(items, DISPLAY_TICK_MS, refreshArgs, held, busy === true, {
     extraBinds: [
       { name: "mmVer", value: String(display.version) },
       { name: "mmLayout", value: view.layout },
       { name: "mmPageUrls", value: view.urls.join("|") },
-    ].concat(pagesMod.rootBinds(pages, cur, manifest.gestures)),
-    commands: pagesMod.commandDefinitions(vp.w, vp.h),
+    ].concat(pagesMod.rootBinds(pages, cur, manifest.gestures)).concat(L.binds),
+    commands: { ...pagesMod.commandDefinitions(vp.w, vp.h), ...celebrations.commandDefinitions() },
     // effects are layout instances too (effect-all.js), so they stay small
-    layouts: { ...touch.layouts(refreshArgs, paired.major, paired.minor), ...require("./effect-all").layouts() },
+    layouts: { ...touch.layouts(refreshArgs, paired.major, paired.minor, celebrateAfterTick(L)), ...require("./effect-all").layouts() },
     onMount: [{ type: "MmRotate" }],
   }));
 }
@@ -313,6 +332,8 @@ function inPlaceUpdate(vp, display, paired, overrides, busy, shown) {
     }
   });
   cmds.push(root("mmPageUrls", view.urls.join("|")));
+  // the lists' open-box counts follow the render (the finale check)
+  for (const b of listsOf(view.pages, overrides).binds) cmds.push(root(b.name, b.value));
   return { type: "Alexa.Presentation.APL.ExecuteCommands", token: "display", commands: cmds };
 }
 

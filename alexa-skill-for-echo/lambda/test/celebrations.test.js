@@ -123,3 +123,29 @@ test("lists: open boxes per widget (todos per project), counted on the device", 
   assert.strictEqual(cel.lists([], []).kind("mmL"), "burst");
   walk(l.binds, (n) => n.name && assert.match(n.name, /^mm/));
 });
+
+// wiring (apl.js): off without hosted art, on with it
+test("a box press celebrates only once the burst art is hosted", () => {
+  const apl = require("../apl");
+  const m = { canvas: { width: 1080, height: 1920 }, gestures: {}, pages: [{ image: "p.png", overlays: [], targets: {
+    sprites: { empty: "e.png", checked: "c.png" },
+    items: [{ rect: { x: 10, y: 10, w: 20, h: 20 }, checked: false, widgetSettingId: 7, payload: { id: 1 } }],
+  } }] };
+  const build = () => apl.displayScreen({ w: 1080, h: 1920, pw: 1080, ph: 1920 }, { manifest: m, assetBase: "https://a/", version: 1 },
+    { major: "1", minor: "1" }, "", false, 0).document;
+  const saved = process.env.CELEBRATION_URL;
+  try {
+    delete process.env.CELEBRATION_URL;
+    let d = build();
+    assert.ok(!JSON.stringify(d.layouts.MmBox).includes("MmCelebrate"));
+    assert.ok(!d.commands.MmCelebrate);
+    process.env.CELEBRATION_URL = "https://example.com/burst.png";
+    d = build();
+    const press = d.layouts.MmBox.items[0].onPress;
+    assert.ok(JSON.stringify(press).includes("MmCelebrate"));
+    assert.ok(d.commands.MmCelebrate);
+    assert.strictEqual(d.mainTemplate.items[0].items[0].bind.find((b) => b.name === "mmOpen0").value, 1);
+  } finally {
+    if (saved === undefined) delete process.env.CELEBRATION_URL; else process.env.CELEBRATION_URL = saved;
+  }
+});

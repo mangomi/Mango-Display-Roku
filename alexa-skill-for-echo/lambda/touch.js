@@ -93,7 +93,7 @@ function fastCheck(refreshArgs) {
 
 /** APL components for the page's checkboxes and calendar areas. */
 function touchComponents(ctx) {
-  const { page, pageIndex, place, assetBase, states, gestures, refreshArgs, major, minor } = ctx;
+  const { page, pageIndex, place, assetBase, states, gestures, refreshArgs, major, minor, listIndex } = ctx;
   const out = []; // checkboxes, drawn above...
   const under = []; // ...the calendar areas, so a box always wins a press
   const t = page && page.targets;
@@ -117,6 +117,8 @@ function touchComponents(ctx) {
         mmT0: states[i] === true, mmTid: id, mmPg: String(pageIndex),
         mmCx: String(Math.round(it.rect.x + it.rect.w / 2)), mmCy: String(Math.round(it.rect.y + it.rect.h / 2)),
         mmW: r2(box.w), mmH: r2(box.h), mmPad: r2(pad),
+        // its list (celebrations.lists) and its centre in dp, for the burst
+        mmL: listIndex ? listIndex(it) : -1, mmBx: r2(box.x + box.w / 2), mmBy: r2(box.y + box.h / 2),
       });
     });
     out.push({
@@ -198,12 +200,13 @@ const r2 = (v) => Math.round(v * 100) / 100;
  * box at once, records the press for the root's held `overrides`, tells
  * the portal, checks for the result quickly and restarts the page's dwell.
  * Instances carry mmT0 (ticked at build), mmTid (task id), mmPg/mmCx/mmCy
- * (page, canvas centre for /interact) and mmW/mmH/mmPad (the drawn box).
+ * (page, canvas centre for /interact), mmW/mmH/mmPad (the drawn box) and
+ * mmL/mmBx/mmBy (its list number and dp centre, for `afterTick`).
  * The sprite URLs come from mmBoxE/mmBoxC bound on the page's box layer. */
-function layouts(refreshArgs, major, minor) {
+function layouts(refreshArgs, major, minor, afterTick = []) {
   return {
     MmBox: {
-      parameters: ["mmT0", "mmTid", "mmPg", "mmCx", "mmCy", "mmW", "mmH", "mmPad"],
+      parameters: ["mmT0", "mmTid", "mmPg", "mmCx", "mmCy", "mmW", "mmH", "mmPad", "mmL", "mmBx", "mmBy"],
       items: [{
         type: "TouchWrapper",
         // NOT "checked": that is a built-in state property of every APL
@@ -220,6 +223,8 @@ function layouts(refreshArgs, major, minor) {
         onPress: [
           // tick now, ask later
           { type: "SetValue", property: "mmTicked", value: "${!mmTicked}" },
+          // the celebration, when hosted art switches it on (apl.js)
+          ...afterTick,
           {
             type: "SetValue", componentId: ROOT_ID, property: "overrides", when: "${mmTid != ''}",
             value: "${overrides + mmTid + ':' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",

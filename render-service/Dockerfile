@@ -32,6 +32,10 @@ RUN npx playwright install --with-deps chromium && \
 COPY fonts/ /usr/local/share/fonts/mangodisplay/
 RUN fc-cache -f
 
+# The Roku channel's celebration art, published under <root>/celebrations/
+# for clients that cannot bundle it (Echo Show) - see displayWorker.js.
+COPY render-service/static/celebrations/ /usr/local/share/mangodisplay/celebrations/
+
 COPY render-service/ ./
 
 # rendered output before it is published to R2

@@ -21,6 +21,9 @@ const manifest = {
   }],
 };
 const paired = { major: "1", minor: "822" };
+// the root container, and page i's layer inside it (pages.js)
+const rootOf = (d) => d.document.mainTemplate.items[0].items[0];
+const layerOf = (d, i = 0) => rootOf(d).items.find((c) => c.id === "mmP" + i).items;
 
 function frames(node, out = []) {
   if (Array.isArray(node)) node.forEach((n) => frames(n, out));
@@ -46,14 +49,17 @@ for (const [name, d] of Object.entries(screens)) {
 }
 
 test("display: background, photo, page and clock all inside the one container", () => {
-  const layers = screens.display.document.mainTemplate.items[0].items[0].items;
+  const layers = layerOf(screens.display);
   const kinds = layers.map((l) => l.type + (l.source !== undefined ? ":" + (/^data:/.test(l.source) ? "spinner" : String(l.source).split("/").pop().split("?")[0]) : ""));
   // the page is two stacked layers (mmPage + the cross-fade's mmPagePrev, empty until an update)
-  assert.deepStrictEqual(kinds, ["Frame", "Image:a.jpg", "Frame", "Image:display_p0.png", "Image:", "Text", "Text", "Image:spinner"]);
+  assert.deepStrictEqual(kinds, ["Frame", "Image:a.jpg", "Frame", "Image:display_p0.png", "Image:", "Text", "Text"]);
+  // the busy spinner is above every page, last on the root
+  const top = rootOf(screens.display).items;
+  assert.match(top[top.length - 1].source, /^data:image/);
 });
 
 test("display: portrait canvas on a portrait Echo fills the screen, rotation ignored", () => {
-  const page = screens.display.document.mainTemplate.items[0].items[0].items.find((l) => l.source && /display_p0/.test(l.source));
+  const page = layerOf(screens.display).find((l) => l.source && /display_p0/.test(l.source));
   assert.deepStrictEqual([page.left, page.top, page.width, page.height], [0, 0, 1080, 1920]);
 });
 
@@ -86,7 +92,7 @@ test("busy flips without a redraw; on carries the 75s watchdog", () => {
 });
 
 const v3 = { manifest, assetBase: "https://assets/", version: 3 };
-const shownFor = (d) => { const v = apl.pageView(vp, d); return { layout: v.layout, url: v.url }; };
+const shownFor = (d) => { const v = apl.displayView(vp, d); return { layout: v.layout, url: v.urls.join("|") }; };
 
 test("in place: a new render with the same layout updates the screen instead of replacing it", () => {
   const swiped = { ...v3, version: 4, manifest: { ...manifest, pages: [{ ...manifest.pages[0], imageHash: "new" }] } };
@@ -98,9 +104,9 @@ test("in place: a new render with the same layout updates the screen instead of 
   assert.strictEqual(set("mmRoot", "mmVer").value, "4");
   assert.strictEqual(set("mmRoot", "mmSwiping").value, "");
   // cross-fade: the old picture goes on the top layer, the new one is handed over via mmNext
-  assert.strictEqual(set("mmPagePrev", "source").value, shown.url);
-  assert.match(set("mmPagePrev", "mmNext").value, /\?h=new$/);
-  assert.strictEqual(set("mmPagePrev", "opacity").value, 1);
+  assert.strictEqual(set("mmPagePrev0", "source").value, shown.url);
+  assert.match(set("mmPagePrev0", "mmNext").value, /\?h=new$/);
+  assert.strictEqual(set("mmPagePrev0", "opacity").value, 1);
 });
 
 test("in place: a moved or resized widget needs a whole new screen", () => {
@@ -117,19 +123,19 @@ test("in place: checkbox states set on their own boxes; a tick change alone keep
   const before = { ...v3, manifest: withBoxes };
   const after = JSON.parse(JSON.stringify(before)); after.version = 4; after.manifest.pages[0].targets.items[0].checked = true;
   const up = apl.inPlaceUpdate(vp, after, paired, "", false, shownFor(before));
-  const box = up.commands.find((c) => c.componentId === "mmBox77");
+  const box = up.commands.find((c) => c.componentId === "mmBox0_77");
   assert.deepStrictEqual([box.property, box.value], ["mmTicked", true]);
   // and the page image did not change: no cross-fade
-  assert.ok(!up.commands.some((c) => c.componentId === "mmPagePrev"));
+  assert.ok(!up.commands.some((c) => c.componentId === "mmPagePrev0"));
 });
 
 test("page layers: the new picture loads behind the old one, which then fades", () => {
-  const items = screens.display.document.mainTemplate.items[0].items[0].items;
-  const page = items.find((i) => i.id === "mmPage"), prev = items.find((i) => i.id === "mmPagePrev");
+  const items = layerOf(screens.display);
+  const page = items.find((i) => i.id === "mmPage0"), prev = items.find((i) => i.id === "mmPagePrev0");
   assert.ok(items.indexOf(prev) > items.indexOf(page), "prev drawn above");
   assert.strictEqual(prev.opacity, 0);
-  assert.deepStrictEqual([prev.onLoad[0].componentId, prev.onLoad[0].value], ["mmPage", "${mmNext}"]);
-  assert.strictEqual(page.onLoad[0].componentId, "mmPagePrev");
+  assert.deepStrictEqual([prev.onLoad[0].componentId, prev.onLoad[0].value], ["mmPage0", "${mmNext}"]);
+  assert.strictEqual(page.onLoad[0].componentId, "mmPagePrev0");
   assert.strictEqual(page.onLoad[0].value[0].to, 0);
 });
 

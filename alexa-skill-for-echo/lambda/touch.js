@@ -22,6 +22,10 @@
 // does not reflect yet (applyOverrides) and drops agreed or stale ones.
 
 const { spinner, SIZE_PX: SPINNER_PX } = require("./spinner");
+const pagesMod = require("./pages");
+
+// a vertical drag: more up/down than sideways
+const VERTICAL = "Math.abs(event.component.y - mmDownY) >= Math.abs(event.component.x - mmDownX)";
 
 const ROOT_ID = "mmRoot";
 const FAST_MS = 1500;
@@ -46,8 +50,8 @@ function parseOverrides(s) {
 }
 
 /** The component id of a task's checkbox, so an update can set it in place. */
-function boxId(id) {
-  return "mmBox" + id;
+function boxId(pageIndex, id) {
+  return "mmBox" + pageIndex + "_" + id;
 }
 
 function targetId(item) {
@@ -104,7 +108,7 @@ function touchComponents(ctx) {
       const cy = Math.round(it.rect.y + it.rect.h / 2);
       out.push({
         type: "TouchWrapper",
-        ...(id ? { id: boxId(id) } : {}),
+        ...(id ? { id: boxId(pageIndex, id) } : {}),
         position: "absolute",
         left: box.x - pad, top: box.y - pad, width: box.w + pad * 2, height: box.h + pad * 2,
         bind: [
@@ -129,8 +133,10 @@ function touchComponents(ctx) {
             type: "SetValue", componentId: ROOT_ID, property: "overrides",
             value: "${overrides + '" + id + ":' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",
           }] : []),
-          { type: "SendEvent", arguments: ["touch", "tap", String(pageIndex), String(cx), String(cy), id, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7]] },
+          { type: "SendEvent", arguments: ["touch", "tap", String(pageIndex), String(cx), String(cy), id, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8]] },
           fastCheck(refreshArgs),
+          // a page being worked on is not turned away (pages.js)
+          { type: "MmRestartDwell" },
         ],
       });
     });
@@ -152,7 +158,7 @@ function touchComponents(ctx) {
       const send = (kind) => [
         setSwiping(regId),
         { type: "Sequential", sequencer: "busyhide", commands: [{ type: "Idle", delay: BUSY_MAX_MS }, setSwiping("")] },
-        { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(cx), String(cy), regId, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7]] },
+        { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(cx), String(cy), regId, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8]] },
         fastCheck(refreshArgs),
       ];
       // onDown/onUp run in FAST mode, where SendEvent is ignored - a first
@@ -165,20 +171,24 @@ function touchComponents(ctx) {
         // mmLastSent: one finger swipe reached the skill 2-3 times within a
         // second on the Echo Show 15 (2026-10-27), each moving the calendar;
         // a second swipe inside SWIPE_GAP_MS is dropped
-        bind: [{ name: "mmDownY", value: 0 }, { name: "mmSwipe", value: "" }, { name: "mmLastSent", value: 0 }],
+        bind: [{ name: "mmDownX", value: 0 }, { name: "mmDownY", value: 0 }, { name: "mmSwipe", value: "" },
+          { name: "mmLastSent", value: 0 }, { name: "mmDir", value: "" }],
         item: {
           type: "Container", width: "100%", height: "100%",
           items: [spinner(r.w / 2, r.h / 2, place.len(SPINNER_PX), "${mmSwiping == '" + regId + "' ? 1 : 0}")],
         },
         onDown: [
+          { type: "SetValue", property: "mmDownX", value: "${event.component.x}" },
           { type: "SetValue", property: "mmDownY", value: "${event.component.y}" },
           { type: "SetValue", property: "mmSwipe", value: "" },
+          { type: "SetValue", property: "mmDir", value: "" },
         ],
         // finger moves UP -> swipeup (the portal's own gesture names)
+        // vertical -> calendar scroll; horizontal -> page turn (pages.js)
         onUp: [
-          { type: "SetValue", property: "mmSwipe", when: "${mmDownY - event.component.y > " + SWIPE_MIN_DP + "}", value: "swipeup" },
-          { type: "SetValue", property: "mmSwipe", when: "${event.component.y - mmDownY > " + SWIPE_MIN_DP + "}", value: "swipedown" },
-        ],
+          { type: "SetValue", property: "mmSwipe", when: "${" + VERTICAL + " && mmDownY - event.component.y > " + SWIPE_MIN_DP + "}", value: "swipeup" },
+          { type: "SetValue", property: "mmSwipe", when: "${" + VERTICAL + " && event.component.y - mmDownY > " + SWIPE_MIN_DP + "}", value: "swipedown" },
+        ].concat(pagesMod.horizontalSwipe("mmDir")),
         onPress: [
           {
             type: "Sequential",
@@ -190,7 +200,8 @@ function touchComponents(ctx) {
             ],
           },
           { type: "SetValue", property: "mmSwipe", value: "" },
-        ],
+          { type: "MmRestartDwell", when: "${mmDir == ''}" },
+        ].concat(pagesMod.pageTurnFrom("mmDir")),
       });
     }
   }

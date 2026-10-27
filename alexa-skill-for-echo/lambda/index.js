@@ -10,10 +10,10 @@
 //                                 straight to its page
 //   ["pair"]                   -> every 5s on the pairing screen
 //   ["loading", "", maj, min]  -> every 5s on "Connected": first page yet?
-//   ["refresh", ver, maj, min, overrides, busyShown, layout, pageUrl]
+//   ["refresh", ver, maj, min, overrides, busyShown, layout, pageUrls, page]
 //                              -> every 10s on the display (1.5s after a
 //                                 touch): version moved? busy changed?
-//   ["touch", kind, page, x, y, id, maj, min, ver, overrides, layout, pageUrl]
+//   ["touch", kind, page, x, y, id, maj, min, ver, overrides, layout, pageUrls, current]
 //                              -> a checkbox press or calendar swipe
 //                                 (touch.js): forward to /interact and
 //                                 answer with the result screen
@@ -72,7 +72,8 @@ function screenFor(e, d, overrides, shown) {
   const update = apl.inPlaceUpdate(e.vp, d, e, overrides, d.busy, shown);
   console.log("[Mango] " + e.code + " display v" + d.version + ", " + (d.manifest.pages || []).length + " page(s)" +
     (update ? " in place" : " new screen") + (overrides ? ", holding presses " + overrides : ""));
-  return update || apl.displayScreen(e.vp, d, e, overrides, d.busy);
+  // a whole new screen starts on the page the old one was showing
+  return update || apl.displayScreen(e.vp, d, e, overrides, d.busy, shown && shown.page);
 }
 
 /** One pairing iteration. `onScreen`: the pairing screen is already up. */
@@ -100,8 +101,8 @@ async function onUserEvent(envelope) {
   const rotate = args[0] === "rotate";
   if (rotate) args = args.slice(1);
   if (args[0] === "touch") return onTouch(e, args);
-  const [what, ver, major, minor, overrides, busyShown, layout, pageUrl] = args;
-  const shown = { layout, url: pageUrl };
+  const [what, ver, major, minor, overrides, busyShown, layout, pageUrls, page] = args;
+  const shown = { layout, url: pageUrls, page };
   // the stay-awake test's evidence: does the heartbeat still arrive, in
   // which session, and how long after launch (CloudWatch)
   console.log("[Mango] event " + (rotate ? "rotate/" : "") + what + " " + e.code +
@@ -112,7 +113,7 @@ async function onUserEvent(envelope) {
   if (what === "pair" || !e.major) return pairStep(e, !rotate);
   if (what === "loading") return showDisplay(e, null, false, !rotate);
   if (what === "refresh") {
-    if (rotate) return showDisplay(e, null, false, false, overrides);
+    if (rotate) return showDisplay(e, null, false, false, overrides, { page });
     const v = await backend.currentVersion(e);
     if (v === null) return respond();
     if (String(v.version) !== ver) return showDisplay(e, ver, false, true, overrides, shown);
@@ -139,7 +140,7 @@ const TOUCH_BUDGET_MS = 6500;
 async function onTouch(e, args) {
   const started = Date.now();
   const deadline = started + TOUCH_BUDGET_MS;
-  const [, kind, page, x, y, id, major, minor, ver, overrides, layout, pageUrl] = args;
+  const [, kind, page, x, y, id, major, minor, ver, overrides, layout, pageUrls, current] = args;
   e.major = major; e.minor = minor;
   // wait from the version on screen; the gesture runs alongside
   const result = ver ? backend.waitForNewVersion(e, ver, deadline) : Promise.resolve(null);
@@ -153,7 +154,7 @@ async function onTouch(e, args) {
     return respond();
   }
   console.log("[Mango] touch " + kind + ": result v" + d.version + " in " + (Date.now() - started) + "ms");
-  return respond({ directives: [screenFor(e, d, overrides, { layout, url: pageUrl })] });
+  return respond({ directives: [screenFor(e, d, overrides, { layout, url: pageUrls, page: current })] });
 }
 
 exports.handler = async (envelope) => {

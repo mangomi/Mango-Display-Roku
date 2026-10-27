@@ -92,7 +92,9 @@ async function onLaunch(envelope) {
     return respond({ speech: "Mango Display needs an Echo with a screen, like the Echo Show.", end: true });
   }
   const e = echoOf(envelope);
-  console.log("[Mango] launch on " + env.name + ": code " + e.code + ", screen " + e.w + "x" + e.h);
+  const aplIf = envelope.context.System.device.supportedInterfaces["Alexa.Presentation.APL"] || {};
+  console.log("[Mango] launch on " + env.name + ": code " + e.code + ", screen " + e.w + "x" + e.h +
+    ", APL up to " + ((aplIf.runtime && aplIf.runtime.maxVersion) || "?"));
   return pairStep(e, false);
 }
 
@@ -108,7 +110,8 @@ async function onUserEvent(envelope) {
   // which session, and how long after launch (CloudWatch)
   console.log("[Mango] event " + (rotate ? "rotate/" : "") + what + " " + e.code +
     " session=" + (envelope.session ? String(envelope.session.sessionId).slice(-8) + (envelope.session.new ? " (new)" : "") : "none") +
-    " screen=" + e.w + "x" + e.h + (what === "refresh" && args[9] !== undefined ? " photoLoads=" + args[9] : ""));
+    " screen=" + e.w + "x" + e.h + (what === "refresh" && args[9] !== undefined ? " photoLoads=" + args[9] : "") +
+    (what === "refresh" ? " apl=" + (((envelope.context.System.device.supportedInterfaces["Alexa.Presentation.APL"] || {}).runtime || {}).maxVersion || "?") : ""));
   if (major) { e.major = major; e.minor = minor; }
 
   if (what === "pair" || !e.major) return pairStep(e, !rotate);

@@ -98,7 +98,10 @@ function touchComponents(ctx) {
         position: "absolute",
         left: box.x - pad, top: box.y - pad, width: box.w + pad * 2, height: box.h + pad * 2,
         bind: [
-          { name: "checked", value: states[i] === true },
+          // NOT "checked": that is a built-in state property of every APL
+          // component, and SetValue changed it instead of this variable -
+          // the box never flipped on the Echo (2026-10-27)
+          { name: "mmTicked", value: states[i] === true },
           { name: "mmEmpty", value: assetBase + sprites.empty },
           { name: "mmChecked", value: assetBase + sprites.checked },
         ],
@@ -106,15 +109,15 @@ function touchComponents(ctx) {
           type: "Container", width: "100%", height: "100%",
           items: [{
             type: "Image", position: "absolute", left: pad, top: pad, width: box.w, height: box.h,
-            source: "${checked ? mmChecked : mmEmpty}", scale: "fill",
+            source: "${mmTicked ? mmChecked : mmEmpty}", scale: "fill",
           }],
         },
         onPress: [
           // tick now, ask later
-          { type: "SetValue", property: "checked", value: "${!checked}" },
+          { type: "SetValue", property: "mmTicked", value: "${!mmTicked}" },
           ...(id ? [{
             type: "SetValue", componentId: ROOT_ID, property: "overrides",
-            value: "${overrides + '" + id + ":' + (checked ? 1 : 0) + ':' + utcTime + ','}",
+            value: "${overrides + '" + id + ":' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",
           }] : []),
           { type: "SendEvent", arguments: ["touch", "tap", String(pageIndex), String(cx), String(cy), id, major, minor] },
           fastCheck(refreshArgs),

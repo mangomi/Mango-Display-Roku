@@ -51,10 +51,12 @@ test("checkboxes: drawn with the manifest's sprites, press ticks then tells the 
   assert.strictEqual(comps.length, 2);
   const box = comps[0];
   assert.strictEqual(box.type, "TouchWrapper");
-  assert.deepStrictEqual(box.bind.find((b) => b.name === "checked").value, false);
-  assert.strictEqual(box.item.items[0].source, "${checked ? mmChecked : mmEmpty}");
+  assert.deepStrictEqual(box.bind.find((b) => b.name === "mmTicked").value, false);
+  assert.strictEqual(box.item.items[0].source, "${mmTicked ? mmChecked : mmEmpty}");
   const [tick, hold, send, fast] = box.onPress;
-  assert.strictEqual(tick.value, "${!checked}");
+  assert.strictEqual(tick.property, "mmTicked");
+  assert.strictEqual(tick.value, "${!mmTicked}");
+  assert.match(hold.value, /\(mmTicked \? 1 : 0\)/);
   assert.strictEqual(hold.componentId, touch.ROOT_ID);
   assert.match(hold.value, /'501:'/);
   assert.deepStrictEqual(send.arguments, ["touch", "tap", "0", "115", "215", "501", "1", "822"]);
@@ -80,4 +82,25 @@ test("display screen carries the touch layer and the held presses", () => {
   assert.match(root.bind[0].value, /^501:1:/);
   assert.strictEqual(root.items.filter((i) => i.type === "TouchWrapper").length, 3);
   assert.deepStrictEqual(root.onMount[0].commands[1].arguments, ["refresh", "3", "1", "822", "${overrides}"]);
+});
+
+// APL component properties a bind/SetValue name must never shadow: SetValue
+// on such a name changes the component, not the variable (the "checked"
+// bug). Not exhaustive - the common state and layout ones.
+const RESERVED = ["checked", "disabled", "pressed", "focused", "hover", "opacity", "display", "width", "height",
+  "source", "text", "color", "id", "type", "position", "left", "top", "bind", "item", "items"];
+
+test("no bound variable or SetValue target shadows a built-in component property", () => {
+  const manifest = { canvas: { width: 1080, height: 1920 }, gestures: { calendarScroll: true }, pages: [page] };
+  const d = apl.displayScreen({ w: 1080, h: 1920 }, { manifest, assetBase: "https://a/", version: 3 }, { major: "1", minor: "822" }, "");
+  const names = [];
+  (function walk(n) {
+    if (Array.isArray(n)) return n.forEach(walk);
+    if (!n || typeof n !== "object") return;
+    if (Array.isArray(n.bind)) n.bind.forEach((b) => names.push(b.name));
+    if (n.type === "SetValue" && !n.componentId) names.push(n.property);
+    Object.values(n).forEach(walk);
+  })(d.document);
+  assert.ok(names.length > 3);
+  for (const nm of names) assert.ok(!RESERVED.includes(nm), "reserved name used: " + nm);
 });

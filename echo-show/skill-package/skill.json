@@ -17,7 +17,7 @@
     },
     "apis": {
       "custom": {
-        "endpoint": { "uri": "arn:aws:lambda:us-east-1:ACCOUNT_ID:function:mango-display-echo-test" },
+        "endpoint": { "uri": "arn:aws:lambda:us-east-1:945710099949:function:echo-show-app-test" },
         "interfaces": [
           {
             "type": "ALEXA_PRESENTATION_APL",

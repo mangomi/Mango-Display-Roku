@@ -63,6 +63,39 @@ one into a rough HTML preview (clock expressions evaluated). For the real
 renderer, paste the JSON into the APL authoring tool (developer console →
 Build → Multimodal Responses).
 
+## Deployed (test) - 2026-10-27
+
+| Resource | Name |
+|---|---|
+| Lambda | `arn:aws:lambda:us-east-1:945710099949:function:echo-show-app-test` (Node.js 22, arm64, 256 MB, 8s) |
+| IAM role | `echo-show-app-test-lambda` (AWSLambdaBasicExecutionRole only) |
+| Log group | `/aws/lambda/echo-show-app-test` (14 days) |
+
+All tagged `Project=echo show app`, `Environment=test`,
+`Purpose=Mango Display Alexa skill for Echo Show`. Smoke-tested by a
+direct invoke: pairing screen in ~1s. Redeploy after a code change:
+
+```
+cd echo-show/lambda && zip -q -r /tmp/lambda.zip index.js env.js identity.js backend.js clock.js apl.js package.json
+aws lambda update-function-code --region us-east-1 --function-name echo-show-app-test --zip-file fileb:///tmp/lambda.zip
+```
+
+Remove everything: delete the function, the log group, detach the policy
+and delete the role (and the skill in the developer console).
+
+## Stay-awake test (go/no-go before building more)
+
+The display screen runs a heartbeat that waits 10s holding `screenLock`
+(pauses the screen's inactivity timer), then asks the skill for updates;
+every event is logged as `[Mango] event ... session=...`. Pass if, with
+nobody touching the Echo:
+
+- after 1h, 8h and 24h the display is still on screen and the log shows
+  events every ~10s throughout (including after Alexa closes the first
+  session - watch for `(new)` sessions or `session ended` lines);
+- a calendar edit in the webapp appears within ~10s;
+- (Echo Show 15) rotating it redraws full-screen for the new orientation.
+
 ## Deploying to a real Echo Show (test)
 
 AWS account 945710099949, us-east-1. Every resource tagged

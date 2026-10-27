@@ -99,7 +99,7 @@ test("display screen carries the touch layer and the held presses", () => {
   assert.strictEqual(boxes.length, 2);
   assert.ok(d.document.layouts.MmBox, "the checkbox is defined once on the screen");
   assert.deepStrictEqual(root.onMount[0].commands[1].arguments,
-    ["refresh", "${mmVer}", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}", "${mmLayout}", "${mmPageUrls}", "${mmCur}"]);
+    ["refresh", "${mmVer}", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}", "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}"]);
   assert.strictEqual(root.bind.find((b) => b.name === "mmVer").value, "3");
   assert.strictEqual(boxes.find((b) => b.id === "mmBox0_501").mmT0, true); // the held press
   const tap = d.document.layouts.MmBox.items[0].onPress.find((c) => c.type === "SendEvent");

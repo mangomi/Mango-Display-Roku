@@ -9,17 +9,16 @@
 // It all runs on the Echo, like the clock: the skill only builds the
 // document. Two Images, A (below) and B (above), take turns as the photo
 // on show. A loop started on mount waits the interval, hands the next URL
-// to the hidden one and waits for it to load; only then does it play the
-// transition, so the old photo stays up until the new one is decoded -
-// never an empty frame. Image onLoad/onFail run in FAST mode, where
-// AnimateItem and Idle are dropped (a first version started the
-// transition from onLoad and no photo ever appeared on the Echo,
-// 2026-10-27), so they only record what loaded; the loop, in normal mode,
-// does the animating. The state lives on the slideshow's container:
+// to the hidden one and waits up to LOAD_WAIT_MS for it to load, then
+// plays the transition, so the old photo normally stays up until the new
+// one is decoded. Image onLoad/onFail run in FAST mode, where AnimateItem
+// and Idle are dropped, and on Dave's Echo Show 15 photos that waited for
+// onLoad never showed at all (2026-10-27) - so onLoad only shortens the
+// wait, and nothing's visibility depends on it. The state lives on the slideshow's container:
 //
 //   mmSsUrls   the photo list (mmSsPre + each + mmSsSuf: see affixes)
 //   mmSsIdx    the photo shown or loading
-//   mmSsFront  "A" | "B" | "" (none yet - the first reveal)
+//   mmSsFront  "A" | "B": the Image on show
 //   mmSsLoaded which Image last finished loading ("A" | "B" | "")
 //   mmSsFailed the photo being loaded failed
 //
@@ -37,7 +36,11 @@ const { EASE } = require("./pages");
 const DEFAULT_INTERVAL_S = 60;
 const MIN_INTERVAL_S = 3;
 const SWAP_MS = 3000;     // every transition, as on the Roku
-const GIVE_UP_MS = 30000; // a load still pending this long is abandoned
+// How long a change waits for the next photo's onLoad before switching
+// anyway. On Dave's Echo Show 15 photos that waited for onLoad never showed
+// (2026-10-27): the handler cannot be relied on, so it only shortens the
+// wait. A photo slower than this appears where it loads.
+const LOAD_WAIT_MS = 3000;
 const POLL_MS = 250;      // how often the loop looks for the load
 
 // One transform shape everywhere, so every AnimateItem's from/to match.
@@ -134,19 +137,22 @@ function build(cfg, ctx) {
   const full = { position: "absolute", left: 0, top: 0, width: r.w, height: r.h };
   const set = (property, value, when) => ({ type: "SetValue", componentId: ids.box, property, value, when });
 
-  // An Image only reports (fast mode): which one loaded, or that it failed
+  // A shows the first photo from the start, like any Image - nothing waits
+  // on onLoad to make a photo visible. The handlers only report (fast
+  // mode): which one loaded, or that it failed; mmDiagLoads (root) counts
+  // loads for the skill's log, to learn whether this Echo fires onLoad.
   const image = (x) => ({
     type: "Image", id: ids[x], ...full,
     source: x === "A" ? urls[0] : "",
     scale: crop ? "best-fill" : "best-fit",
-    opacity: 0,
-    onLoad: [set("mmSsLoaded", x)],
+    opacity: x === "A" ? 1 : 0,
+    onLoad: [set("mmSsLoaded", x), { type: "SetValue", componentId: "mmRoot", property: "mmDiagLoads", value: "${mmDiagLoads + 1}" }],
     onFail: [set("mmSsFailed", true)],
   });
 
-  // wait (normal mode) until Image `x` has loaded, failed, or GIVE_UP_MS
+  // wait (normal mode) until Image `x` has loaded, failed, or LOAD_WAIT_MS
   const waitFor = (x) => ({
-    type: "Sequential", repeatCount: Math.ceil(GIVE_UP_MS / POLL_MS) - 1, // repeats after the first
+    type: "Sequential", repeatCount: Math.ceil(LOAD_WAIT_MS / POLL_MS) - 1, // repeats after the first
     commands: [{ type: "Idle", delay: POLL_MS, when: "${mmSsLoaded != '" + x + "' && !mmSsFailed}" }],
   });
   // hand the hidden Image `x` the next photo, wait for it, bring it in over
@@ -159,7 +165,8 @@ function build(cfg, ctx) {
       set("mmSsLoaded", ""), set("mmSsFailed", false),
       { type: "SetValue", componentId: ids[x], property: "source", value: "${mmSsPre + mmSsUrls[mmSsIdx] + mmSsSuf}" },
       waitFor(x),
-      { type: "Sequential", when: "${mmSsLoaded == '" + x + "'}", commands: [
+      // loaded, or the wait ran out: switch; only a reported failure skips
+      { type: "Sequential", when: "${!mmSsFailed}", commands: [
         ...swapCommands(transition, ids[x], ids[y], x === "B", r.w, r.h),
         { type: "SetValue", componentId: ids[y], property: "opacity", value: 0 },
         set("mmSsFront", x),
@@ -181,11 +188,6 @@ function build(cfg, ctx) {
   const run = {
     type: "Sequential", sequencer: "slideshow" + p,
     commands: [
-      // the first photo always fades in (nothing meaningful to slide from)
-      waitFor("A"),
-      { type: "Sequential", when: "${mmSsLoaded == 'A'}", commands: [
-        place(ids.A, T(), 0), anim(ids.A, SWAP_MS, EASE, null, null, 0, 1), set("mmSsFront", "A"),
-      ] },
       ...(cycles ? [{
         type: "Sequential", repeatCount: 1000000,
         commands: [
@@ -209,7 +211,7 @@ function build(cfg, ctx) {
       { name: "mmSsSuf", value: suf },
       { name: "mmSsN", value: urls.length },
       { name: "mmSsIdx", value: 0 },
-      { name: "mmSsFront", value: "" },
+      { name: "mmSsFront", value: "A" },
       { name: "mmSsLoaded", value: "" },
       { name: "mmSsFailed", value: false },
       { name: "mmSsNext", value: "" },

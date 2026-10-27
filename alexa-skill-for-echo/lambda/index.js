@@ -108,7 +108,7 @@ async function onUserEvent(envelope) {
   // which session, and how long after launch (CloudWatch)
   console.log("[Mango] event " + (rotate ? "rotate/" : "") + what + " " + e.code +
     " session=" + (envelope.session ? String(envelope.session.sessionId).slice(-8) + (envelope.session.new ? " (new)" : "") : "none") +
-    " screen=" + e.w + "x" + e.h);
+    " screen=" + e.w + "x" + e.h + (what === "refresh" && args[9] !== undefined ? " photoLoads=" + args[9] : ""));
   if (major) { e.major = major; e.minor = minor; }
 
   if (what === "pair" || !e.major) return pairStep(e, !rotate);

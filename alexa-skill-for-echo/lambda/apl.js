@@ -229,7 +229,7 @@ function displayScreen(vp, display, paired, overrides, busy, current) {
   // presses, busy, layout fingerprint, page images, page on screen (all
   // bound on the root, so an in-place update keeps them current)
   const refreshArgs = ["refresh", "${mmVer}", paired.major, paired.minor, "${overrides}", "${mmBusy ? 1 : 0}",
-    "${mmLayout}", "${mmPageUrls}", "${mmCur}"];
+    "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}"];
   let pending = overrides;
   const L = listsOf(pages, overrides);
   const items = [pagesMod.swipeCatcher(vp)];
@@ -260,6 +260,9 @@ function displayScreen(vp, display, paired, overrides, busy, current) {
       { name: "mmVer", value: String(display.version) },
       { name: "mmLayout", value: view.layout },
       { name: "mmPageUrls", value: view.urls.join("|") },
+      // photo loads this screen saw (overlay-slideshow.js) - logged by the
+      // skill, to learn whether the Echo fires Image onLoad
+      { name: "mmDiagLoads", value: 0 },
     ].concat(pagesMod.rootBinds(pages, cur, manifest.gestures)).concat(L.binds),
     commands: { ...pagesMod.commandDefinitions(vp.w, vp.h), ...celebrations.commandDefinitions() },
     // after an edit, turn from where the screen was to the page edited;

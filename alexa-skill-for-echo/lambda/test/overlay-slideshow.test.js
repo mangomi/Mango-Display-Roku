@@ -52,7 +52,7 @@ function machine(cfg) {
     }
   }
   const gen = run(box.onMount);
-  const handle = (cmds) => { for (const _ of run(cmds)); };
+  const handle = (cmds) => { for (const _ of run(cmds.filter((c) => c.componentId !== "mmRoot"))); };
   const [A, B] = Object.keys(imgs);
   const interval = Math.max(3, Number(cfg.intervalSeconds) || 60) * 1000;
   const m = {
@@ -79,14 +79,13 @@ function machine(cfg) {
     // the Image the loop is waiting on
     loading: () => (vars.mmSsNext || "A") === "A" ? A : B,
   };
-  m.tick(); // the mount sequence starts waiting for the first photo
   return m;
 }
 
 test("cycles A/B; the old photo stays up until the new one loads", () => {
   const m = machine(widget());
-  assert.strictEqual(m.shown(), null);
-  m.load(m.A);
+  // the first photo shows at once - no waiting on onLoad to be visible
+  assert.strictEqual(m.shown(), photos(3)[0]);
   m.rest();
   assert.strictEqual(m.shown(), photos(3)[0]);
   m.tick();
@@ -109,7 +108,6 @@ test("cycles A/B; the old photo stays up until the new one loads", () => {
 
 test("a failed photo is skipped, the old one stays", () => {
   const m = machine(widget());
-  m.load(m.A);
   m.rest();
   m.tick();
   m.fail(m.B);
@@ -122,23 +120,21 @@ test("a failed photo is skipped, the old one stays", () => {
   assert.strictEqual(m.shown(), photos(3)[2]);
 });
 
-test("a load that never ends is given up on after ~30s, then the loop goes on", () => {
+test("an Echo that never reports onLoad still changes photos, after at most 3s", () => {
   const m = machine(widget());
-  m.load(m.A);
   m.rest();
   m.tick();
-  const polls = m.rest(); // B never loads
-  assert.strictEqual(polls, 30000 / 250 - 1, "waited ~30s in 250ms polls");
-  assert.strictEqual(m.shown(), photos(3)[0], "the old photo stayed");
+  const polls = m.rest(); // B never reports a load
+  assert.strictEqual(polls, 3000 / 250 - 1, "waited up to 3s in 250ms polls");
+  assert.strictEqual(m.shown(), photos(3)[1], "switched anyway");
   m.tick();
-  assert.strictEqual(m.vars.mmSsIdx, 2, "moved on");
-  assert.strictEqual(m.props[m.B].source, photos(3)[2]);
+  m.rest();
+  assert.strictEqual(m.shown(), photos(3)[2], "and keeps cycling");
 });
 
 test("every transition leaves exactly the new photo visible", () => {
   for (const transition of ["fade", "slideleft", "slideright", "slideup", "slidedown", "flip", "pop"]) {
     const m = machine(widget({ transition }));
-    m.load(m.A);
     m.rest();
     for (let i = 1; i <= 4; i++) {
       m.tick();
@@ -190,6 +186,7 @@ test("layers: page color, the two photos, dimming on top, at the rect", () => {
 
 test("interval: min 3s, default 60s", () => {
   const idle = (extra) => build(widget(extra), ctx)[0].onMount[0].commands.find((c) => c.repeatCount === 1000000).commands[0].delay;
+  assert.strictEqual(build(widget(), ctx)[0].items.find((c) => /ssA$/.test(c.id)).opacity, 1, "first photo visible from the start");
   assert.strictEqual(idle({ intervalSeconds: 1 }), 3000);
   assert.strictEqual(idle({ intervalSeconds: undefined }), 60000);
   assert.strictEqual(idle({ intervalSeconds: 15 }), 15000);
@@ -201,8 +198,6 @@ test("background: whole canvas; one photo sent as a pair is a still; a lone one 
   assert.deepStrictEqual([box.left, box.top, box.width, box.height], [0, 0, 960, 540]);
   assert.ok(!JSON.stringify(box.onMount).includes("1000000"), "nothing to cycle");
   const m = machine(bg);
-  m.load(m.A);
-  m.rest();
   assert.strictEqual(m.shown(), "https://example.com/a.jpg");
   // fewer than two: nothing here, overlays.js draws the still
   assert.deepStrictEqual(build({ ...bg, images: ["https://example.com/a.jpg"] }, ctx), []);

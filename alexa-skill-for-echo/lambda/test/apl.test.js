@@ -191,3 +191,10 @@ test("no animation, wait, event or named command in a fast-mode handler, on any 
     assert.deepStrictEqual(fastModeViolations(d.document.commands || {}), []);
   }
 });
+
+test("pairing: the code sits in the middle of the screen, portrait or landscape", () => {
+  for (const v of [{ w: 1080, h: 1920 }, { w: 1920, h: 1080 }]) {
+    const col = apl.pairingScreen(v, "ET123456789", false).document.mainTemplate.items[0].items[0].items[0];
+    assert.deepStrictEqual([col.height, col.justifyContent, col.alignItems, col.paddingTop], ["100%", "center", "center", undefined]);
+  }
+});

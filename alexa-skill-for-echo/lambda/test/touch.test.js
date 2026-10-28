@@ -69,21 +69,50 @@ test("checkboxes: drawn with the manifest's sprites, press ticks then tells the 
   assert.strictEqual(fast.sequencer, "fastcheck");
   assert.strictEqual(dwell.type, "MmRestartDwell");
 });
-test("calendar swipes only when the user allows calendar scrolling, and under the boxes", () => {
+test("calendar swipes only when the user allows calendar scrolling; read by the page layer", () => {
   assert.strictEqual(touch.touchComponents(ctx({ calendarScroll: false })).length, 1);
+  assert.strictEqual(touch.calendarGestures(ctx({ calendarScroll: false })), null);
   const comps = touch.touchComponents(ctx({ calendarScroll: true }));
   assert.strictEqual(comps.length, 2);
-  const cal = comps[0]; // first = drawn underneath
+  // the calendar area itself is no TouchWrapper: inside the page layer's
+  // wrapper it never got a drag on the Echo
+  assert.strictEqual(comps[0].type, "Container");
+  const g = touch.calendarGestures(ctx({ calendarScroll: true }));
   // onDown/onUp run in fast mode where SendEvent is ignored: they may only
   // record; the send happens in onPress (normal mode)
   const sends = (cmds) => JSON.stringify(cmds || []).includes("SendEvent");
-  assert.ok(!sends(cal.onDown) && !sends(cal.onUp), "SendEvent in a fast-mode handler");
-  assert.strictEqual(cal.onUp.find((c) => /mmDownY - event/.test(c.when)).value, "swipeup");
-  const gate = cal.onPress[0];
+  assert.ok(!sends(g.onDown) && !sends(g.onUp), "SendEvent in a fast-mode handler");
+  const rec = g.onUp.find((c) => c.value === "swipeup");
+  assert.match(rec.when, /mmDownY - event\.component\.y > 40/);
+  // only a drag that STARTS on the calendar (region 400,100 600x800 canvas -> dp)
+  const r = place.rect(page.regions[0].rect);
+  assert.ok(rec.when.includes("mmDownX >= " + r.x) && rec.when.includes("mmDownY < " + (r.y + r.h)));
+  const gate = g.onPress[0];
   assert.match(gate.when, /utcTime - mmLastSent > 1200/); // one swipe, one send
   const up = gate.commands.find((c) => /'swipeup'/.test(c.when || ""));
   const ev = up.commands.find((c) => c.type === "SendEvent");
   assert.deepStrictEqual(ev.arguments.slice(0, 6), ["touch", "swipeup", "0", "700", "500", "31"]);
+});
+
+test("one page layer reads both swipes: sideways turns the page, up/down on the calendar scrolls it", () => {
+  const manifest = { canvas: { width: 1080, height: 1920 }, gestures: { calendarScroll: true, pageSwipe: true }, pages: [page, page] };
+  const d = apl.displayScreen({ w: 1080, h: 1920 }, { manifest, assetBase: "https://a/", version: 3 }, { major: "1", minor: "822" }, "");
+  const root = d.document.mainTemplate.items[0].items[0];
+  const layer = root.items.find((i) => i.id === "mmP0");
+  assert.strictEqual(layer.type, "TouchWrapper");
+  assert.ok(layer.onUp.some((c) => c.property === "mmDir"), "page swipe");
+  assert.ok(layer.onUp.some((c) => c.property === "mmSwipe"), "calendar swipe");
+  assert.ok(JSON.stringify(layer.onPress).includes('"swipeup"'));
+  assert.ok(layer.onPress.some((c) => c.type === "MmPageNext"));
+  // no other wrapper competes for a drag: only checkboxes (taps) inside
+  const wrappers = [];
+  (function walk(n) {
+    if (Array.isArray(n)) return n.forEach(walk);
+    if (!n || typeof n !== "object") return;
+    if (n.type === "TouchWrapper") wrappers.push(n);
+    Object.values(n).forEach(walk);
+  })(layer.item);
+  assert.strictEqual(wrappers.length, 0);
 });
 
 test("display screen carries the touch layer and the held presses", () => {
@@ -94,7 +123,7 @@ test("display screen carries the touch layer and the held presses", () => {
   assert.strictEqual(root.id, touch.ROOT_ID);
   assert.match(root.bind[0].value, /^501:1:/);
   const layer = root.items.find((i) => i.id === "mmP0").item.items;
-  assert.strictEqual(layer.filter((i) => i.type === "TouchWrapper").length, 1); // the calendar
+  assert.strictEqual(layer.filter((i) => i.type === "TouchWrapper").length, 0); // the calendar is read by the layer
   const boxes = layer.find((i) => i.bind && i.bind[0].name === "mmBoxE").items;
   assert.strictEqual(boxes.length, 2);
   assert.ok(d.document.layouts.MmBox, "the checkbox is defined once on the screen");
@@ -129,11 +158,12 @@ test("no bound variable or SetValue target shadows a built-in component property
 
 test("swipe: the Roku spinner centred on the calendar at once, cleared after 15s if no redraw", () => {
   const cal = touch.touchComponents(ctx({ calendarScroll: true }))[0];
-  const sp = cal.item.items[0];
+  const sp = cal.items[0];
   assert.match(sp.source, /^data:image\/png;base64,/);
   assert.strictEqual(sp.opacity, "${mmSwiping == '31' ? 1 : 0}");
   assert.strictEqual(sp.left + sp.width / 2, 600 / 2); // centre of the 600-wide region
-  const send = cal.onPress[0].commands.find((c) => /'swipeup'/.test(c.when || "")).commands;
+  const g = touch.calendarGestures(ctx({ calendarScroll: true }));
+  const send = g.onPress[0].commands.find((c) => /'swipeup'/.test(c.when || "")).commands;
   assert.deepStrictEqual([send[0].componentId, send[0].property, send[0].value], [touch.ROOT_ID, "mmSwiping", "31"]);
   assert.ok(send.findIndex((c) => c.type === "SendEvent") > 0); // spinner before the round trip
   const hide = send.find((c) => c.sequencer === "busyhide");

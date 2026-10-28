@@ -154,7 +154,8 @@ function pairingScreen(vp, code, connected, paired) {
   if (!connected) {
     col.push({ type: "Text", text: "Setup at " + env.setupHost + " using any browser", color: "#CCCCCC", fontSize: 28 * k, textAlign: "center" });
   }
-  const items = [{ type: "Container", width: "100%", alignItems: "center", paddingTop: 230 * k, items: col }];
+  // centred both ways, whichever way the Echo is turned
+  const items = [{ type: "Container", width: "100%", height: "100%", alignItems: "center", justifyContent: "center", items: col }];
   // below the text, not over it (Roku busyAt at 78% of the screen height)
   if (connected) items.push(spinner(vp.w / 2, vp.h * 0.78, SPINNER_PX * k));
   const args = connected ? ["loading", "", paired.major, paired.minor] : ["pair"];
@@ -250,11 +251,12 @@ function displayScreen(vp, display, paired, overrides, busy, current) {
     const layerItems = [...ov.under];
     if (page && page.image) layerItems.push(...pageImages(view, i));
     layerItems.push(...ov.over);
-    layerItems.push(...touch.touchComponents({
+    const tctx = {
       page, pageIndex: i, place, assetBase, states: held.states, gestures: manifest.gestures,
       refreshArgs, major: paired.major, minor: paired.minor, listIndex: (item) => L.index(i, item),
-    }));
-    items.push(pagesMod.layer(i, cur, vp, layerItems));
+    };
+    layerItems.push(...touch.touchComponents(tctx));
+    items.push(pagesMod.layer(i, cur, vp, layerItems, touch.calendarGestures(tctx)));
   });
   const held = allHeld(pages, overrides);
   items.push(...effects.displayEffects(manifest.effects || [], { place, canvas, assetBase, vp }));

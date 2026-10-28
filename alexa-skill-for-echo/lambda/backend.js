@@ -158,10 +158,15 @@ async function waitForNewVersion(d, held, deadline) {
 }
 
 /** Cheap check for "anything new?" - /version answers immediately with
- * { version, busy } (busy: the service is applying an edit). null when
- * the service could not be asked. */
+ * { version, busy } (busy: the service is applying an edit), or
+ * { unpaired: true } once the display was reset. null when the service
+ * could not be asked. */
 async function currentVersion(d) {
   const r = await request(env.controlBase + "/version?v=1" + identity(d));
+  // reset in the webapp: the service no longer knows the display (the
+  // Roku hears paired:false on its /wait long-poll; this 10s check
+  // arrives after the display is gone - the Echo stayed on the old screen)
+  if (r && r.status === 404) return { unpaired: true };
   return r && r.status === 200 && r.json ? { version: r.json.version, busy: r.json.busy === true } : null;
 }
 

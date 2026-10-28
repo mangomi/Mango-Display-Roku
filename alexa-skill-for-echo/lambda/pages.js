@@ -176,20 +176,23 @@ function pageTurnFrom(dirVar) {
  * they only record; onPress acts. The wrapper carries the layer id and
  * `display`, so MmTurn animates and hides it, and an invisible page takes
  * no touches. */
-function layer(i, current, vp, items) {
+function layer(i, current, vp, items, extra) {
+  const g = extra || {};
   return {
     type: "TouchWrapper", id: layerId(i),
     position: "absolute", left: 0, top: 0, width: vp.w, height: vp.h,
     display: i === current ? "normal" : "invisible",
-    bind: [{ name: "mmDownX", value: 0 }, { name: "mmDownY", value: 0 }, { name: "mmDir", value: "" }],
+    bind: [{ name: "mmDownX", value: 0 }, { name: "mmDownY", value: 0 }, { name: "mmDir", value: "" }].concat(g.binds || []),
     item: { type: "Container", width: "100%", height: "100%", items },
     onDown: [
       { type: "SetValue", property: "mmDownX", value: "${event.component.x}" },
       { type: "SetValue", property: "mmDownY", value: "${event.component.y}" },
       { type: "SetValue", property: "mmDir", value: "" },
-    ],
-    onUp: horizontalSwipe("mmDir"),
-    onPress: pageTurnFrom("mmDir"),
+    ].concat(g.onDown || []),
+    // `extra`: the page's calendar swipes (touch.calendarGestures), read
+    // here too, since this wrapper is the one that gets the drag
+    onUp: horizontalSwipe("mmDir").concat(g.onUp || []),
+    onPress: pageTurnFrom("mmDir").concat(g.onPress || []),
   };
 }
 

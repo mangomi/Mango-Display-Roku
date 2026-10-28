@@ -22,7 +22,6 @@
 // does not reflect yet (applyOverrides) and drops agreed or stale ones.
 
 const { spinner, SIZE_PX: SPINNER_PX } = require("./spinner");
-const pagesMod = require("./pages");
 
 // a vertical drag: more up/down than sideways
 const VERTICAL = "Math.abs(event.component.y - mmDownY) >= Math.abs(event.component.x - mmDownX)";
@@ -127,71 +126,85 @@ function touchComponents(ctx) {
       items: boxes,
     });
   }
-  const regions = Array.isArray(page && page.regions) ? page.regions : [];
-  if (gestures && gestures.calendarScroll === true) {
-    for (const reg of regions) {
-      if (reg.kind !== "calendar" || !reg.rect) continue;
-      const r = place.rect(reg.rect);
-      const cx = Math.round(reg.rect.x + reg.rect.w / 2);
-      const cy = Math.round(reg.rect.y + reg.rect.h / 2);
-      // busy: the Roku spinner centred on the calendar from the swipe
-      // until the redraw replaces the screen (InteractionLayer busyAt) - a
-      // swipe has no instant local effect, and without it the screen
-      // looked frozen (Dave 2026-10-27). mmSwiping also keeps the
-      // screen-centre busy spinner off meanwhile.
-      const regId = String(reg.id == null ? "" : reg.id).replace(/[^0-9A-Za-z_-]/g, "");
-      const setSwiping = (v) => ({ type: "SetValue", componentId: ROOT_ID, property: "mmSwiping", value: v });
-      const send = (kind) => [
-        setSwiping(regId),
-        { type: "Sequential", sequencer: "busyhide", commands: [{ type: "Idle", delay: BUSY_MAX_MS }, setSwiping("")] },
-        { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(cx), String(cy), regId, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8]] },
-        fastCheck(refreshArgs),
-      ];
-      // onDown/onUp run in FAST mode, where SendEvent is ignored - a first
-      // version sent from onUp and no swipe ever reached the skill. So
-      // onUp only records the direction; onPress (normal mode, runs right
-      // after onUp when the finger lifts inside the area) sends it.
-      under.push({
-        type: "TouchWrapper",
-        position: "absolute", left: r.x, top: r.y, width: r.w, height: r.h,
-        // mmLastSent: one finger swipe reached the skill 2-3 times within a
-        // second on the Echo Show 15 (2026-10-27), each moving the calendar;
-        // a second swipe inside SWIPE_GAP_MS is dropped
-        bind: [{ name: "mmDownX", value: 0 }, { name: "mmDownY", value: 0 }, { name: "mmSwipe", value: "" },
-          { name: "mmLastSent", value: 0 }, { name: "mmDir", value: "" }],
-        item: {
-          type: "Container", width: "100%", height: "100%",
-          items: [spinner(r.w / 2, r.h / 2, place.len(SPINNER_PX), "${mmSwiping == '" + regId + "' ? 1 : 0}")],
-        },
-        onDown: [
-          { type: "SetValue", property: "mmDownX", value: "${event.component.x}" },
-          { type: "SetValue", property: "mmDownY", value: "${event.component.y}" },
-          { type: "SetValue", property: "mmSwipe", value: "" },
-          { type: "SetValue", property: "mmDir", value: "" },
-        ],
-        // finger moves UP -> swipeup (the portal's own gesture names)
-        // vertical -> calendar scroll; horizontal -> page turn (pages.js)
-        onUp: [
-          { type: "SetValue", property: "mmSwipe", when: "${" + VERTICAL + " && mmDownY - event.component.y > " + SWIPE_MIN_DP + "}", value: "swipeup" },
-          { type: "SetValue", property: "mmSwipe", when: "${" + VERTICAL + " && event.component.y - mmDownY > " + SWIPE_MIN_DP + "}", value: "swipedown" },
-        ].concat(pagesMod.horizontalSwipe("mmDir")),
-        onPress: [
-          {
-            type: "Sequential",
-            when: "${mmSwipe != '' && utcTime - mmLastSent > " + SWIPE_GAP_MS + "}",
-            commands: [
-              { type: "SetValue", property: "mmLastSent", value: "${utcTime}" },
-              { type: "Sequential", when: "${mmSwipe == 'swipeup'}", commands: send("swipeup") },
-              { type: "Sequential", when: "${mmSwipe == 'swipedown'}", commands: send("swipedown") },
-            ],
-          },
-          { type: "SetValue", property: "mmSwipe", value: "" },
-          { type: "MmRestartDwell", when: "${mmDir == ''}" },
-        ].concat(pagesMod.pageTurnFrom("mmDir")),
-      });
-    }
+  // calendar areas draw only their spinner here; the swipe itself is
+  // read by the page layer (calendarGestures below)
+  for (const c of calendars(ctx)) {
+    under.push({
+      type: "Container", position: "absolute", left: c.r.x, top: c.r.y, width: c.r.w, height: c.r.h,
+      items: [spinner(c.r.w / 2, c.r.h / 2, place.len(SPINNER_PX), "${mmSwiping == '" + c.regId + "' ? 1 : 0}")],
+    });
   }
   return under.concat(out);
+}
+
+/** The page's calendar areas (dp rect, region id, canvas centre), when the
+ * user allows calendar scrolling. */
+function calendars(ctx) {
+  const { page, place, gestures } = ctx;
+  if (!(gestures && gestures.calendarScroll === true)) return [];
+  const regions = Array.isArray(page && page.regions) ? page.regions : [];
+  return regions.filter((reg) => reg.kind === "calendar" && reg.rect).map((reg) => ({
+    r: place.rect(reg.rect),
+    regId: String(reg.id == null ? "" : reg.id).replace(/[^0-9A-Za-z_-]/g, ""),
+    cx: Math.round(reg.rect.x + reg.rect.w / 2),
+    cy: Math.round(reg.rect.y + reg.rect.h / 2),
+  }));
+}
+
+/** Calendar swipes, read by the page layer (pages.layer) - not by a
+ * TouchWrapper of their own. On the Echo only one wrapper gets a drag:
+ * with the page layer a wrapper (for page swipes) the calendar's own
+ * wrapper inside it never heard a swipe again (2026-10-28). So the page
+ * layer sees every drag and sorts it: sideways anywhere -> page turn
+ * (pages.js); up/down starting on a calendar -> that calendar's
+ * swipeup/swipedown. Returns the extra binds and handlers, or null. */
+function calendarGestures(ctx) {
+  const { pageIndex, refreshArgs, major, minor } = ctx;
+  const cals = calendars(ctx);
+  if (!cals.length) return null;
+  const setSwiping = (v) => ({ type: "SetValue", componentId: ROOT_ID, property: "mmSwiping", value: v });
+  // busy: the Roku spinner centred on the calendar from the swipe until
+  // the redraw replaces it (InteractionLayer busyAt) - a swipe has no
+  // instant local effect, and without it the screen looked frozen (Dave
+  // 2026-10-27). mmSwiping also keeps the screen-centre spinner off.
+  const send = (c, kind) => [
+    setSwiping(c.regId),
+    { type: "Sequential", sequencer: "busyhide", commands: [{ type: "Idle", delay: BUSY_MAX_MS }, setSwiping("")] },
+    { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(c.cx), String(c.cy), c.regId, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8]] },
+    fastCheck(refreshArgs),
+    { type: "MmRestartDwell" },
+  ];
+  const inside = (c) => "mmDownX >= " + c.r.x + " && mmDownX < " + (c.r.x + c.r.w) +
+    " && mmDownY >= " + c.r.y + " && mmDownY < " + (c.r.y + c.r.h);
+  const up = "mmDownY - event.component.y > " + SWIPE_MIN_DP;
+  const down = "event.component.y - mmDownY > " + SWIPE_MIN_DP;
+  return {
+    // mmLastSent: one finger swipe reached the skill 2-3 times within a
+    // second on the Echo Show 15 (2026-10-27), each moving the calendar;
+    // a second swipe inside SWIPE_GAP_MS is dropped
+    binds: [{ name: "mmSwipe", value: "" }, { name: "mmReg", value: -1 }, { name: "mmLastSent", value: 0 }],
+    onDown: [{ type: "SetValue", property: "mmSwipe", value: "" }, { type: "SetValue", property: "mmReg", value: -1 }],
+    // onUp runs in FAST mode, where SendEvent is ignored (a first version
+    // sent from onUp and no swipe reached the skill): it only records;
+    // onPress (normal mode, right after the finger lifts) sends.
+    // Finger moves UP -> swipeup (the portal's own gesture names).
+    onUp: cals.flatMap((c, i) => [
+      { type: "SetValue", property: "mmReg", when: "${" + VERTICAL + " && " + inside(c) + "}", value: i },
+      { type: "SetValue", property: "mmSwipe", when: "${" + VERTICAL + " && " + inside(c) + " && " + up + "}", value: "swipeup" },
+      { type: "SetValue", property: "mmSwipe", when: "${" + VERTICAL + " && " + inside(c) + " && " + down + "}", value: "swipedown" },
+    ]),
+    onPress: [
+      {
+        type: "Sequential",
+        when: "${mmSwipe != '' && utcTime - mmLastSent > " + SWIPE_GAP_MS + "}",
+        commands: [{ type: "SetValue", property: "mmLastSent", value: "${utcTime}" }].concat(cals.flatMap((c, i) => [
+          { type: "Sequential", when: "${mmReg == " + i + " && mmSwipe == 'swipeup'}", commands: send(c, "swipeup") },
+          { type: "Sequential", when: "${mmReg == " + i + " && mmSwipe == 'swipedown'}", commands: send(c, "swipedown") },
+        ])),
+      },
+      { type: "SetValue", property: "mmSwipe", value: "" },
+    ],
+  };
 }
 
 const r2 = (v) => Math.round(v * 100) / 100;
@@ -240,4 +253,4 @@ function layouts(refreshArgs, major, minor, afterTick = []) {
   };
 }
 
-module.exports = { ROOT_ID, touchComponents, applyOverrides, parseOverrides, targetId, boxId, layouts };
+module.exports = { ROOT_ID, touchComponents, calendarGestures, applyOverrides, parseOverrides, targetId, boxId, layouts };

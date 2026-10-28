@@ -120,6 +120,12 @@ async function onUserEvent(envelope) {
     if (rotate) return showDisplay(e, null, false, false, overrides, { page });
     const v = await backend.currentVersion(e);
     if (v === null) return respond();
+    if (v.unpaired) {
+      // reset in the webapp: same code, pairing screen again (MainScene
+      // onVersionChange paired = false)
+      console.log("[Mango] " + e.code + " display was reset - back to pairing");
+      return respond({ directives: [apl.pairingScreen(e.vp, e.code, false)] });
+    }
     if (String(v.version) !== ver) return showDisplay(e, ver, false, true, overrides, shown);
     // same pictures, but the service started/finished applying an edit:
     // flip the spinner without a redraw (the Roku's onBusyChange)

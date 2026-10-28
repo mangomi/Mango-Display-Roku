@@ -165,8 +165,10 @@ once as a tall transparent strip and the device does the motion.
   with the payload id. Hold the strip while the pointer is over it.
 
 Emitted only to devices whose client understands it
-(`NATIVE_SCROLL_PREFIXES` in `render-service/capture.js`); every other
-device receives the same cell as a `gif` sprite sheet.
+(`NATIVE_SCROLL_PREFIXES` in `render-service/capture.js`: RK, ATV, and
+ET since 2026-10-28, test); every other device receives the same cell as
+a `gif` sprite sheet. The sheet is a poor substitute for a tall list: a
+673 px to-do list came out as 15 frames at 16 s each (308 px a step).
 
 Do not delete `source` when generating a sheet. An earlier version did,
 which quietly made the manifest Roku-only.

@@ -133,54 +133,29 @@ function build(cfg, ctx) {
     top += seg.h;
   }
 
-  // checkboxes ride the strip, at their strip position
+  // checkboxes ride the strip, at their strip position. Each is an
+  // instance of the MmSBox layout (layouts() below): only its place and
+  // identity travel per box (~250 bytes instead of ~1.35 KB). Dave's
+  // chores + to-do strips carry 113 boxes, and written out in full they
+  // made a 245 KB screen the Echo never took (2026-10-28).
   const sprites = cfg.sprites;
   const boxes = Array.isArray(cfg.boxes) ? cfg.boxes : [];
-  if (sprites && sprites.empty && sprites.checked && boxes.length) {
+  const hasBoxes = !!(sprites && sprites.empty && sprites.checked && boxes.length);
+  if (hasBoxes) {
     // the presses the screen still holds apply here as to page targets
     const { states } = applyOverrides({ targets: { items: boxes } }, ctx.overrides);
-    const t = phaseExpr(m);
-    const perMs = (m.toY - m.fromY) / m.ms; // canvas px the strip moves a ms
     const pad = PAD * s;
     pressable(cfg).forEach(({ box: b, index: i, span }) => {
-      const id = targetId(b);
-      const cx = Math.round(cfg.rect.x + b.x + b.w / 2);
-      const cy = "${Math.round(" + r2(cfg.rect.y + m.fromY + b.y + b.h / 2) + " + " + perMs.toPrecision(6) + " * " + t + ")}";
       items.push({
-        type: "TouchWrapper",
+        type: "MmSBox",
         id: boxId(idPrefix, i),
         position: "absolute",
         left: r2(b.x * s - pad), top: r2(b.y * s - pad), width: r2(b.w * s + pad * 2), height: r2(b.h * s + pad * 2),
-        // mmTicked, never "checked" (touch.js)
-        bind: [{ name: "mmTicked", value: states[i] === true }],
-        item: {
-          type: "Container", width: "100%", height: "100%",
-          items: [{
-            type: "Image", position: "absolute", left: r2(pad), top: r2(pad), width: r2(b.w * s), height: r2(b.h * s),
-            source: "${mmTicked ? mmSChecked : mmSEmpty}", scale: "fill",
-          }],
-        },
-        onPress: [{
-          type: "Sequential",
-          when: "${" + t + " > " + span[0] + " && " + t + " < " + span[1] + "}",
-          commands: [
-            // tick now, ask later
-            { type: "SetValue", property: "mmTicked", value: "${!mmTicked}" },
-            // the celebration, as for a page box: one short call to the
-            // document's MmStripDone (apl.js), at where the box is now
-            ...(ctx.celebrate ? [{
-              type: "MmStripDone", mmL: ctx.listIndex ? ctx.listIndex(b) : -1, mmTicked: "${mmTicked}",
-              mmBx: r2(win.x + (b.x + b.w / 2) * s), mmBy: "${" + r2(place.oy) + " + " + r2(place.scale) + " * " + cy.slice(2, -1) + "}",
-            }] : []),
-            ...(id ? [{
-              type: "SetValue", componentId: ROOT_ID, property: "overrides",
-              value: "${overrides + '" + id + ":' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",
-            }] : []),
-            { type: "SendEvent", arguments: ["touch", "tap", String(pageIndex), String(cx), cy, id, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8], refreshArgs[10]] },
-            fastCheck(refreshArgs),
-            { type: "MmRestartDwell" },
-          ],
-        }],
+        mmT0: states[i] === true, mmTid: targetId(b) || "", mmA: span[0], mmZ: span[1],
+        // the box centre on the canvas: x fixed, y at the strip's start
+        mmX: String(Math.round(cfg.rect.x + b.x + b.w / 2)), mmY: r2(cfg.rect.y + m.fromY + b.y + b.h / 2),
+        mmL: ctx.listIndex ? ctx.listIndex(b) : -1, mmBx: r2(win.x + (b.x + b.w / 2) * s),
+        mmW: r2(b.w * s), mmH: r2(b.h * s),
       });
     });
   }
@@ -192,9 +167,15 @@ function build(cfg, ctx) {
     position: "absolute", left: 0, top: 0, width: m.stripW * s, height: m.stripH * s,
     transform: from,
     // the box art once for all of the strip's boxes
-    bind: [{ name: "mmScrollT0", value: 0 }].concat(sprites && sprites.empty && sprites.checked ? [
+    // and what its MmSBox boxes read: the motion (for where a box is
+    // now), the page, the padding, canvas -> dp for the celebration
+    bind: [{ name: "mmScrollT0", value: 0 }].concat(hasBoxes ? [
       { name: "mmSEmpty", value: assetBase + sprites.empty },
       { name: "mmSChecked", value: assetBase + sprites.checked },
+      { name: "mmSMs", value: m.ms }, { name: "mmSLp", value: m.loop },
+      { name: "mmSPer", value: Number(((m.toY - m.fromY) / m.ms).toPrecision(6)) }, // canvas px a ms
+      { name: "mmSPg", value: String(pageIndex) }, { name: "mmSPad", value: r2(PAD * s) },
+      { name: "mmSOy", value: r2(place.oy) }, { name: "mmSSc", value: r2(place.scale) },
     ] : []),
     onMount: [{
       type: "Sequential",
@@ -220,4 +201,56 @@ function build(cfg, ctx) {
   }];
 }
 
-module.exports = { build, motion, phaseExpr, visibleSpan, pressable, boxId };
+
+/** How far into its motion the strip is now, ms, from inside an MmSBox
+ * (reads the strip's binds): phaseExpr with the numbers bound. */
+const PHASE = "(mmSLp ? (elapsedTime - mmScrollT0) % mmSMs : Math.min(mmSMs, elapsedTime - mmScrollT0))";
+/** The box centre's canvas y now. */
+const CY = "Math.round(mmY + mmSPer * " + PHASE + ")";
+
+/** The strip checkbox, defined once in the document (apl.js). A press is
+ * touch.js's checkbox press; ignored while the row is outside the window
+ * (mmA..mmZ, visibleSpan); the tap's y is where the box is NOW. */
+function layouts(refreshArgs, major, minor, celebrate) {
+  return {
+    MmSBox: {
+      parameters: ["mmT0", "mmTid", "mmA", "mmZ", "mmX", "mmY", "mmL", "mmBx", "mmW", "mmH"],
+      items: [{
+        type: "TouchWrapper",
+        // mmTicked, never "checked" (touch.js)
+        bind: [{ name: "mmTicked", value: "${mmT0}" }],
+        item: {
+          type: "Container", width: "100%", height: "100%",
+          items: [{
+            type: "Image", position: "absolute", left: "${mmSPad}", top: "${mmSPad}", width: "${mmW}", height: "${mmH}",
+            source: "${mmTicked ? mmSChecked : mmSEmpty}", scale: "fill",
+          }],
+        },
+        onPress: [{
+          type: "Sequential",
+          when: "${" + PHASE + " > mmA && " + PHASE + " < mmZ}",
+          commands: [
+            // tick now, ask later
+            { type: "SetValue", property: "mmTicked", value: "${!mmTicked}" },
+            // the celebration, as for a page box: the document's
+            // MmStripDone (apl.js), at where the box is now
+            ...(celebrate ? [{
+              type: "MmStripDone", mmL: "${mmL}", mmTicked: "${mmTicked}", mmBx: "${mmBx}",
+              mmBy: "${mmSOy + mmSSc * (mmY + mmSPer * " + PHASE + ")}",
+            }] : []),
+            {
+              type: "SetValue", componentId: ROOT_ID, property: "overrides", when: "${mmTid != ''}",
+              value: "${overrides + mmTid + ':' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",
+            },
+            { type: "SendEvent", arguments: ["touch", "tap", "${mmSPg}", "${mmX}", "${" + CY + "}", "${mmTid}", major, minor,
+              refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8], refreshArgs[10]] },
+            fastCheck(refreshArgs),
+            { type: "MmRestartDwell" },
+          ],
+        }],
+      }],
+    },
+  };
+}
+
+module.exports = { build, motion, phaseExpr, visibleSpan, pressable, boxId, layouts, PHASE };

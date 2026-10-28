@@ -304,7 +304,7 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume) {
     // after an edit, turn from where the screen was to the page edited;
     // otherwise just start the dwell
     // effects are layout instances too (effect-all.js), so they stay small
-    layouts: { ...touch.layouts(refreshArgs, paired.major, paired.minor, celebrateAfterTick(L)), ...require("./effect-all").layouts() },
+    layouts: { ...touch.layouts(refreshArgs, paired.major, paired.minor, celebrateAfterTick(L)), ...scroll.layouts(refreshArgs, paired.major, paired.minor, celebrateAfterTick(L).length > 0), ...require("./effect-all").layouts() },
     onMount: editedPage(manifest, cur) !== null ? [{ type: "MmGoTo", to: editedPage(manifest, cur) }] : [{ type: "MmRotate" }],
   }));
 }

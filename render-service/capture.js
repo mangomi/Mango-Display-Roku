@@ -464,7 +464,7 @@ async function applyCalendarOverride(page, stateDir) {
  * list per platform: Roku's channel does (ScrollOverlay, 2026-09-02); tvOS
  * is queued in TVOS_PARITY_QUEUE.md and joins here once its app has it.
  * Anything not listed keeps receiving the sheets. */
-const NATIVE_SCROLL_PREFIXES = ["RK", "ATV"]; /* ATV joined 2026-09-09: tvOS ff1a107 */
+const NATIVE_SCROLL_PREFIXES = ["RK", "ATV", "ET"]; /* ATV joined 2026-09-09: tvOS ff1a107; ET joined 2026-10-28: Echo Show overlay-scroll.js */
 function wantsNativeScroll(deviceId) {
   const id = String(deviceId || "");
   return NATIVE_SCROLL_PREFIXES.some((p) => id.startsWith(p));

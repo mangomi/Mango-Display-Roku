@@ -477,7 +477,7 @@ function wantsNativeScroll(deviceId) {
  * 2026-09-02: "rather than trying to rotate it via GIF because it looks
  * very jerky"). Roku's channel has MotionOverlay; tvOS joins here once
  * its app has it. Icons the decomposer cannot handle keep the sheets. */
-const NATIVE_WEATHER_PREFIXES = ["RK", "ATV"]; /* ATV joined 2026-09-09: tvOS d02eb65 */
+const NATIVE_WEATHER_PREFIXES = ["RK", "ATV", "ET"]; /* ATV joined 2026-09-09: tvOS d02eb65; ET joined 2026-10-28: Echo Show overlay-motion.js */
 function wantsNativeWeather(deviceId) {
   const id = String(deviceId || "");
   return NATIVE_WEATHER_PREFIXES.some((p) => id.startsWith(p));

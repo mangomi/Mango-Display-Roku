@@ -29,9 +29,13 @@ const VERTICAL = "Math.abs(event.component.y - mmDownY) >= Math.abs(event.compon
 const ROOT_ID = "mmRoot";
 const FAST_MS = 1500;
 const FAST_REPEATS = 10;
-const OVERRIDE_HOLD_MS = 30000; // a press the portal never confirms is dropped
+const OVERRIDE_HOLD_MS = 180000; // a press the portal never confirms is dropped (InteractionLayer: 180s)
 const SWIPE_MIN_DP = 40;
-const SWIPE_GAP_MS = 1200;
+// one swipe in flight (InteractionLayer swipeLock): the next is taken
+// once the swipe's render lands (apl.inPlaceUpdate on an imageOnly
+// manifest clears mmSwipeAt) or after this - a second swipe sent while
+// the first renders made the portal recompute from the same start
+const SWIPE_LOCK_MS = 8000;
 const BUSY_MAX_MS = 15000; // = the fast checks; a redraw that never comes must not leave it up
 const PAD = 16; // canvas px of extra finger room around a checkbox (Roku highlight: 10)
 
@@ -170,7 +174,7 @@ function calendarGestures(ctx) {
   const send = (c, kind) => [
     setSwiping(c.regId),
     { type: "Sequential", sequencer: "busyhide", commands: [{ type: "Idle", delay: BUSY_MAX_MS }, setSwiping("")] },
-    { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(c.cx), String(c.cy), c.regId, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8]] },
+    { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(c.cx), String(c.cy), c.regId, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8], refreshArgs[10]] },
     fastCheck(refreshArgs),
     { type: "MmRestartDwell" },
   ];
@@ -179,10 +183,9 @@ function calendarGestures(ctx) {
   const up = "mmDownY - event.component.y > " + SWIPE_MIN_DP;
   const down = "event.component.y - mmDownY > " + SWIPE_MIN_DP;
   return {
-    // mmLastSent: one finger swipe reached the skill 2-3 times within a
-    // second on the Echo Show 15 (2026-10-27), each moving the calendar;
-    // a second swipe inside SWIPE_GAP_MS is dropped
-    binds: [{ name: "mmSwipe", value: "" }, { name: "mmReg", value: -1 }, { name: "mmLastSent", value: 0 }],
+    // the lock (root mmSwipeAt, SWIPE_LOCK_MS) also stops one finger
+    // swipe reaching the skill 2-3 times, as it did on the Echo Show 15
+    binds: [{ name: "mmSwipe", value: "" }, { name: "mmReg", value: -1 }],
     onDown: [{ type: "SetValue", property: "mmSwipe", value: "" }, { type: "SetValue", property: "mmReg", value: -1 }],
     // onUp runs in FAST mode, where SendEvent is ignored (a first version
     // sent from onUp and no swipe reached the skill): it only records;
@@ -196,8 +199,8 @@ function calendarGestures(ctx) {
     onPress: [
       {
         type: "Sequential",
-        when: "${mmSwipe != '' && utcTime - mmLastSent > " + SWIPE_GAP_MS + "}",
-        commands: [{ type: "SetValue", property: "mmLastSent", value: "${utcTime}" }].concat(cals.flatMap((c, i) => [
+        when: "${mmSwipe != '' && (mmSwipeAt == 0 || utcTime - mmSwipeAt > " + SWIPE_LOCK_MS + ")}",
+        commands: [{ type: "SetValue", componentId: ROOT_ID, property: "mmSwipeAt", value: "${utcTime}" }].concat(cals.flatMap((c, i) => [
           { type: "Sequential", when: "${mmReg == " + i + " && mmSwipe == 'swipeup'}", commands: send(c, "swipeup") },
           { type: "Sequential", when: "${mmReg == " + i + " && mmSwipe == 'swipedown'}", commands: send(c, "swipedown") },
         ])),
@@ -243,7 +246,7 @@ function layouts(refreshArgs, major, minor, afterTick = []) {
             value: "${overrides + mmTid + ':' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",
           },
           { type: "SendEvent", arguments: ["touch", "tap", "${mmPg}", "${mmCx}", "${mmCy}", "${mmTid}", major, minor,
-            refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8]] },
+            refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8], refreshArgs[10]] },
           fastCheck(refreshArgs),
           // a page being worked on is not turned away (pages.js)
           { type: "MmRestartDwell" },

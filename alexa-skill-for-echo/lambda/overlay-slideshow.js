@@ -148,10 +148,31 @@ function updateCommands(cfg, ctx) {
   return [set("mmSsPre", pre), set("mmSsUrls", mids), set("mmSsSuf", suf), set("mmSsN", ph.urls.length)];
 }
 
+/** The root variable that keeps this slideshow's photo number, so a whole
+ * new screen resumes at the next photo instead of the first (the Roku's
+ * lastIndex per widgetSettingId + page, SlideshowOverlay startIndex). */
+function resumeKey(cfg, pageIndex, idPrefix) {
+  const w = cfg && cfg.widgetSettingId != null ? String(cfg.widgetSettingId).replace(/[^0-9A-Za-z]/g, "") : "";
+  return "mmSsI" + (w ? "w" + w + "p" + pageIndex : idPrefix);
+}
+
+/** "key:index,..." as the screen reports it (apl.js) -> Map. */
+function parseResume(s) {
+  const m = new Map();
+  for (const part of String(s || "").split(",")) {
+    const [k, v] = part.split(":");
+    if (/^mmSsI[0-9A-Za-z]+$/.test(k || "") && /^\d+$/.test(v || "")) m.set(k, Number(v));
+  }
+  return m;
+}
+
 function build(cfg, ctx) {
   const ph = photos(cfg, ctx);
   if (!ph) return [];
   const p = ctx.idPrefix;
+  const key = resumeKey(cfg, ctx.pageIndex, p);
+  const last = ctx.resume && ctx.resume.get(key);
+  const start = ph.cycles && Number.isInteger(last) ? (last + 1) % ph.urls.length : 0;
   const ids = { box: p + "ss", A: p + "ssA", B: p + "ssB" };
   const { r, urls } = ph;
   const crop = cfg.cropToFill === true;
@@ -168,7 +189,7 @@ function build(cfg, ctx) {
   // loads for the skill's log, to learn whether this Echo fires onLoad.
   const image = (x) => ({
     type: "Image", id: ids[x], ...full,
-    source: x === "A" ? urls[0] : "",
+    source: x === "A" ? urls[start] : "",
     scale: crop ? "best-fill" : "best-fit",
     opacity: x === "A" ? 1 : 0,
     onLoad: [set("mmSsLoaded", x), { type: "SetValue", componentId: "mmRoot", property: "mmDiagLoads", value: "${mmDiagLoads + 1}" }],
@@ -218,6 +239,8 @@ function build(cfg, ctx) {
         commands: [
           { type: "Idle", delay: intervalMs },
           set("mmSsIdx", "${(mmSsIdx + 1) % mmSsN}"),
+          // remembered on the root, reported with every refresh (resumeKey)
+          { type: "SetValue", componentId: "mmRoot", property: key, value: "${mmSsIdx}" },
           set("mmSsNext", "${mmSsFront == 'A' ? 'B' : 'A'}"),
           // a photo that failed (or never showed) is simply passed over
           advance("B", "A"),
@@ -235,7 +258,7 @@ function build(cfg, ctx) {
       { name: "mmSsUrls", value: cycles ? mids : [] },
       { name: "mmSsSuf", value: suf },
       { name: "mmSsN", value: urls.length },
-      { name: "mmSsIdx", value: 0 },
+      { name: "mmSsIdx", value: start },
       { name: "mmSsFront", value: "A" },
       { name: "mmSsLoaded", value: "" },
       { name: "mmSsFailed", value: false },
@@ -246,4 +269,4 @@ function build(cfg, ctx) {
   }];
 }
 
-module.exports = { build, updateCommands, sized, affixes, swapCommands };
+module.exports = { build, updateCommands, resumeKey, parseResume, sized, affixes, swapCommands };

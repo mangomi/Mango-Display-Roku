@@ -87,7 +87,7 @@ test("boxes ride the strip and press like touch.js's checkboxes", () => {
   assert.match(hold.value, /'501:' \+ \(mmTicked \? 1 : 0\)/);
   // touch.js's argument layout: kind, page, x, y, id, major, minor, ver, presses, layout, urls, page shown
   assert.deepStrictEqual(send.arguments.filter((_, i) => i !== 4),
-    ["touch", "tap", "1", "125", "501", "1", "822", "${mmVer}", "${overrides}", "${mmLayout}", "${mmPageUrls}", "${mmCur}"]);
+    ["touch", "tap", "1", "125", "501", "1", "822", "${mmVer}", "${overrides}", "${mmLayout}", "${mmPageUrls}", "${mmCur}", undefined]);
   assert.strictEqual(fast.sequencer, "fastcheck");
   assert.strictEqual(dwell.type, "MmRestartDwell");
   // nothing is sent from a fast-mode handler

@@ -118,6 +118,7 @@ test("in place: a moved or resized widget needs a whole new screen", () => {
 
 test("in place: checkbox states set on their own boxes; a tick change alone keeps the layout", () => {
   const withBoxes = JSON.parse(JSON.stringify(manifest));
+  withBoxes.pages[0].imageHash = "same";
   withBoxes.pages[0].targets = { sprites: { empty: "e.png", checked: "c.png" },
     items: [{ rect: { x: 10, y: 10, w: 20, h: 20 }, checked: false, payload: { id: 77 } }] };
   const before = { ...v3, manifest: withBoxes };
@@ -197,4 +198,30 @@ test("pairing: the code sits in the middle of the screen, portrait or landscape"
     const col = apl.pairingScreen(v, "ET123456789", false).document.mainTemplate.items[0].items[0].items[0];
     assert.deepStrictEqual([col.height, col.justifyContent, col.alignItems, col.paddingTop], ["100%", "center", "center", undefined]);
   }
+});
+
+test("no imageHash from an older service: the version tags the page URL, so a new picture still swaps", () => {
+  const old = JSON.parse(JSON.stringify(manifest));
+  delete old.pages[0].imageHash;
+  const a = apl.displayView(vp, { ...v3, manifest: old }).urls[0];
+  const b = apl.displayView(vp, { ...v3, version: 4, manifest: old }).urls[0];
+  assert.match(a, /\?h=v3$/);
+  assert.notStrictEqual(a, b);
+});
+
+test("a screen built busy carries the 75s watchdog; an in-place busy update too", () => {
+  const d = apl.displayScreen(vp, v3, paired, "", true, 0);
+  const root = d.document.mainTemplate.items[0].items[0];
+  assert.ok(root.onMount.some((c) => c.sequencer === "busywatch"));
+  const up = apl.inPlaceUpdate(vp, { ...v3, version: 4 }, paired, "", true, shownFor(v3));
+  assert.ok(up.commands.some((c) => c.sequencer === "busywatch"));
+});
+
+test("in place: a fresh dwell, as the Roku re-arms its page timer; a swipe's answer frees the swipe lock", () => {
+  const up = apl.inPlaceUpdate(vp, { ...v3, version: 4 }, paired, "", false, shownFor(v3));
+  assert.strictEqual(up.commands[up.commands.length - 1].type, "MmRestartDwell");
+  assert.ok(!up.commands.some((c) => c.property === "mmSwipeAt"));
+  const swiped = JSON.parse(JSON.stringify({ ...v3, version: 4 })); swiped.manifest.imageOnly = true;
+  const up2 = apl.inPlaceUpdate(vp, swiped, paired, "", false, shownFor(v3));
+  assert.strictEqual(up2.commands.find((c) => c.property === "mmSwipeAt").value, 0);
 });

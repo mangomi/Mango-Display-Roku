@@ -36,9 +36,12 @@ function celebrateAfterTick(L) {
   return [...L.onTick("mmL", touch.ROOT_ID), { type: "Sequential", when: "${mmTicked}", commands: play }];
 }
 
-/** The screen's checkbox lists, from the ticks it will show. */
+/** The screen's checkbox lists, from the ticks it will show - the page's
+ * own boxes and the ones riding its scroll strips, as the Roku counts
+ * both (InteractionLayer.listOpenCount). */
 function listsOf(pages, overrides) {
-  return celebrations.lists(pages, pages.map((page) => touch.applyOverrides(page, overrides).states));
+  const all = pages.map((page) => allTargets(page));
+  return celebrations.lists(all, all.map((page) => touch.applyOverrides(page, overrides).states));
 }
 const { spinner, SIZE_PX: SPINNER_PX } = require("./spinner");
 const crypto = require("crypto");
@@ -122,9 +125,12 @@ function doc(items, tickMs, args, overrides = "", busy = false, opts = {}) {
           type: "Container", id: touch.ROOT_ID, width: "100%", height: "100%",
           // mmBusy: the render service's busy flag as this screen shows it
           // (spinner.js); mmSwiping: the calendar id a swipe is waiting on
-          bind: [{ name: "overrides", value: overrides }, { name: "mmBusy", value: busy }, { name: "mmSwiping", value: "" }]
+          // mmSwipeAt: when the calendar swipe in flight was sent (0: none)
+          bind: [{ name: "overrides", value: overrides }, { name: "mmBusy", value: busy }, { name: "mmSwiping", value: "" },
+            { name: "mmSwipeAt", value: 0 }]
             .concat(opts.extraBinds || []),
-          onMount: heartbeat(tickMs, args).concat(opts.onMount || []),
+          // a screen built busy arms the Roku's 75s watchdog too
+          onMount: heartbeat(tickMs, args).concat(busy ? [watchdog()] : []).concat(opts.onMount || []),
           items,
         }],
       }],
@@ -171,7 +177,9 @@ function displayView(vp, display) {
   const canvas = manifest.canvas || { width: 1920, height: 1080 };
   const place = placement(canvas, vp);
   // the hash busts the Echo's image cache only when the pixels changed
-  const urls = pages.map((p) => (p && p.image ? assetBase + p.image + (p.imageHash ? "?h=" + p.imageHash : "") : ""));
+  // (no hash from an older service: the version, like the Roku's
+  // per-manifest tag - coarser, but a changed picture still swaps)
+  const urls = pages.map((p) => (p && p.image ? assetBase + p.image + "?h=" + (p.imageHash || "v" + display.version) : ""));
   // The clock's `sample` text and `textRect` (the measured width of that
   // text) change every minute with the time itself; the Echo draws from
   // the fixed `rect`, so they are not layout - counting them turned every
@@ -230,22 +238,35 @@ function pageImages(view, i) {
  * Display-wide effects fly above all pages, the busy spinner above that.
  * `overrides` are presses the screen sent back that a render may not
  * reflect yet (touch.js); `current` is the page the screen was on. */
-function displayScreen(vp, display, paired, overrides, busy, current) {
+function displayScreen(vp, display, paired, overrides, busy, current, resume) {
   const view = displayView(vp, display);
   const { manifest, assetBase, pages, place, canvas } = view;
+  // each slideshow's photo number lives on the root and rides every
+  // refresh/touch as "key:index,...", so the next whole screen resumes
+  const ssKeys = [];
+  pages.forEach((page, p) => ((page && page.overlays) || []).forEach((o, oi) => {
+    if (o && (o.type === "slideshow" || o.type === "background")) {
+      const k = slideshow.resumeKey(o, p, "p" + p + "o" + oi);
+      if (!ssKeys.includes(k)) ssKeys.push(k);
+    }
+  }));
+  const ssWas = slideshow.parseResume(resume);
+  const ssArg = ssKeys.length ? "${" + ssKeys.map((k) => "'" + k + ":' + " + k).join(" + ',' + ") + "}" : "";
   const cur = Number.isInteger(Number(current)) && Number(current) >= 0 && Number(current) < pages.length ? Number(current) : 0;
   // what the screen shows, so the skill can tell what changed: version,
   // presses, busy, layout fingerprint, page images, page on screen (all
   // bound on the root, so an in-place update keeps them current)
   const refreshArgs = ["refresh", "${mmVer}", paired.major, paired.minor, "${overrides}", "${mmBusy ? 1 : 0}",
-    "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}"];
+    "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}", ssArg];
   let pending = overrides;
   const L = listsOf(pages, overrides);
   const items = [];
   pages.forEach((page, i) => {
     const ov = overlays.pageOverlays(page, {
       place, canvas, assetBase, vp, pageIndex: i, refreshArgs, major: paired.major, minor: paired.minor,
-      states: touch.applyOverrides(page, pending).states, overrides: pending,
+      states: touch.applyOverrides(page, pending).states, overrides: pending, resume: ssWas,
+      // strip boxes celebrate like page boxes (overlay-scroll.js)
+      celebrate: celebrateAfterTick(L).length > 0, listIndex: (item) => L.index(i, item),
     }, i);
     const held = touch.applyOverrides(page, pending);
     const layerItems = [...ov.under];
@@ -273,8 +294,13 @@ function displayScreen(vp, display, paired, overrides, busy, current) {
       // photo loads this screen saw (overlay-slideshow.js) - logged by the
       // skill, to learn whether the Echo fires Image onLoad
       { name: "mmDiagLoads", value: 0 },
-    ].concat(pagesMod.rootBinds(pages, cur, manifest.gestures)).concat(L.binds),
-    commands: { ...pagesMod.commandDefinitions(vp.w, vp.h), ...celebrations.commandDefinitions() },
+    ].concat(ssKeys.map((k) => ({ name: k, value: ssWas.has(k) ? ssWas.get(k) : 0 })))
+      .concat(pagesMod.rootBinds(pages, cur, manifest.gestures)).concat(L.binds),
+    commands: {
+      ...pagesMod.commandDefinitions(vp.w, vp.h), ...celebrations.commandDefinitions(),
+      // a scroll-strip box's tick: the page box's celebration, defined once
+      ...(celebrateAfterTick(L).length ? { MmStripDone: { parameters: ["mmL", "mmBx", "mmBy", "mmTicked"], commands: celebrateAfterTick(L) } } : {}),
+    },
     // after an edit, turn from where the screen was to the page edited;
     // otherwise just start the dwell
     // effects are layout instances too (effect-all.js), so they stay small
@@ -326,6 +352,11 @@ function inPlaceUpdate(vp, display, paired, overrides, busy, shown) {
     root("mmBusy", busy === true),
     root("mmSwiping", ""), // a swipe's result has arrived
   ];
+  // a swipe's answer re-renders only the page image (imageOnly): the
+  // swipe in flight has landed, the next may go
+  if (view.manifest.imageOnly === true) cmds.push(root("mmSwipeAt", 0));
+  // B13: a busy screen always carries the 75s watchdog
+  if (busy === true) cmds.push(watchdog());
   const shownUrls = String(shown.url || "").split("|");
   view.pages.forEach((page, p) => {
     const held = touch.applyOverrides(page, overrides);
@@ -364,7 +395,9 @@ function inPlaceUpdate(vp, display, paired, overrides, busy, shown) {
   cmds.push(root("mmPageUrls", view.urls.join("|")));
   // a layout edit on another page: go and show it (pages.js MmGoTo)
   const sp = editedPage(view.manifest, shown.page);
-  if (sp !== null) cmds.push({ type: "MmGoTo", to: sp });
+  // otherwise a fresh dwell, as the Roku's in-place path re-arms its
+  // page timer (MainScene armPageTimer)
+  cmds.push(sp !== null ? { type: "MmGoTo", to: sp } : { type: "MmRestartDwell" });
   // the lists' open-box counts follow the render (the finale check)
   for (const b of listsOf(view.pages, overrides).binds) cmds.push(root(b.name, b.value));
   return { type: "Alexa.Presentation.APL.ExecuteCommands", token: "display", commands: cmds };
@@ -373,10 +406,15 @@ function inPlaceUpdate(vp, display, paired, overrides, busy, shown) {
 /** Turn the busy spinner on the display screen on or off without a
  * redraw (ExecuteCommands against the screen's "display" token); on
  * carries the Roku's 75s watchdog. */
+function watchdog() {
+  const set = (v) => ({ type: "SetValue", componentId: touch.ROOT_ID, property: "mmBusy", value: v });
+  return { type: "Sequential", sequencer: "busywatch", commands: [{ type: "Idle", delay: require("./spinner").WATCHDOG_MS }, set(false)] };
+}
+
 function busyCommands(on) {
   const set = (v) => ({ type: "SetValue", componentId: touch.ROOT_ID, property: "mmBusy", value: v });
   const cmds = [set(on)];
-  if (on) cmds.push({ type: "Sequential", sequencer: "busywatch", commands: [{ type: "Idle", delay: require("./spinner").WATCHDOG_MS }, set(false)] });
+  if (on) cmds.push(watchdog());
   return { type: "Alexa.Presentation.APL.ExecuteCommands", token: "display", commands: cmds };
 }
 

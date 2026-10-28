@@ -38,10 +38,11 @@ const SWIPE_MIN_DP = 40;
 
 const layerId = (i) => "mmP" + i;
 
-/** delaySeconds -> ms, the Roku's rule: min 3s, default 60s. */
+/** delaySeconds -> ms, the Roku's rule: min 3s (0, 1, 2 too), 60s when absent. */
 function dwellMs(page) {
-  const d = Number(page && page.delaySeconds);
-  return Math.max(3, Number.isFinite(d) && d > 0 ? d : 60) * 1000;
+  const raw = page && page.delaySeconds;
+  const d = raw == null || raw === "" ? NaN : Math.trunc(Number(raw));
+  return Math.max(3, Number.isFinite(d) ? d : 60) * 1000;
 }
 
 // One transform shape everywhere, so every AnimateItem's from/to match.

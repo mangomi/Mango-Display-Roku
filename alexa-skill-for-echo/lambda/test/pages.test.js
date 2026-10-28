@@ -146,3 +146,23 @@ test("a new random photo list for an image widget updates in place, not a whole 
   lone.manifest.pages[0].overlays = [ss(["https://x/a.jpg", "https://x/a.jpg"])];
   assert.strictEqual(apl.inPlaceUpdate(vp, lone, paired, "", false, { layout: v.layout, url: v.urls.join("|"), page: "0" }), null);
 });
+
+test("a whole new screen resumes each slideshow at the next photo (the Roku's startIndex)", () => {
+  const ss = { type: "slideshow", widgetSettingId: 44, rect: { x: 0, y: 0, w: 400, h: 300 },
+    images: ["https://x/a.jpg", "https://x/b.jpg", "https://x/c.jpg"], intervalSeconds: 60 };
+  const m = JSON.parse(JSON.stringify(display));
+  m.manifest.pages[0].overlays = [ss];
+  const d = apl.displayScreen(vp, m, paired, "", false, 0, "mmSsIw44p0:1,");
+  // the screen reports it with every refresh and touch
+  assert.strictEqual(d.document.mainTemplate.items[0].items[0].onMount[0].commands[1].arguments[10], "${'mmSsIw44p0:' + mmSsIw44p0}");
+  assert.strictEqual(bind(d, "mmSsIw44p0"), 1);
+  const box = JSON.stringify(rootOf(d).items[0]);
+  assert.match(box, /"name":"mmSsIdx","value":2/);
+  assert.match(box, /c\.jpg/);
+  // no report: from the first photo
+  assert.strictEqual(bind(apl.displayScreen(vp, m, paired, "", false, 0, ""), "mmSsIw44p0"), 0);
+});
+
+test("dwell: 0, 1 and 2 seconds are 3, as on the Roku; absent is 60", () => {
+  assert.deepStrictEqual([0, 1, 2, 5, undefined, "x"].map((d) => pages.dwellMs({ delaySeconds: d })), [3000, 3000, 3000, 5000, 60000, 60000]);
+});

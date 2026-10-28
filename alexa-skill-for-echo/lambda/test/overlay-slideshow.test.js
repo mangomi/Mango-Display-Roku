@@ -45,6 +45,7 @@ function machine(cfg) {
       } else if (c.type === "Idle") yield c.delay;
       else if (c.type === "SetValue") {
         if (c.componentId === box.id) vars[c.property] = evalv(c.value);
+        else if (c.componentId === "mmRoot") continue; // the resume number (apl.js)
         else props[c.componentId][c.property] = evalv(c.value);
       } else if (c.type === "AnimateItem") {
         for (const v of c.value) if (v.property === "opacity") props[c.componentId].opacity = v.to;

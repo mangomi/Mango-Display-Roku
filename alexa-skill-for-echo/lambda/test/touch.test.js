@@ -30,7 +30,7 @@ test("overrides: a press holds until the render agrees", () => {
 });
 
 test("overrides: latest press per task wins; stale and departed tasks dropped", () => {
-  const s = "501:1:" + (now - 5000) + ",501:0:" + (now - 1000) + ",502:0:" + (now - 60000) + ",999:1:" + now + ",";
+  const s = "501:1:" + (now - 5000) + ",501:0:" + (now - 1000) + ",502:0:" + (now - 200000) + ",999:1:" + now + ",";
   const r = touch.applyOverrides(page, s, now);
   assert.deepStrictEqual(r.states, [false, true]); // 501 back to unchecked = what the render says; 502 press too old
   assert.strictEqual(r.overrides, "");
@@ -88,7 +88,9 @@ test("calendar swipes only when the user allows calendar scrolling; read by the 
   const r = place.rect(page.regions[0].rect);
   assert.ok(rec.when.includes("mmDownX >= " + r.x) && rec.when.includes("mmDownY < " + (r.y + r.h)));
   const gate = g.onPress[0];
-  assert.match(gate.when, /utcTime - mmLastSent > 1200/); // one swipe, one send
+  // one swipe in flight: until its render lands (mmSwipeAt cleared) or 8s
+  assert.match(gate.when, /mmSwipeAt == 0 \|\| utcTime - mmSwipeAt > 8000/);
+  assert.strictEqual(gate.commands[0].componentId, touch.ROOT_ID);
   const up = gate.commands.find((c) => /'swipeup'/.test(c.when || ""));
   const ev = up.commands.find((c) => c.type === "SendEvent");
   assert.deepStrictEqual(ev.arguments.slice(0, 6), ["touch", "swipeup", "0", "700", "500", "31"]);
@@ -128,11 +130,11 @@ test("display screen carries the touch layer and the held presses", () => {
   assert.strictEqual(boxes.length, 2);
   assert.ok(d.document.layouts.MmBox, "the checkbox is defined once on the screen");
   assert.deepStrictEqual(root.onMount[0].commands[1].arguments,
-    ["refresh", "${mmVer}", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}", "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}"]);
+    ["refresh", "${mmVer}", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}", "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}", ""]);
   assert.strictEqual(root.bind.find((b) => b.name === "mmVer").value, "3");
   assert.strictEqual(boxes.find((b) => b.id === "mmBox0_501").mmT0, true); // the held press
   const tap = d.document.layouts.MmBox.items[0].onPress.find((c) => c.type === "SendEvent");
-  assert.deepStrictEqual(tap.arguments.slice(8), ["${mmVer}", "${overrides}", "${mmLayout}", "${mmPageUrls}", "${mmCur}"]);
+  assert.deepStrictEqual(tap.arguments.slice(8), ["${mmVer}", "${overrides}", "${mmLayout}", "${mmPageUrls}", "${mmCur}", ""]);
 });
 
 // APL component properties a bind/SetValue name must never shadow: SetValue
@@ -168,4 +170,9 @@ test("swipe: the Roku spinner centred on the calendar at once, cleared after 15s
   assert.ok(send.findIndex((c) => c.type === "SendEvent") > 0); // spinner before the round trip
   const hide = send.find((c) => c.sequencer === "busyhide");
   assert.strictEqual(hide.commands[0].delay, 15000);
+});
+
+test("a press is held 180s waiting for the portal, as on the Roku", () => {
+  assert.deepStrictEqual(touch.applyOverrides(page, "501:1:" + (now - 170000) + ",", now).states, [true, true]);
+  assert.deepStrictEqual(touch.applyOverrides(page, "501:1:" + (now - 190000) + ",", now).states, [false, true]);
 });

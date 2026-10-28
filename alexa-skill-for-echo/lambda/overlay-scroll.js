@@ -166,11 +166,17 @@ function build(cfg, ctx) {
           commands: [
             // tick now, ask later
             { type: "SetValue", property: "mmTicked", value: "${!mmTicked}" },
+            // the celebration, as for a page box: one short call to the
+            // document's MmStripDone (apl.js), at where the box is now
+            ...(ctx.celebrate ? [{
+              type: "MmStripDone", mmL: ctx.listIndex ? ctx.listIndex(b) : -1, mmTicked: "${mmTicked}",
+              mmBx: r2(win.x + (b.x + b.w / 2) * s), mmBy: "${" + r2(place.oy) + " + " + r2(place.scale) + " * " + cy.slice(2, -1) + "}",
+            }] : []),
             ...(id ? [{
               type: "SetValue", componentId: ROOT_ID, property: "overrides",
               value: "${overrides + '" + id + ":' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",
             }] : []),
-            { type: "SendEvent", arguments: ["touch", "tap", String(pageIndex), String(cx), cy, id, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8]] },
+            { type: "SendEvent", arguments: ["touch", "tap", String(pageIndex), String(cx), cy, id, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8], refreshArgs[10]] },
             fastCheck(refreshArgs),
             { type: "MmRestartDwell" },
           ],

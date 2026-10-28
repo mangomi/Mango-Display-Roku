@@ -88,6 +88,21 @@ async function pairingStep(code, screenW, screenH) {
   return { state: "error" };
 }
 
+/** Is this Echo still claimed as major/minor? Asked only when the render
+ * service says 404 "unknown display", which it also answers for a moment
+ * while the fleet hands a display between tasks (fleet.js) - so a 404 is
+ * a reset only when the backend agrees the claim is gone. The Roku learns
+ * a reset from paired:false on its held /wait; the Echo's 10s check
+ * comes after the display is torn down and only sees the 404.
+ * true | false | null (could not ask: keep the screen). */
+async function stillClaimed(d) {
+  const r = await request(env.apiBase + "mirrors/deviceId/" + d.code);
+  if (!r || !r.json) return null;
+  const obj = r.json.object;
+  if (!obj) return r.json.error ? false : null; // "Mirror not registered"
+  return truthy(obj.isActive) && String(obj.major) === String(d.major) && String(obj.minor) === String(d.minor);
+}
+
 function identity(d) {
   return "&device=" + d.code + "&major=" + d.major + "&minor=" + d.minor + "&w=" + d.w + "&h=" + d.h;
 }
@@ -105,7 +120,7 @@ async function fetchDisplay(d, held, launch) {
   const r = await request(url);
   if (!r) return { state: "error" };
   if (r.status === 503) return { state: "loading" }; // fleet's Retry-After: display starting
-  if (r.status === 404) return { state: "unpaired" };
+  if (r.status === 404) return (await stillClaimed(d)) === false ? { state: "unpaired" } : { state: "error" };
   if (r.status !== 200 || !r.json) return { state: "error" };
   const { version, assetBase } = r.json;
   let manifest = r.json.manifest;
@@ -116,6 +131,8 @@ async function fetchDisplay(d, held, launch) {
   }
   if (!manifest) return { state: "loading" };
   if (manifest.paired === false) return { state: "unpaired" };
+  // nothing to show: the Roku ignores such a manifest and keeps its screen
+  if (!Array.isArray(manifest.pages) || !manifest.pages.length) return { state: "loading" };
   return { state: "ready", version, assetBase, manifest, busy: r.json.busy === true };
 }
 
@@ -163,11 +180,9 @@ async function waitForNewVersion(d, held, deadline) {
  * could not be asked. */
 async function currentVersion(d) {
   const r = await request(env.controlBase + "/version?v=1" + identity(d));
-  // reset in the webapp: the service no longer knows the display (the
-  // Roku hears paired:false on its /wait long-poll; this 10s check
-  // arrives after the display is gone - the Echo stayed on the old screen)
-  if (r && r.status === 404) return { unpaired: true };
+  // reset in the webapp, or only the fleet's hand-over (stillClaimed)
+  if (r && r.status === 404) return (await stillClaimed(d)) === false ? { unpaired: true } : null;
   return r && r.status === 200 && r.json ? { version: r.json.version, busy: r.json.busy === true } : null;
 }
 
-module.exports = { pairingStep, fetchDisplay, currentVersion, interact, waitForNewVersion };
+module.exports = { stillClaimed, pairingStep, fetchDisplay, currentVersion, interact, waitForNewVersion };

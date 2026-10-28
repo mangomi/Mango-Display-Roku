@@ -58,3 +58,45 @@ channel commit when this tracker started.
 | Night mode | built | black screen + the moving badge (a motion overlay) |
 | Busy spinner | built | the Roku art and rules: Connected screen, service busy (75s watchdog), calendar swipe |
 | Fonts | won't match | APL has no custom fonts; option: server-rendered glyphs |
+
+## Parity audit 2026-10-28 (Roku session)
+
+Fixed (Echo now does what the Roku does):
+- one calendar swipe in flight, freed when its imageOnly render lands or
+  after 8s (was a 1.2s debounce);
+- unconfirmed checkbox presses held 180s (was 30s);
+- slideshows and backgrounds resume at the next photo after a whole new
+  screen (per widgetSettingId + page, reported with every refresh/touch);
+- scroll-strip checkboxes celebrate and count toward their list's finale;
+- a render-service 404 sends the Echo to pairing only when the backend
+  agrees the claim is gone (the fleet answers 404 during hand-over);
+- a manifest with no pages keeps the screen; in-place updates restart
+  the dwell; delaySeconds 0-2 clamp to 3s; no imageHash -> version tag;
+- a screen built busy arms the 75s spinner watchdog.
+
+Kept different, on purpose or by APL:
+- **Rebuild scope**: any layout change replaces the whole document
+  (every page's GIFs, slideshows and effects restart); the Roku rebuilds
+  only the current page's overlays. Slideshow resume removes the worst of
+  it; effects restart is accepted for now.
+- **Swipe spinner** shows at once on the Echo (Dave, 2026-10-27); the Roku
+  waits for the server's busy.
+- **No `warm` interact**: the Echo has no pointer appearing; the first
+  touch pays the cold-session cost.
+- **Brightness** dims the page colour around a contain-fit photo too (one
+  black layer over the rect); the Roku dims only the photo.
+- **Background with one photo** draws a still (the Roku draws nothing);
+  matches the build-7 one-image client change.
+- **First photo** shows at once (no fade-in): Image onLoad is unreliable on
+  the Echo.
+- **Effects** loop one seeded path per document instead of re-randomising
+  each trip; popups last a little longer; particles capped 16 (10 small),
+  droppers 8 (5) - document size and APL's command model.
+- **Z-order**: effects fly over the checkbox ticks (ticks live in the page
+  layers); the Roku draws ticks on top. Cosmetic.
+- **Strip boxes** need both sprites (the service always sends both).
+- **Bold** applied whenever the element is bold (closer to the portal).
+- **Pairing** re-posts saveMirror every 5s while unregistered (Roku once
+  per run); harmless to the backend.
+- Production needs `CELEBRATION_URL` set on the prod Lambda
+  (.../prod/celebrations/burst.png) once the service publishes it there.

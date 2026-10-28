@@ -23,7 +23,7 @@ const manifest = {
 const paired = { major: "1", minor: "822" };
 // the root container, and page i's layer inside it (pages.js)
 const rootOf = (d) => d.document.mainTemplate.items[0].items[0];
-const layerOf = (d, i = 0) => rootOf(d).items.find((c) => c.id === "mmP" + i).items;
+const layerOf = (d, i = 0) => rootOf(d).items.find((c) => c.id === "mmP" + i).item.items;
 
 function frames(node, out = []) {
   if (Array.isArray(node)) node.forEach((n) => frames(n, out));

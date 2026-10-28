@@ -93,7 +93,7 @@ test("display screen carries the touch layer and the held presses", () => {
   const root = d.document.mainTemplate.items[0].items[0];
   assert.strictEqual(root.id, touch.ROOT_ID);
   assert.match(root.bind[0].value, /^501:1:/);
-  const layer = root.items.find((i) => i.id === "mmP0").items;
+  const layer = root.items.find((i) => i.id === "mmP0").item.items;
   assert.strictEqual(layer.filter((i) => i.type === "TouchWrapper").length, 1); // the calendar
   const boxes = layer.find((i) => i.bind && i.bind[0].name === "mmBoxE").items;
   assert.strictEqual(boxes.length, 2);

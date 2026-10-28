@@ -143,26 +143,6 @@ function rootBinds(pages, current, gestures) {
   ];
 }
 
-/** A full-screen catcher under every page: a horizontal swipe anywhere a
- * checkbox or calendar is not turns the page (finger left = next).
- * onDown/onUp run in fast mode (SendEvent and most commands dropped), so
- * they only record; onPress acts. */
-function swipeCatcher(vp) {
-  return {
-    type: "TouchWrapper",
-    position: "absolute", left: 0, top: 0, width: vp.w, height: vp.h,
-    bind: [{ name: "mmDownX", value: 0 }, { name: "mmDownY", value: 0 }, { name: "mmDir", value: "" }],
-    item: { type: "Container", width: "100%", height: "100%" },
-    onDown: [
-      { type: "SetValue", property: "mmDownX", value: "${event.component.x}" },
-      { type: "SetValue", property: "mmDownY", value: "${event.component.y}" },
-      { type: "SetValue", property: "mmDir", value: "" },
-    ],
-    onUp: horizontalSwipe("mmDir"),
-    onPress: pageTurnFrom("mmDir"),
-  };
-}
-
 /** onUp commands that record "next"/"prev" in `dirVar` for a horizontal
  * swipe (needs mmDownX/mmDownY recorded on the same component). */
 function horizontalSwipe(dirVar) {
@@ -184,17 +164,36 @@ function pageTurnFrom(dirVar) {
   ];
 }
 
-/** One page's layer. */
+/** One page's layer, and its page swipe. The layer IS the TouchWrapper:
+ * on the Echo only the topmost component under the finger gets a touch,
+ * and a wrapper gets one because it wraps what was touched. A first
+ * version put a full-screen catcher BENEATH the pages; the page image
+ * above it took every touch, so page swipes never worked on the Echo
+ * Show 15 (found by the Roku session, 2026-10-28). The checkboxes and
+ * calendar areas inside stay topmost and keep their own presses; a
+ * horizontal drag anywhere else turns the page (finger left = next).
+ * onDown/onUp run in fast mode (SendEvent and most commands dropped), so
+ * they only record; onPress acts. The wrapper carries the layer id and
+ * `display`, so MmTurn animates and hides it, and an invisible page takes
+ * no touches. */
 function layer(i, current, vp, items) {
   return {
-    type: "Container", id: layerId(i),
+    type: "TouchWrapper", id: layerId(i),
     position: "absolute", left: 0, top: 0, width: vp.w, height: vp.h,
     display: i === current ? "normal" : "invisible",
-    items,
+    bind: [{ name: "mmDownX", value: 0 }, { name: "mmDownY", value: 0 }, { name: "mmDir", value: "" }],
+    item: { type: "Container", width: "100%", height: "100%", items },
+    onDown: [
+      { type: "SetValue", property: "mmDownX", value: "${event.component.x}" },
+      { type: "SetValue", property: "mmDownY", value: "${event.component.y}" },
+      { type: "SetValue", property: "mmDir", value: "" },
+    ],
+    onUp: horizontalSwipe("mmDir"),
+    onPress: pageTurnFrom("mmDir"),
   };
 }
 
 module.exports = {
-  commandDefinitions, rootBinds, swipeCatcher, horizontalSwipe, pageTurnFrom, layer, layerId, dwellMs,
+  commandDefinitions, rootBinds, horizontalSwipe, pageTurnFrom, layer, layerId, dwellMs,
   TURN_MS, EASE,
 };

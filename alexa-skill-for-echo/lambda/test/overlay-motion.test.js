@@ -214,6 +214,8 @@ test("size: a weather-heavy 5-page screen stays under Alexa's limit", () => {
   assert.ok(one < 6000, "one calendar cell is " + one + " bytes");
   const d = apl.displayScreen(vp, { manifest, assetBase: "https://assets/", version: 1 }, { major: "1", minor: "2" });
   const bytes = JSON.stringify(d).length;
-  // ~93 KB, of which ~22 KB is the 5-page screen itself
-  assert.ok(bytes < 100000, "screen is " + bytes + " bytes");
+  // ~102 KB, of which ~27 KB is the 5-page screen itself (each page layer
+  // carries its own page-swipe handling, ~1 KB). Alexa caps a response
+  // near 120 KB; this worst case keeps 10 KB of margin.
+  assert.ok(bytes < 110000, "screen is " + bytes + " bytes");
 });

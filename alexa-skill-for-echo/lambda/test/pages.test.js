@@ -51,12 +51,21 @@ test("turns run on the Echo from named commands, on one sequencer, never two at 
   for (const t of ["slideleft", "slideright", "slideup", "slidedown", "pop", "rotate", "flip"]) assert.ok(turn.includes("'" + t + "'"), t);
 });
 
-test("a horizontal swipe anywhere turns the page; recorded in fast mode, acted on in onPress", () => {
-  const catcher = rootOf(apl.displayScreen(vp, display, paired, "", false, 0)).items[0];
-  assert.strictEqual(catcher.type, "TouchWrapper");
-  assert.ok(!JSON.stringify(catcher.onUp).includes("Mm"), "no page commands from fast-mode onUp");
-  assert.deepStrictEqual(catcher.onPress.slice(0, 2).map((c) => c.type), ["MmPageNext", "MmPagePrev"]);
-  assert.match(catcher.onUp[0].when, /< 0/); // finger moves left -> next
+test("a horizontal swipe anywhere turns the page: each page layer IS the swipe catcher", () => {
+  const d = apl.displayScreen(vp, display, paired, "", false, 0);
+  const layers = rootOf(d).items.filter((c) => /^mmP\d$/.test(c.id));
+  // a sibling beneath the pages never got a touch on the Echo: the page
+  // image above it took every one. The layer wraps the page instead.
+  assert.ok(!rootOf(d).items.some((c) => c.type === "TouchWrapper" && !/^mmP\d$/.test(c.id || "")), "no catcher outside the pages");
+  for (const l of layers) {
+    assert.strictEqual(l.type, "TouchWrapper");
+    assert.ok(Array.isArray(l.item.items), "the page's content is inside the wrapper");
+    assert.ok(!JSON.stringify(l.onUp).includes("Mm"), "no page commands from fast-mode onUp");
+    assert.deepStrictEqual(l.onPress.slice(0, 2).map((c) => c.type), ["MmPageNext", "MmPagePrev"]);
+    assert.match(l.onUp[0].when, /< 0/); // finger moves left -> next
+  }
+  // inner touch targets stay above, inside the wrapper (MmTurn animates the layer id)
+  assert.ok(d.document.commands.MmTurn);
 });
 
 test("in place across pages: only the pages whose pictures changed cross-fade", () => {

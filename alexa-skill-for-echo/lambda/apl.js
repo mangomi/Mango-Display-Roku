@@ -232,7 +232,7 @@ function displayScreen(vp, display, paired, overrides, busy, current) {
     "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}"];
   let pending = overrides;
   const L = listsOf(pages, overrides);
-  const items = [pagesMod.swipeCatcher(vp)];
+  const items = [];
   pages.forEach((page, i) => {
     const ov = overlays.pageOverlays(page, {
       place, canvas, assetBase, vp, pageIndex: i, refreshArgs, major: paired.major, minor: paired.minor,

@@ -146,6 +146,15 @@ function build(cfg, ctx) {
     const { states } = applyOverrides({ targets: { items: boxes } }, ctx.overrides);
     const pad = PAD * s;
     pressable(cfg).forEach(({ box: b, index: i, span }) => {
+      // a screen over the size cap (apl.js LITE): the tick is drawn, at
+      // about half the bytes, but cannot be pressed while it scrolls
+      if (ctx.lite >= 1) {
+        items.push({
+          type: "Image", position: "absolute", left: r2(b.x * s), top: r2(b.y * s), width: r2(b.w * s), height: r2(b.h * s),
+          source: states[i] === true ? "${mmSChecked}" : "${mmSEmpty}", scale: "fill",
+        });
+        return;
+      }
       items.push({
         type: "MmSBox",
         id: boxId(idPrefix, i),

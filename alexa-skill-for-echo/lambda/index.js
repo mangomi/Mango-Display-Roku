@@ -73,8 +73,17 @@ function screenFor(e, d, overrides, shown) {
   console.log("[Mango] " + e.code + " display v" + d.version + ", " + (d.manifest.pages || []).length + " page(s)" +
     (update ? " in place" : " new screen") + (d.manifest.showPage != null ? ", edit on page " + d.manifest.showPage : "") +
     (overrides ? ", holding presses " + overrides : ""));
-  // a whole new screen starts on the page the old one was showing
-  return update || apl.displayScreen(e.vp, d, e, overrides, d.busy, shown && shown.page, shown && shown.ss);
+  if (update) return update;
+  // a whole new screen starts on the page the old one was showing; one
+  // over Alexa's size cap is sent lighter rather than refused (apl.js)
+  const fit = apl.fittedScreen(e.vp, d, e, overrides, d.busy, shown && shown.page, shown && shown.ss);
+  if (fit.level > 0) {
+    const kb = (n) => Math.round(n / 1024) + " KB";
+    console.log("[Mango] " + e.code + " SCREEN TOO BIG v" + d.version + ": " + kb(fit.fullBytes) + " full, sent " +
+      kb(fit.bytes) + " as '" + apl.LITE_NAMES[fit.level] + "' (cap " + kb(apl.MAX_SCREEN_BYTES) + ")" +
+      (fit.bytes > apl.MAX_SCREEN_BYTES ? " - STILL OVER, the Echo may refuse it" : ""));
+  }
+  return fit.directive;
 }
 
 /** One pairing iteration. `onScreen`: the pairing screen is already up. */

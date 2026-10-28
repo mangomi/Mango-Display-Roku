@@ -233,12 +233,42 @@ function pageImages(view, i) {
   ];
 }
 
+// The size cap. Alexa refuses a screen (an APL RenderDocument) that is too
+// big, and the Echo then simply keeps the screen it has - the "frozen"
+// display Dave saw with a 245 KB screen (2026-10-28); 95 KB was taken.
+// Pictures do not count (the Echo fetches them by URL), only the
+// document: where everything goes and what each touch does. ~120 KB is
+// the working limit; aim under it with room for the rest of the reply.
+const MAX_SCREEN_BYTES = 110000;
+// Lighter screens, tried in turn while a screen is over the cap; each
+// level includes the ones before it.
+const LITE = {
+  NONE: 0,
+  STATIC_STRIP_BOXES: 1, // scrolling-list ticks drawn but not pressable while they scroll
+  NO_EFFECTS: 2, // display effects (snow, confetti...) off
+  STILL: 3, // page pictures only: no clocks, GIFs, slideshows, strips
+};
+const LITE_NAMES = ["full", "strip boxes not pressable", "no effects", "still pictures"];
+
+/** displayScreen, made lighter step by step (LITE) until it fits the cap.
+ * Returns { directive, level, bytes, fullBytes }; `level` is the LITE
+ * level used, the last one even if it is still too big. */
+function fittedScreen(vp, display, paired, overrides, busy, current, resume, maxBytes = MAX_SCREEN_BYTES) {
+  let fullBytes = 0;
+  for (let level = LITE.NONE; ; level++) {
+    const directive = displayScreen(vp, display, paired, overrides, busy, current, resume, level);
+    const bytes = JSON.stringify(directive).length;
+    if (level === LITE.NONE) fullBytes = bytes;
+    if (bytes <= maxBytes || level === LITE.STILL) return { directive, level, bytes, fullBytes };
+  }
+}
+
 /** Every page as its own layer (pages.js turns between them on the Echo),
  * each: under-overlays, the page image, over-overlays, its touch layer.
  * Display-wide effects fly above all pages, the busy spinner above that.
  * `overrides` are presses the screen sent back that a render may not
  * reflect yet (touch.js); `current` is the page the screen was on. */
-function displayScreen(vp, display, paired, overrides, busy, current, resume) {
+function displayScreen(vp, display, paired, overrides, busy, current, resume, lite = 0) {
   const view = displayView(vp, display);
   const { manifest, assetBase, pages, place, canvas } = view;
   // each slideshow's photo number lives on the root and rides every
@@ -266,12 +296,13 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume) {
       place, canvas, assetBase, vp, pageIndex: i, refreshArgs, major: paired.major, minor: paired.minor,
       states: touch.applyOverrides(page, pending).states, overrides: pending, resume: ssWas,
       // strip boxes celebrate like page boxes (overlay-scroll.js)
-      celebrate: celebrateAfterTick(L).length > 0, listIndex: (item) => L.index(i, item),
+      celebrate: celebrateAfterTick(L).length > 0, listIndex: (item) => L.index(i, item), lite,
     }, i);
     const held = touch.applyOverrides(page, pending);
     const layerItems = [...ov.under];
     if (page && page.image) layerItems.push(...pageImages(view, i));
-    layerItems.push(...ov.over);
+    // LITE.STILL: the moving parts go, the page pictures stay
+    if (lite < LITE.STILL) layerItems.push(...ov.over);
     const tctx = {
       page, pageIndex: i, place, assetBase, states: held.states, gestures: manifest.gestures,
       refreshArgs, major: paired.major, minor: paired.minor, listIndex: (item) => L.index(i, item),
@@ -280,7 +311,7 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume) {
     items.push(pagesMod.layer(i, cur, vp, layerItems, touch.calendarGestures(tctx)));
   });
   const held = allHeld(pages, overrides);
-  items.push(...effects.displayEffects(manifest.effects || [], { place, canvas, assetBase, vp }));
+  if (lite < LITE.NO_EFFECTS) items.push(...effects.displayEffects(manifest.effects || [], { place, canvas, assetBase, vp }));
   // busy spinner on top of everything, centred on the screen; a swipe
   // shows the calendar's own instead (touch.js), never both
   items.push(spinner(vp.w / 2, vp.h / 2, place.len(SPINNER_PX), "${mmBusy && mmSwiping == '' ? 1 : 0}"));
@@ -418,4 +449,5 @@ function busyCommands(on) {
   return { type: "Alexa.Presentation.APL.ExecuteCommands", token: "display", commands: cmds };
 }
 
-module.exports = { viewportDp, placement, pairingScreen, displayScreen, busyCommands, inPlaceUpdate, displayView };
+module.exports = {
+  fittedScreen, MAX_SCREEN_BYTES, LITE, LITE_NAMES, viewportDp, placement, pairingScreen, displayScreen, busyCommands, inPlaceUpdate, displayView };

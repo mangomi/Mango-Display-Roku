@@ -118,18 +118,43 @@ function swapCommands(transition, x, y, xOnTop, w, h) {
 }
 
 /** APL components for one `slideshow` or `background` overlay. */
-function build(cfg, ctx) {
+/** The widget's rect in dp and its photo URLs as the Echo fetches them,
+ * or null for fewer than 2 photos (draw nothing, like both shipped
+ * clients: a lone photo travels as a pair of itself; overlays.js stills a
+ * lone background). */
+function photos(cfg, ctx) {
   const images = Array.isArray(cfg.images) ? cfg.images.filter((s) => typeof s === "string" && s) : [];
-  // fewer than 2: draw nothing, like both shipped clients (a lone photo
-  // travels as a pair of itself; overlays.js stills a lone background)
-  if (images.length < 2) return [];
-  const p = ctx.idPrefix;
-  const ids = { box: p + "ss", A: p + "ssA", B: p + "ssB" };
+  if (images.length < 2) return null;
   // page backgrounds have no rect - they fill the canvas
   const r = ctx.place.rect(cfg.rect || { x: 0, y: 0, w: ctx.canvas.width, h: ctx.canvas.height });
   const devPx = ctx.vp && ctx.vp.w && ctx.vp.pw ? ctx.vp.pw / ctx.vp.w : 1;
+  const urls = images.map((u) => sized(u, r.w * devPx, r.h * devPx, cfg.cropToFill === true));
+  return { r, urls, cycles: new Set(urls).size > 1 };
+}
+
+/** A new photo list for a slideshow already on screen (apl.js
+ * inPlaceUpdate). An image widget fed from a random source gets a fresh
+ * list on every render - every calendar swipe - so the list is contents,
+ * not layout: hand it over and let the loop carry on, instead of a whole
+ * new screen (which blinked everything and restarted the slideshow). A
+ * lone photo that changed is set directly. */
+function updateCommands(cfg, ctx) {
+  const ph = photos(cfg, ctx);
+  if (!ph) return [];
+  const p = ctx.idPrefix;
+  if (!ph.cycles) return [{ type: "SetValue", componentId: p + "ssA", property: "source", value: ph.urls[0] }];
+  const { pre, mids, suf } = affixes(ph.urls);
+  const set = (property, value) => ({ type: "SetValue", componentId: p + "ss", property, value });
+  return [set("mmSsPre", pre), set("mmSsUrls", mids), set("mmSsSuf", suf), set("mmSsN", ph.urls.length)];
+}
+
+function build(cfg, ctx) {
+  const ph = photos(cfg, ctx);
+  if (!ph) return [];
+  const p = ctx.idPrefix;
+  const ids = { box: p + "ss", A: p + "ssA", B: p + "ssB" };
+  const { r, urls } = ph;
   const crop = cfg.cropToFill === true;
-  const urls = images.map((u) => sized(u, r.w * devPx, r.h * devPx, crop));
   const { pre, mids, suf } = affixes(urls);
   const s = Number(cfg.intervalSeconds);
   const intervalMs = Math.max(MIN_INTERVAL_S, Number.isFinite(s) && s > 0 ? s : DEFAULT_INTERVAL_S) * 1000;
@@ -221,4 +246,4 @@ function build(cfg, ctx) {
   }];
 }
 
-module.exports = { build, sized, affixes, swapCommands };
+module.exports = { build, updateCommands, sized, affixes, swapCommands };

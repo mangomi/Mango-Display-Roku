@@ -23,6 +23,7 @@ const overlays = require("./overlays");
 const pagesMod = require("./pages");
 const effects = require("./effects");
 const scroll = require("./overlay-scroll");
+const slideshow = require("./overlay-slideshow");
 const celebrations = require("./celebrations");
 
 /** The confetti a box press runs after its tick: its list's open count
@@ -175,8 +176,15 @@ function displayView(vp, display) {
   // the fixed `rect`, so they are not layout - counting them turned every
   // update across a minute boundary into a full blinking redraw.
   // Checkbox ticks are contents too (set in place), including the boxes
-  // riding scroll strips.
-  const stable = (k, v) => (k === "sample" || k === "textRect" || k === "checked" ? undefined : v);
+  // riding scroll strips. So is a slideshow's photo list: an image widget
+  // fed from a random source gets a new one on every render (every
+  // calendar swipe redrew the whole screen, 2026-10-28) - only whether it
+  // cycles is layout; the list itself is handed over in place.
+  const stable = (k, v) => {
+    if (k === "sample" || k === "textRect" || k === "checked") return undefined;
+    if (k === "images" && Array.isArray(v)) return new Set(v).size > 1;
+    return v;
+  };
   const layout = crypto.createHash("sha1").update(JSON.stringify({
     vp: [vp.w, vp.h], canvas, gestures: manifest.gestures || null, assetBase, effects: manifest.effects || [],
     night: manifest.night === true,
@@ -323,6 +331,11 @@ function inPlaceUpdate(vp, display, paired, overrides, busy, shown) {
     items.forEach((it, i) => {
       const id = touch.targetId(it);
       if (id) cmds.push({ type: "SetValue", componentId: touch.boxId(p, id), property: "mmTicked", value: held.states[i] === true });
+    });
+    ((page && page.overlays) || []).forEach((o, oi) => {
+      if (o && (o.type === "slideshow" || o.type === "background")) {
+        cmds.push(...slideshow.updateCommands(o, { place: view.place, canvas: view.canvas, vp, idPrefix: "p" + p + "o" + oi }));
+      }
     });
     for (const { o, oi } of strips(page)) {
       const states = touch.applyOverrides({ targets: { items: o.boxes } }, overrides).states;

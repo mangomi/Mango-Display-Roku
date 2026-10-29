@@ -136,13 +136,14 @@ test("a box press celebrates only once the burst art is hosted", () => {
   const saved = process.env.CELEBRATION_URL;
   try {
     delete process.env.CELEBRATION_URL;
+    // every box press runs the screen's MmAfterTick (touch.js); it is
+    // empty until there is art
     let d = build();
-    assert.ok(!JSON.stringify(d.layouts.MmBox).includes("MmCelebrate"));
+    assert.deepStrictEqual(d.commands.MmAfterTick.commands, []);
     assert.ok(!d.commands.MmCelebrate);
     process.env.CELEBRATION_URL = "https://example.com/burst.png";
     d = build();
-    const press = d.layouts.MmBox.items[0].onPress;
-    assert.ok(JSON.stringify(press).includes("MmCelebrate"));
+    assert.ok(JSON.stringify(d.commands.MmAfterTick).includes("MmCelebrate"));
     assert.ok(d.commands.MmCelebrate);
     assert.strictEqual(d.mainTemplate.items[0].items[0].bind.find((b) => b.name === "mmOpen0").value, 1);
   } finally {

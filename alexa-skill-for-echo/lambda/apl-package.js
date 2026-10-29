@@ -21,6 +21,10 @@ const crypto = require("crypto");
 const env = require("./env");
 const pages = require("./pages");
 const effectAll = require("./effect-all");
+const touch = require("./touch");
+const scroll = require("./overlay-scroll");
+const slideshow = require("./overlay-slideshow");
+const spinner = require("./spinner");
 
 const APL_VERSION = "2023.2";
 const NAME = "mango";
@@ -29,8 +33,9 @@ function contents() {
   return {
     type: "APL",
     version: APL_VERSION,
-    layouts: effectAll.layouts(),
-    commands: pages.commandDefinitions("viewport.width", "viewport.height"),
+    resources: spinner.resources(),
+    layouts: { ...effectAll.layouts(), ...touch.layouts(), ...scroll.layouts(), ...slideshow.layouts(), ...spinner.layouts() },
+    commands: { ...pages.commandDefinitions("viewport.width", "viewport.height"), ...touch.commandDefinitions() },
   };
 }
 

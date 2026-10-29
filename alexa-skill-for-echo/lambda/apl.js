@@ -44,7 +44,7 @@ function listsOf(pages, overrides) {
   const all = pages.map((page) => allTargets(page));
   return celebrations.lists(all, all.map((page) => touch.applyOverrides(page, overrides).states));
 }
-const { spinner, SIZE_PX: SPINNER_PX } = require("./spinner");
+const { spinner, spinnerRef, SIZE_PX: SPINNER_PX } = require("./spinner");
 const crypto = require("crypto");
 
 // A new render whose LAYOUT matches the screen's (same widgets, places,
@@ -138,6 +138,7 @@ function doc(items, tickMs, args, overrides = "", busy = false, opts = {}) {
     },
   };
   if (opts.import) d.import = opts.import;
+  if (opts.resources) d.resources = opts.resources;
   if (opts.commands) d.commands = opts.commands;
   if (opts.layouts) d.layouts = opts.layouts;
   return d;
@@ -198,6 +199,9 @@ function displayView(vp, display) {
   };
   const layout = crypto.createHash("sha1").update(JSON.stringify({
     vp: [vp.w, vp.h], canvas, gestures: manifest.gestures || null, assetBase, effects: manifest.effects || [],
+    // new screen code (a new package) is a new screen, so a deploy reaches
+    // every Echo at its next refresh instead of waiting for an edit
+    code: aplPackage.enabled() ? aplPackage.version() : "inline",
     night: manifest.night === true,
     pages: pages.map((page) => {
       const t = page && page.targets;
@@ -246,11 +250,10 @@ const MAX_SCREEN_BYTES = 110000;
 // level includes the ones before it.
 const LITE = {
   NONE: 0,
-  STATIC_STRIP_BOXES: 1, // scrolling-list ticks drawn but not pressable while they scroll
-  NO_EFFECTS: 2, // display effects (snow, confetti...) off
-  STILL: 3, // page pictures only: no clocks, GIFs, slideshows, strips
+  NO_EFFECTS: 1, // display effects (snow, confetti...) off
+  STILL: 2, // no moving widgets either: the page pictures only
 };
-const LITE_NAMES = ["full", "strip boxes not pressable", "no effects", "still pictures"];
+const LITE_NAMES = ["full", "no effects", "still pictures"];
 
 /** displayScreen, made lighter step by step (LITE) until it fits the cap.
  * Returns { directive, level, bytes, fullBytes }; `level` is the LITE
@@ -292,13 +295,21 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume, li
     "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}", ssArg];
   let pending = overrides;
   const L = listsOf(pages, overrides);
+  // each distinct photo list once, on the root (pages sharing a
+  // background would otherwise carry it twice)
+  const photoLists = [];
+  const photoList = (mids) => {
+    const k = JSON.stringify(mids);
+    let n = photoLists.findIndex((l) => l.k === k);
+    if (n < 0) n = photoLists.push({ k, mids }) - 1;
+    return "${mmPh" + n + "}";
+  };
   const items = [];
   pages.forEach((page, i) => {
     const ov = overlays.pageOverlays(page, {
       place, canvas, assetBase, vp, pageIndex: i, refreshArgs, major: paired.major, minor: paired.minor,
       states: touch.applyOverrides(page, pending).states, overrides: pending, resume: ssWas,
-      // strip boxes celebrate like page boxes (overlay-scroll.js)
-      celebrate: celebrateAfterTick(L).length > 0, listIndex: (item) => L.index(i, item), lite,
+      listIndex: (item) => L.index(i, item), photoList,
     }, i);
     const held = touch.applyOverrides(page, pending);
     const layerItems = [...ov.under];
@@ -316,32 +327,49 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume, li
   if (lite < LITE.NO_EFFECTS) items.push(...effects.displayEffects(manifest.effects || [], { place, canvas, assetBase, vp }));
   // busy spinner on top of everything, centred on the screen; a swipe
   // shows the calendar's own instead (touch.js), never both
-  items.push(spinner(vp.w / 2, vp.h / 2, place.len(SPINNER_PX), "${mmBusy && mmSwiping == '' ? 1 : 0}"));
+  items.push(spinnerRef(vp.w / 2, vp.h / 2, place.len(SPINNER_PX), "${mmBusy && mmSwiping == '' ? 1 : 0}"));
   // confetti on top of everything, like the portal's canvas at zIndex 999
   items.push(...celebrations.layer({ place, canvas, vp }));
   return directive("display", doc(items, DISPLAY_TICK_MS, refreshArgs, held, busy === true, {
     extraBinds: [
       { name: "mmVer", value: String(display.version) },
+      // the asset base, for the package's layouts (strip segments, sprites)
+      { name: "mmAB", value: assetBase },
       { name: "mmLayout", value: view.layout },
       { name: "mmPageUrls", value: view.urls.join("|") },
       // photo loads this screen saw (overlay-slideshow.js) - logged by the
       // skill, to learn whether the Echo fires Image onLoad
       { name: "mmDiagLoads", value: 0 },
     ].concat(ssKeys.map((k) => ({ name: k, value: ssWas.has(k) ? ssWas.get(k) : 0 })))
+      .concat(photoLists.map((l, n) => ({ name: "mmPh" + n, value: l.mids })))
       .concat(pagesMod.rootBinds(pages, cur, manifest.gestures)).concat(L.binds),
-    // the fixed code comes from the package when it is on (apl-package.js)
-    import: aplPackage.enabled() ? [aplPackage.importEntry()] : undefined,
+    // the fixed code comes from the package (apl-package.js), or is
+    // written into the screen when it is off; the screen adds only what
+    // knows this screen: how to tell the skill (touch.screenCommands),
+    // a tick's celebration, where a slideshow's photo number is kept
+    ...(aplPackage.enabled() ? { import: [aplPackage.importEntry()] } : inlinePackage()),
     commands: {
-      ...(aplPackage.enabled() ? {} : pagesMod.commandDefinitions(vp.w, vp.h)), ...celebrations.commandDefinitions(),
-      // a scroll-strip box's tick: the page box's celebration, defined once
-      ...(celebrateAfterTick(L).length ? { MmStripDone: { parameters: ["mmL", "mmBx", "mmBy", "mmTicked"], commands: celebrateAfterTick(L) } } : {}),
+      ...(aplPackage.enabled() ? {} : aplPackage.contents().commands),
+      ...touch.screenCommands(refreshArgs, paired.major, paired.minor),
+      ...celebrations.commandDefinitions(),
+      MmAfterTick: { parameters: ["mmL", "mmBx", "mmBy", "mmTicked"], commands: celebrateAfterTick(L) },
+      MmSsKeep: {
+        parameters: ["mmK", "mmI"],
+        commands: ssKeys.map((k) => ({ type: "SetValue", componentId: touch.ROOT_ID, property: k, when: "${mmK == '" + k + "'}", value: "${mmI}" })),
+      },
     },
     // after an edit, turn from where the screen was to the page edited;
     // otherwise just start the dwell
     // effects are layout instances too (effect-all.js), so they stay small
-    layouts: { ...touch.layouts(refreshArgs, paired.major, paired.minor, celebrateAfterTick(L)), ...scroll.layouts(refreshArgs, paired.major, paired.minor, celebrateAfterTick(L).length > 0), ...(aplPackage.enabled() ? {} : require("./effect-all").layouts()) },
     onMount: editedPage(manifest, cur) !== null ? [{ type: "MmGoTo", to: editedPage(manifest, cur) }] : [{ type: "MmRotate" }],
   }));
+}
+
+/** APL_PACKAGE=off: the package's layouts and resources on the screen
+ * itself (its commands are merged with the screen's in displayScreen). */
+function inlinePackage() {
+  const c = aplPackage.contents();
+  return { layouts: c.layouts, resources: c.resources };
 }
 
 /** Every checkbox a page carries: its own targets and the boxes riding

@@ -22,6 +22,13 @@
 // read an animation's live value. The same sum ignores a press on a row
 // scrolled outside the window (the Roku's itemVisible).
 //
+// The strip, its motion and its boxes' behaviour are the package's
+// MmStrip / MmSBox / MmSTick layouts (apl-package.js); a screen carries
+// one MmStrip instance per strip with its numbers, its segments as rows
+// [file, top dp, height dp] and its boxes as rows (BOX_ROW below), so a
+// box costs ~40 bytes of the screen (Dave's 113 boxes: ~120 bytes each
+// as layout instances, 2026-10-28; 245 KB written out in full).
+//
 // Not ported: the Roku holds the strip while its pointer rests on a box,
 // so a moving box can be aimed at. A finger needs no aiming - the box
 // under it is pressed - and fast-mode touch handlers cannot stop an
@@ -29,25 +36,16 @@
 
 const { ROOT_ID, applyOverrides, targetId } = require("./touch");
 
+// a strip box as the screen sends it (the MmStrip instance's mmBoxes):
+// [index in cfg.boxes, task id, visible from ms, to ms, centre x, centre y
+// (canvas px, strip at its start), ticked 0/1, width dp or -1, height dp
+// or -1, list or -9] - -1/-9: the strip's usual one
+
 const DEFAULT_MS = 10000;
 const MIN_MS = 100;
 const PAD = 16; // canvas px of finger room around a box (touch.js)
-// touch.js's fast checks: every 1.5s for 15s after a touch
-const FAST_MS = 1500;
-const FAST_REPEATS = 10;
 
 const num = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
-
-/** touch.js fastCheck (not exported there): quick refresh checks on the
- * shared sequencer, so a second touch replaces the running one. */
-function fastCheck(refreshArgs) {
-  return {
-    type: "Sequential",
-    sequencer: "fastcheck",
-    repeatCount: FAST_REPEATS - 1,
-    commands: [{ type: "Idle", delay: FAST_MS }, { type: "SendEvent", arguments: refreshArgs }],
-  };
-}
 
 /** The strip's motion as numbers, defaults as on the Roku. */
 function motion(cfg) {
@@ -66,6 +64,7 @@ function motion(cfg) {
 }
 
 const r2 = (v) => Math.round(v * 100) / 100;
+const r1 = (v) => Math.round(v * 10) / 10;
 
 /** APL expression for how far into its motion the strip is now, ms: the
  * strip's translation is then fromY + (toY - fromY) * t / ms. */
@@ -116,32 +115,23 @@ function build(cfg, ctx) {
   if (!cfg || !cfg.rect) return [];
   const m = motion(cfg);
   if (!m.segments.length) return [];
-  const { place, assetBase, idPrefix, pageIndex, refreshArgs, major, minor } = ctx;
+  const { place, idPrefix, pageIndex } = ctx;
   const s = place.len(1);
   const win = place.rect(cfg.rect);
-  const stripId = "mm" + idPrefix + "Strip";
 
   // the strip: segments stacked top to bottom, drawn scaled to their
-  // canvas size (the PNGs are at output scale)
-  const items = [];
+  // canvas size (the PNGs are at output scale); the asset base is the
+  // screen's mmAB
+  const segs = [];
   let top = 0;
   for (const seg of m.segments) {
-    items.push({
-      type: "Image", position: "absolute", left: 0, top: top * s, width: m.stripW * s, height: seg.h * s,
-      source: assetBase + seg.file, scale: "fill",
-    });
+    segs.push([seg.file, r2(top * s), r2(seg.h * s)]);
     top += seg.h;
   }
 
-  // checkboxes ride the strip, at their strip position. Each is an
-  // instance of the MmSBox layout (layouts() below) carrying only its
-  // identity, its centre on the canvas and when it is in the window; the
-  // rest (its box in dp, its list) the layout works out from the strip's
-  // binds, and a box's own size or list travel only when they differ from
-  // the strip's. Dave's chores + to-do strips carry 113 boxes: written out
-  // in full they made a 245 KB screen the Echo never took, and at ~220
-  // bytes a box the screen still went over the cap as tasks were added
-  // (2026-10-28). Now ~120 bytes a box.
+  // checkboxes ride the strip, at their strip position, as BOX_ROW rows;
+  // a box's own size or list travel only when they differ from the
+  // strip's usual ones
   const sprites = cfg.sprites;
   const boxes = Array.isArray(cfg.boxes) ? cfg.boxes : [];
   const hasBoxes = !!(sprites && sprites.empty && sprites.checked && boxes.length);
@@ -155,72 +145,32 @@ function build(cfg, ctx) {
   const bw = shown.length ? usual(shown.map(({ box: b }) => b.w)) : 0;
   const bh = shown.length ? usual(shown.map(({ box: b }) => b.h)) : 0;
   const bl = shown.length ? usual(lists) : -1;
+  const out = {
+    type: "MmStrip", position: "absolute", left: win.x, top: win.y, width: win.w, height: win.h,
+    mmId: "mm" + idPrefix, mmSw: r2(m.stripW * s), mmSh: r2(m.stripH * s), mmFrom: r2(m.fromY * s), mmTo: r2(m.toY * s),
+    mmMs: m.ms, mmLp: m.loop, mmSegs: segs,
+  };
   if (hasBoxes) {
     // the presses the screen still holds apply here as to page targets
     const { states } = applyOverrides({ targets: { items: boxes } }, ctx.overrides);
-    shown.forEach(({ box: b, index: i, span }, k) => {
-      // a screen over the size cap (apl.js LITE): the tick is drawn, at
-      // about half the bytes, but cannot be pressed while it scrolls
-      const where = {
-        ...(states[i] === true ? { mmT0: true } : {}),
+    Object.assign(out, {
+      mmBoxes: shown.map(({ box: b, index: i, span }, k) => [
+        i, targetId(b) || "", span[0], span[1],
         // the box centre on the canvas: x fixed, y at the strip's start
-        mmX: r2(cfg.rect.x + b.x + b.w / 2), mmY: r2(cfg.rect.y + m.fromY + b.y + b.h / 2),
-        ...(b.w !== bw ? { mmW: r2(b.w * s) } : {}),
-        ...(b.h !== bh ? { mmH: r2(b.h * s) } : {}),
-      };
-      // a screen over the size cap (apl.js LITE): the tick is drawn, in
-      // fewer bytes, but cannot be pressed while it scrolls
-      if (ctx.lite >= 1) return items.push({ type: "MmSTick", ...where });
-      items.push({
-        type: "MmSBox", id: boxId(idPrefix, i), mmTid: targetId(b) || "", mmA: span[0], mmZ: span[1], ...where,
-        ...(lists[k] !== bl ? { mmL: lists[k] } : {}),
-      });
+        r1(cfg.rect.x + b.x + b.w / 2), r1(cfg.rect.y + m.fromY + b.y + b.h / 2),
+        states[i] === true ? 1 : 0, b.w !== bw ? r2(b.w * s) : -1, b.h !== bh ? r2(b.h * s) : -1, lists[k] !== bl ? lists[k] : -9,
+      ]),
+      // the box art, the page, the finger room, canvas -> dp (place), and
+      // where a box's centre sits in the strip
+      mmE: sprites.empty, mmC: sprites.checked,
+      mmPer: Number(((m.toY - m.fromY) / m.ms).toPrecision(6)), // canvas px a ms
+      mmPg: String(pageIndex), mmPad: r2(PAD * s),
+      mmS: place.scale, mmOx: r2(place.ox), mmOy: r2(place.oy), mmRx: r2(cfg.rect.x), mmRy: r2(cfg.rect.y + m.fromY),
+      // the usual box size (dp) and list, for boxes that do not say
+      mmBw: r2(bw * s), mmBh: r2(bh * s), mmBl: bl,
     });
   }
-
-  const from = [{ translateY: m.fromY * s }];
-  const strip = {
-    type: "Container",
-    id: stripId,
-    position: "absolute", left: 0, top: 0, width: m.stripW * s, height: m.stripH * s,
-    transform: from,
-    // the box art once for all of the strip's boxes
-    // and what its MmSBox boxes read: the motion (for where a box is
-    // now), the page, the padding, canvas -> dp for the celebration
-    bind: [{ name: "mmScrollT0", value: 0 }].concat(hasBoxes ? [
-      { name: "mmSEmpty", value: assetBase + sprites.empty },
-      { name: "mmSChecked", value: assetBase + sprites.checked },
-      { name: "mmSMs", value: m.ms }, { name: "mmSLp", value: m.loop },
-      { name: "mmSPer", value: Number(((m.toY - m.fromY) / m.ms).toPrecision(6)) }, // canvas px a ms
-      { name: "mmSPg", value: String(pageIndex) }, { name: "mmSPad", value: r2(PAD * s) },
-      // canvas -> dp (place), and where a box's centre sits in the strip
-      { name: "mmSS", value: place.scale }, { name: "mmSOx", value: r2(place.ox) }, { name: "mmSOy", value: r2(place.oy) },
-      { name: "mmSRx", value: r2(cfg.rect.x) }, { name: "mmSRy", value: r2(cfg.rect.y + m.fromY) },
-      // the usual box size (dp) and list, for boxes that do not say
-      { name: "mmSBw", value: r2(bw * s) }, { name: "mmSBh", value: r2(bh * s) }, { name: "mmSL", value: bl },
-    ] : []),
-    onMount: [{
-      type: "Sequential",
-      sequencer: "scroll" + idPrefix,
-      commands: [
-        // when the motion started, for the press position above
-        { type: "SetValue", componentId: stripId, property: "mmScrollT0", value: "${elapsedTime}" },
-        {
-          type: "AnimateItem", componentId: stripId, duration: m.ms, easing: "linear",
-          repeatCount: m.loop ? 1000000 : 0,
-          value: [{ property: "transform", from, to: [{ translateY: m.toY * s }] }],
-        },
-      ],
-    }],
-    items,
-  };
-  // the window clips the strip to the cell (the Roku's clippingRect; see
-  // overlay-gif.js on APL clipping)
-  return [{
-    type: "Container",
-    position: "absolute", left: win.x, top: win.y, width: win.w, height: win.h,
-    items: [strip],
-  }];
+  return [out];
 }
 
 
@@ -230,21 +180,67 @@ const PHASE = "(mmSLp ? (elapsedTime - mmScrollT0) % mmSMs : Math.min(mmSMs, ela
 /** The box centre's canvas y now. */
 const CY = "Math.round(mmY + mmSPer * " + PHASE + ")";
 
-/** The strip checkbox, defined once in the document (apl.js). A press is
- * touch.js's checkbox press; ignored while the row is outside the window
- * (mmA..mmZ, visibleSpan); the tap's y is where the box is NOW. */
-function layouts(refreshArgs, major, minor, celebrate) {
+/** The package's strip layouts (apl-package.js).
+ *
+ * MmStrip: the window (the instance's place, clipping the strip to the
+ * cell: the Roku's clippingRect; see overlay-gif.js on APL clipping) and
+ * the strip in it, which moves by one looping linear AnimateItem started
+ * on mount on its own sequencer (the main one is cut short by every
+ * touch). The strip binds what its boxes read (mmS*).
+ *
+ * MmSBox: the strip checkbox. A press is touch.js's checkbox press,
+ * ignored while the row is outside the window (mmA..mmZ, visibleSpan);
+ * the tap's y is where the box is NOW. */
+function layouts() {
   const size = [{ name: "mmT0", default: false }, { name: "mmW", default: -1 }, { name: "mmH", default: -1 }];
+  const dflt = (name, d) => ({ name, default: d });
+  const all = { position: "absolute", left: 0, top: 0, width: "100%", height: "100%" };
   return {
-    // the not-pressable tick of a screen over the size cap
-    MmSTick: {
-      parameters: ["mmX", "mmY"].concat(size),
+    MmStrip: {
+      parameters: ["mmId", "mmSw", "mmSh", "mmFrom", "mmTo", "mmMs", "mmLp", "mmSegs",
+        dflt("mmBoxes", []), dflt("mmE", ""), dflt("mmC", ""), dflt("mmPer", 0), dflt("mmPg", "0"),
+        dflt("mmPad", 0), dflt("mmS", 1), dflt("mmOx", 0), dflt("mmOy", 0), dflt("mmRx", 0), dflt("mmRy", 0),
+        dflt("mmBw", 0), dflt("mmBh", 0), dflt("mmBl", -1)],
       items: [{
-        type: "Image",
-        bind: [{ name: "mmBw", value: "${mmW < 0 ? mmSBw : mmW}" }, { name: "mmBh", value: "${mmH < 0 ? mmSBh : mmH}" }],
-        position: "absolute",
-        left: "${(mmX - mmSRx) * mmSS - mmBw / 2}", top: "${(mmY - mmSRy) * mmSS - mmBh / 2}", width: "${mmBw}", height: "${mmBh}",
-        source: "${mmT0 ? mmSChecked : mmSEmpty}", scale: "fill",
+        type: "Container",
+        items: [{
+          type: "Container",
+          position: "absolute", left: 0, top: 0, width: "${mmSw}", height: "${mmSh}",
+          transform: [{ translateY: "${mmFrom}" }],
+          bind: [
+            { name: "mmScrollT0", value: 0 },
+            { name: "mmSEmpty", value: "${mmAB + mmE}" }, { name: "mmSChecked", value: "${mmAB + mmC}" },
+            { name: "mmSMs", value: "${mmMs}" }, { name: "mmSLp", value: "${mmLp}" }, { name: "mmSPer", value: "${mmPer}" },
+            { name: "mmSPg", value: "${mmPg}" }, { name: "mmSPad", value: "${mmPad}" },
+            { name: "mmSS", value: "${mmS}" }, { name: "mmSOx", value: "${mmOx}" }, { name: "mmSOy", value: "${mmOy}" },
+            { name: "mmSRx", value: "${mmRx}" }, { name: "mmSRy", value: "${mmRy}" },
+            { name: "mmSBw", value: "${mmBw}" }, { name: "mmSBh", value: "${mmBh}" }, { name: "mmSL", value: "${mmBl}" },
+          ],
+          // no componentId: each acts on the strip, whose handler runs it
+          onMount: [{
+            type: "Sequential",
+            sequencer: "scroll${mmId}",
+            commands: [
+              // when the motion started, for a press's position
+              { type: "SetValue", property: "mmScrollT0", value: "${elapsedTime}" },
+              {
+                type: "AnimateItem", duration: "${mmMs}", easing: "linear", repeatCount: "${mmLp ? 1000000 : 0}",
+                value: [{ property: "transform", from: [{ translateY: "${mmFrom}" }], to: [{ translateY: "${mmTo}" }] }],
+              },
+            ],
+          }],
+          items: [
+            { type: "Container", ...all, data: "${mmSegs}", items: [{
+              type: "Image", position: "absolute", left: 0, top: "${data[1]}", width: "${mmSw}", height: "${data[2]}",
+              source: "${mmAB + data[0]}", scale: "fill",
+            }] },
+            // one box per row (BOX_ROW)
+            { type: "Container", ...all, data: "${mmBoxes}", items: [
+              { type: "MmSBox", id: "${mmId}Box${data[0]}", mmTid: "${data[1]}", mmA: "${data[2]}", mmZ: "${data[3]}",
+                mmX: "${data[4]}", mmY: "${data[5]}", mmT0: "${data[6] == 1}", mmW: "${data[7]}", mmH: "${data[8]}", mmL: "${data[9]}" },
+            ] },
+          ],
+        }],
       }],
     },
     MmSBox: {
@@ -276,19 +272,18 @@ function layouts(refreshArgs, major, minor, celebrate) {
           commands: [
             // tick now, ask later
             { type: "SetValue", property: "mmTicked", value: "${!mmTicked}" },
-            // the celebration, as for a page box: the document's
-            // MmStripDone (apl.js), at where the box is now (dp)
-            ...(celebrate ? [{
-              type: "MmStripDone", mmL: "${mmLi}", mmTicked: "${mmTicked}", mmBx: "${mmSOx + mmSS * mmX}",
+            // the celebration, as for a page box (the screen's
+            // MmAfterTick, apl.js), at where the box is now (dp)
+            {
+              type: "MmAfterTick", mmL: "${mmLi}", mmTicked: "${mmTicked}", mmBx: "${mmSOx + mmSS * mmX}",
               mmBy: "${mmSOy + mmSS * (mmY + mmSPer * " + PHASE + ")}",
-            }] : []),
+            },
             {
               type: "SetValue", componentId: ROOT_ID, property: "overrides", when: "${mmTid != ''}",
               value: "${overrides + mmTid + ':' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",
             },
-            { type: "SendEvent", arguments: ["touch", "tap", "${mmSPg}", "${Math.round(mmX)}", "${" + CY + "}", "${mmTid}", major, minor,
-              refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8], refreshArgs[10]] },
-            fastCheck(refreshArgs),
+            { type: "MmTell", mmK: "tap", mmP: "${mmSPg}", mmX: "${Math.round(mmX)}", mmY: "${" + CY + "}", mmT: "${mmTid}" },
+            { type: "MmFastCheck" },
             { type: "MmRestartDwell" },
           ],
         }],

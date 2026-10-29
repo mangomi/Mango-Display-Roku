@@ -47,3 +47,19 @@ test("APL_PACKAGE=off puts the code back on the screen", () => {
     delete process.env.APL_PACKAGE;
   }
 });
+
+test("the package does not depend on the Lambda's settings (the deploy builds it without them)", () => {
+  const fresh = () => {
+    for (const k of Object.keys(require.cache)) if (/lambda\/[^/]+\.js$/.test(k)) delete require.cache[k];
+    return require("../apl-package").json();
+  };
+  const plain = fresh();
+  const saved = { ...process.env };
+  try {
+    Object.assign(process.env, { CELEBRATION_URL: "https://x/burst.png", LOGO_URL: "https://x/logo.png", MANGO_ENV: "production" });
+    assert.strictEqual(fresh(), plain);
+  } finally {
+    for (const k of ["CELEBRATION_URL", "LOGO_URL", "MANGO_ENV"]) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+    fresh();
+  }
+});

@@ -10,9 +10,11 @@
 //     watchdog (onBusyChange, onSpinnerWatchdog)
 //   - on a calendar swipe, centred on the calendar (InteractionLayer busyAt)
 //
-// The PNG travels inside the APL document as a data URL (3.7 KB), so no
-// new hosting: the deploy zip carries a copy of images/spinner.png
-// (tools/deploy.sh); local runs read the repo's own file.
+// The PNG travels as a data URL (3.7 KB), so no new hosting: the deploy
+// zip carries a copy of images/spinner.png (tools/deploy.sh); local runs
+// read the repo's own file. On the display screen it lives ONCE, in the
+// package (apl-package.js: the MmSpinner layout and the mmSpinnerPng
+// resource); only the pairing screen, which imports nothing, carries it.
 
 const fs = require("fs");
 const path = require("path");
@@ -54,4 +56,23 @@ function spinner(cx, cy, sizeDp, opacity, id) {
   return c;
 }
 
-module.exports = { spinner, SIZE_PX, WATCHDOG_MS };
+const TURN = [{
+  type: "AnimateItem", duration: TURN_MS, repeatCount: 1000000, easing: "linear",
+  value: [{ property: "transform", from: [{ rotate: 0 }], to: [{ rotate: 360 }] }],
+}];
+
+/** The package's spinner: the instance's place and opacity land on the
+ * Image itself (layout instance properties go to its top component). */
+function layouts() {
+  return { MmSpinner: { parameters: [], items: [{ type: "Image", source: "@mmSpinnerPng", scale: "fill", onMount: TURN }] } };
+}
+function resources() {
+  return [{ strings: { mmSpinnerPng: source() } }];
+}
+
+/** spinner() on a screen that has the package. */
+function spinnerRef(cx, cy, sizeDp, opacity) {
+  return { type: "MmSpinner", position: "absolute", left: cx - sizeDp / 2, top: cy - sizeDp / 2, width: sizeDp, height: sizeDp, opacity };
+}
+
+module.exports = { spinner, spinnerRef, layouts, resources, SIZE_PX, WATCHDOG_MS };

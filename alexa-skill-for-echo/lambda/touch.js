@@ -21,7 +21,7 @@
 // sent back with every refresh; the skill re-applies entries the manifest
 // does not reflect yet (applyOverrides) and drops agreed or stale ones.
 
-const { spinner, SIZE_PX: SPINNER_PX } = require("./spinner");
+const { spinnerRef, SIZE_PX: SPINNER_PX } = require("./spinner");
 
 // a vertical drag: more up/down than sideways
 const VERTICAL = "Math.abs(event.component.y - mmDownY) >= Math.abs(event.component.x - mmDownX)";
@@ -80,17 +80,36 @@ function applyOverrides(page, overridesStr, now = Date.now()) {
   return { states, overrides: keep.length ? keep.join(",") + "," : "" };
 }
 
-/** After a touch: quick refresh checks, carrying the presses. Restarting
- * it (a second touch) replaces the running one on its sequencer. */
-function fastCheck(refreshArgs) {
+/** The commands a screen defines for itself (apl.js), so the package's
+ * layouts can talk to the skill without knowing the screen:
+ *   MmTell(mmK, mmP, mmX, mmY, mmT)  /interact: kind, page, canvas x/y,
+ *                                    target id, plus what the screen shows
+ *   MmRefresh                        one refresh, as the heartbeat sends */
+function screenCommands(refreshArgs, major, minor) {
   return {
-    type: "Sequential",
-    sequencer: "fastcheck",
-    repeatCount: FAST_REPEATS - 1,
-    commands: [
-      { type: "Idle", delay: FAST_MS },
-      { type: "SendEvent", arguments: refreshArgs },
-    ],
+    MmTell: {
+      parameters: ["mmK", "mmP", "mmX", "mmY", "mmT"],
+      commands: [{ type: "SendEvent", arguments: ["touch", "${mmK}", "${mmP}", "${mmX}", "${mmY}", "${mmT}", major, minor,
+        refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8], refreshArgs[10]] }],
+    },
+    MmRefresh: { parameters: [], commands: [{ type: "SendEvent", arguments: refreshArgs }] },
+  };
+}
+
+/** The package's (apl-package.js): MmFastCheck, after a touch: quick
+ * refresh checks, carrying the presses. Restarting it (a second touch)
+ * replaces the running one on its sequencer. */
+function commandDefinitions() {
+  return {
+    MmFastCheck: {
+      parameters: [],
+      commands: [{
+        type: "Sequential",
+        sequencer: "fastcheck",
+        repeatCount: FAST_REPEATS - 1,
+        commands: [{ type: "Idle", delay: FAST_MS }, { type: "MmRefresh" }],
+      }],
+    },
   };
 }
 
@@ -135,7 +154,7 @@ function touchComponents(ctx) {
   for (const c of calendars(ctx)) {
     under.push({
       type: "Container", position: "absolute", left: c.r.x, top: c.r.y, width: c.r.w, height: c.r.h,
-      items: [spinner(c.r.w / 2, c.r.h / 2, place.len(SPINNER_PX), "${mmSwiping == '" + c.regId + "' ? 1 : 0}")],
+      items: [spinnerRef(c.r.w / 2, c.r.h / 2, place.len(SPINNER_PX), "${mmSwiping == '" + c.regId + "' ? 1 : 0}")],
     });
   }
   return under.concat(out);
@@ -163,7 +182,7 @@ function calendars(ctx) {
  * (pages.js); up/down starting on a calendar -> that calendar's
  * swipeup/swipedown. Returns the extra binds and handlers, or null. */
 function calendarGestures(ctx) {
-  const { pageIndex, refreshArgs, major, minor } = ctx;
+  const { pageIndex } = ctx;
   const cals = calendars(ctx);
   if (!cals.length) return null;
   const setSwiping = (v) => ({ type: "SetValue", componentId: ROOT_ID, property: "mmSwiping", value: v });
@@ -174,8 +193,8 @@ function calendarGestures(ctx) {
   const send = (c, kind) => [
     setSwiping(c.regId),
     { type: "Sequential", sequencer: "busyhide", commands: [{ type: "Idle", delay: BUSY_MAX_MS }, setSwiping("")] },
-    { type: "SendEvent", arguments: ["touch", kind, String(pageIndex), String(c.cx), String(c.cy), c.regId, major, minor, refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8], refreshArgs[10]] },
-    fastCheck(refreshArgs),
+    { type: "MmTell", mmK: kind, mmP: String(pageIndex), mmX: String(c.cx), mmY: String(c.cy), mmT: c.regId },
+    { type: "MmFastCheck" },
     { type: "MmRestartDwell" },
   ];
   const inside = (c) => "mmDownX >= " + c.r.x + " && mmDownX < " + (c.r.x + c.r.w) +
@@ -212,14 +231,16 @@ function calendarGestures(ctx) {
 
 const r2 = (v) => Math.round(v * 100) / 100;
 
-/** The checkbox, defined once per screen (APL layouts): a press ticks the
- * box at once, records the press for the root's held `overrides`, tells
- * the portal, checks for the result quickly and restarts the page's dwell.
+/** The checkbox, defined once in the package (apl-package.js): a press
+ * ticks the box at once, runs the screen's MmAfterTick (its celebration,
+ * apl.js), records the press for the root's held `overrides`, tells the
+ * portal (the screen's MmTell), checks for the result quickly and
+ * restarts the page's dwell.
  * Instances carry mmT0 (ticked at build), mmTid (task id), mmPg/mmCx/mmCy
  * (page, canvas centre for /interact), mmW/mmH/mmPad (the drawn box) and
- * mmL/mmBx/mmBy (its list number and dp centre, for `afterTick`).
+ * mmL/mmBx/mmBy (its list number and dp centre, for the celebration).
  * The sprite URLs come from mmBoxE/mmBoxC bound on the page's box layer. */
-function layouts(refreshArgs, major, minor, afterTick = []) {
+function layouts() {
   return {
     MmBox: {
       parameters: ["mmT0", "mmTid", "mmPg", "mmCx", "mmCy", "mmW", "mmH", "mmPad", "mmL", "mmBx", "mmBy"],
@@ -240,14 +261,13 @@ function layouts(refreshArgs, major, minor, afterTick = []) {
           // tick now, ask later
           { type: "SetValue", property: "mmTicked", value: "${!mmTicked}" },
           // the celebration, when hosted art switches it on (apl.js)
-          ...afterTick,
+          { type: "MmAfterTick", mmL: "${mmL}", mmBx: "${mmBx}", mmBy: "${mmBy}", mmTicked: "${mmTicked}" },
           {
             type: "SetValue", componentId: ROOT_ID, property: "overrides", when: "${mmTid != ''}",
             value: "${overrides + mmTid + ':' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",
           },
-          { type: "SendEvent", arguments: ["touch", "tap", "${mmPg}", "${mmCx}", "${mmCy}", "${mmTid}", major, minor,
-            refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8], refreshArgs[10]] },
-          fastCheck(refreshArgs),
+          { type: "MmTell", mmK: "tap", mmP: "${mmPg}", mmX: "${mmCx}", mmY: "${mmCy}", mmT: "${mmTid}" },
+          { type: "MmFastCheck" },
           // a page being worked on is not turned away (pages.js)
           { type: "MmRestartDwell" },
         ],
@@ -256,4 +276,6 @@ function layouts(refreshArgs, major, minor, afterTick = []) {
   };
 }
 
-module.exports = { ROOT_ID, touchComponents, calendarGestures, applyOverrides, parseOverrides, targetId, boxId, layouts };
+module.exports = {
+  ROOT_ID, touchComponents, calendarGestures, applyOverrides, parseOverrides, targetId, boxId, layouts, screenCommands, commandDefinitions,
+};

@@ -55,7 +55,7 @@ test("display: background, photo, page and clock all inside the one container", 
   assert.deepStrictEqual(kinds, ["Frame", "Image:a.jpg", "Frame", "Image:display_p0.png", "Image:", "Text", "Text"]);
   // the busy spinner is above every page, last on the root
   const top = rootOf(screens.display).items;
-  assert.match(top[top.length - 1].source, /^data:image/);
+  assert.strictEqual(top[top.length - 1].type, "MmSpinner");
 });
 
 test("display: portrait canvas on a portrait Echo fills the screen, rotation ignored", () => {

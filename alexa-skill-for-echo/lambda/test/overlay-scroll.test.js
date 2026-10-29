@@ -4,7 +4,8 @@
 // check the tap lands at the box's position on the canvas at that moment.
 const test = require("node:test");
 const assert = require("node:assert");
-const { build, layouts } = require("../overlay-scroll");
+const { build } = require("../overlay-scroll");
+const { ev, inflate, dataChildren } = require("./inflate");
 const touch = require("../touch");
 const apl = require("../apl");
 
@@ -27,100 +28,91 @@ const strip = (extra) => ({
   ...extra,
 });
 
-function evalExpr(s, vars) {
-  const m = /^\$\{(.*)\}$/.exec(s);
-  assert.ok(m, "not an expression: " + s);
-  return new Function(...Object.keys(vars), "return (" + m[1] + ");")(...Object.values(vars));
+// the strip as the Echo inflates it from the package: the window, the
+// strip in it and what the strip's expressions see
+function expand(cfg, c = ctx()) {
+  const inst = build(cfg, c)[0];
+  const { node: win, scope } = inflate(inst, { mmAB: "https://a/" });
+  const strip = win.items[0];
+  const s = { ...scope };
+  for (const b of strip.bind) s[b.name] = ev(b.value, s);
+  return { inst, win, strip, s };
 }
+// its boxes, `ms` into the motion: per row the layout it drew, the
+// component and what that sees
+function boxesOf(x, ms = 0) {
+  return dataChildren(x.strip.items[1], { ...x.s, mmScrollT0: 1000, elapsedTime: 1000 + ms }).map(({ template, scope }) => {
+    const { type, when, id, ...rest } = template;
+    const { node, scope: bs } = inflate({ type, ...rest }, scope);
+    return { type, id: ev(id, scope), node, s: bs };
+  });
+}
+const geom = (b) => ["left", "top", "width", "height"].map((k) => Math.round(ev(b.node[k], b.s) * 100) / 100);
+const press = (b) => b.node.onPress[0];
+const tell = (b) => press(b).commands.find((c) => c.type === "MmTell");
 
 test("a clipping window at the rect, the strip inside it, segments stacked", () => {
-  const [win] = build(strip(), ctx());
-  assert.deepStrictEqual([win.left, win.top, win.width, win.height], [50, 100, 200, 150]);
-  assert.strictEqual(win.items.length, 1);
-  const s = win.items[0];
-  assert.deepStrictEqual([s.width, s.height], [200, 1250]);
-  const imgs = s.items.filter((c) => c.type === "Image");
-  assert.deepStrictEqual(imgs.map((i) => [i.source, i.top, i.height]), [["https://a/scroll_a_0.png", 0, 1000], ["https://a/scroll_a_1.png", 1000, 250]]);
+  const x = expand(strip());
+  assert.deepStrictEqual([x.inst.left, x.inst.top, x.inst.width, x.inst.height], [50, 100, 200, 150]);
+  assert.strictEqual(x.win.items.length, 1);
+  assert.deepStrictEqual([ev(x.strip.width, x.s), ev(x.strip.height, x.s)], [200, 1250]);
+  const segs = dataChildren(x.strip.items[0], x.s).map(({ template: t, scope }) => [ev(t.source, scope), ev(t.top, scope), ev(t.height, scope)]);
+  assert.deepStrictEqual(segs, [["https://a/scroll_a_0.png", 0, 1000], ["https://a/scroll_a_1.png", 1000, 250]]);
 });
 
 test("one looping linear AnimateItem fromY -> toY, on the strip's own sequencer", () => {
-  const s = build(strip(), ctx())[0].items[0];
-  assert.deepStrictEqual(s.transform, [{ translateY: 150 }]);
-  const seq = s.onMount[0];
-  assert.strictEqual(seq.sequencer, "scrollp1o4"); // not the main one: a touch would end it
+  const x = expand(strip());
+  assert.strictEqual(ev(x.strip.transform[0].translateY, x.s), 150);
+  const seq = x.strip.onMount[0];
+  assert.strictEqual(ev(seq.sequencer, x.s), "scrollmmp1o4"); // not the main one: a touch would end it
   const [t0, anim] = seq.commands;
   assert.strictEqual(t0.property, "mmScrollT0");
   assert.strictEqual(anim.type, "AnimateItem");
-  assert.strictEqual(anim.componentId, s.id);
-  assert.strictEqual(anim.duration, 28000);
-  assert.strictEqual(anim.easing, "linear");
-  assert.strictEqual(anim.repeatCount, 1000000);
-  assert.deepStrictEqual(anim.value, [{ property: "transform", from: [{ translateY: 150 }], to: [{ translateY: -1250 }] }]);
+  assert.strictEqual(anim.componentId, undefined); // the strip's own handler: acts on the strip
+  assert.deepStrictEqual([ev(anim.duration, x.s), anim.easing, ev(anim.repeatCount, x.s)], [28000, "linear", 1000000]);
+  const [v] = anim.value;
+  assert.deepStrictEqual([v.property, ev(v.from[0].translateY, x.s), ev(v.to[0].translateY, x.s)], ["transform", 150, -1250]);
   // played once: stays at the end
-  assert.strictEqual(build(strip({ loop: false }), ctx())[0].items[0].onMount[0].commands[1].repeatCount, 0);
+  const once = expand(strip({ loop: false }));
+  assert.strictEqual(ev(once.strip.onMount[0].commands[1].repeatCount, once.s), 0);
 });
 
 test("Roku defaults: fromY 0, toY -stripH, 10s, strip size from the segments", () => {
-  const s = build(strip({ fromY: undefined, toY: undefined, durationMs: undefined, stripH: undefined, stripW: undefined }), ctx())[0].items[0];
-  const anim = s.onMount[0].commands[1];
-  assert.strictEqual(anim.duration, 10000);
-  assert.deepStrictEqual(anim.value[0].from, [{ translateY: 0 }]);
-  assert.deepStrictEqual(anim.value[0].to, [{ translateY: -1250 }]);
-  assert.deepStrictEqual([s.width, s.height], [200, 1250]);
+  const x = expand(strip({ fromY: undefined, toY: undefined, durationMs: undefined, stripH: undefined, stripW: undefined }));
+  assert.deepStrictEqual([x.inst.mmMs, x.inst.mmFrom, x.inst.mmTo, x.inst.mmSw, x.inst.mmSh], [10000, 0, -1250, 200, 1250]);
   assert.deepStrictEqual(build(strip({ segments: [] }), ctx()), []);
 });
 
-const LAYOUT = layouts(refreshArgs, "1", "822", false).MmSBox.items[0];
-const stripOf = (c) => c[0].items[0];
-const sboxes = (c) => stripOf(c).items.filter((x) => x.type === "MmSBox");
-// what an expression inside a box sees: the strip's binds, the box's
-// parameters (with the layout's defaults), then the layout's own binds
-const MS = layouts(refreshArgs, "1", "822", false).MmSBox;
-const scope = (s, b, ms) => {
-  const v = { ...Object.fromEntries(s.bind.map((x) => [x.name, x.value])), mmScrollT0: 1000, elapsedTime: 1000 + ms, Math };
-  for (const p of MS.parameters) if (typeof p === "object") v[p.name] = p.default;
-  Object.assign(v, b);
-  for (const x of LAYOUT.bind) v[x.name] = evalExpr(x.value, v);
-  return v;
-};
-const geom = (s, b) => ["left", "top", "width", "height"].map((k) => Math.round(evalExpr(LAYOUT[k], scope(s, b, 0)) * 100) / 100);
-
 test("boxes ride the strip and press like touch.js's checkboxes", () => {
-  const c = build(strip(), ctx());
-  const boxes = sboxes(c);
-  assert.strictEqual(boxes.length, 2);
+  const x = expand(strip());
+  const boxes = boxesOf(x);
+  assert.deepStrictEqual(boxes.map((b) => b.type), ["MmSBox", "MmSBox"]);
   const [b] = boxes;
   const pad = 8; // 16 canvas px
-  assert.deepStrictEqual(geom(stripOf(c), b), [5 - pad, 20 - pad, 15 + 2 * pad, 15 + 2 * pad]);
-  assert.deepStrictEqual([b.mmT0, boxes[1].mmT0, b.mmTid, b.mmX], [undefined, true, "501", 125]);
-  // a box only carries what differs from the strip's usual box
-  assert.ok(!("mmW" in b) && !("mmH" in b) && !("mmL" in b));
-  assert.ok(JSON.stringify(b).length < 130, JSON.stringify(b));
-  // the behaviour lives once, in the layout
-  assert.deepStrictEqual(LAYOUT.bind[0], { name: "mmTicked", value: "${mmT0}" });
-  assert.strictEqual(LAYOUT.item.items[0].source, "${mmTicked ? mmSChecked : mmSEmpty}");
-  const [gate] = LAYOUT.onPress;
-  const [tick, hold, send, fast, dwell] = gate.commands;
+  assert.deepStrictEqual(geom(b), [5 - pad, 20 - pad, 15 + 2 * pad, 15 + 2 * pad]);
+  assert.deepStrictEqual([b.s.mmT0, boxes[1].s.mmT0, b.s.mmTid, b.s.mmX], [false, true, "501", 125]);
+  // a box is one short row; it only names a size or list unlike the strip's
+  assert.deepStrictEqual(x.inst.mmBoxes[0].slice(6), [0, -1, -1, -9]);
+  assert.ok(JSON.stringify(x.inst.mmBoxes[0]).length < 45, JSON.stringify(x.inst.mmBoxes[0]));
+  // the behaviour lives once, in the package's layout
+  assert.deepStrictEqual(b.node.bind[0], { name: "mmTicked", value: "${mmT0}" });
+  assert.strictEqual(ev(b.node.item.items[0].source, b.s), "https://a/box_empty.png");
+  const [tick, after, hold, send, fast, dwell] = press(b).commands;
   assert.strictEqual(tick.value, "${!mmTicked}");
+  assert.strictEqual(after.type, "MmAfterTick");
   assert.strictEqual(hold.componentId, touch.ROOT_ID);
   assert.match(hold.value, /mmTid \+ ':' \+ \(mmTicked \? 1 : 0\)/);
-  // touch.js's argument layout: kind, page, x, y, id, major, minor, ver, presses, layout, urls, page shown
-  assert.deepStrictEqual(send.arguments.filter((_, i) => i !== 4),
-    ["touch", "tap", "${mmSPg}", "${Math.round(mmX)}", "${mmTid}", "1", "822", "${mmVer}", "${overrides}", "${mmLayout}", "${mmPageUrls}", "${mmCur}", undefined]);
-  assert.strictEqual(fast.sequencer, "fastcheck");
+  // the screen's MmTell sends touch.js's arguments: kind, page, x, y, id
+  assert.deepStrictEqual([send.type, ev(send.mmK, b.s), ev(send.mmP, b.s), ev(send.mmX, b.s), ev(send.mmT, b.s)], ["MmTell", "tap", "1", 125, "501"]);
+  assert.strictEqual(fast.type, "MmFastCheck");
   assert.strictEqual(dwell.type, "MmRestartDwell");
   // nothing is sent from a fast-mode handler
-  assert.ok(!LAYOUT.onDown && !LAYOUT.onUp);
-  // the strip binds the page for its boxes
-  assert.strictEqual(stripOf(build(strip(), ctx())).bind.find((v) => v.name === "mmSPg").value, "1");
+  assert.ok(!b.node.onDown && !b.node.onUp);
 });
 
 test("the tap is aimed where the box is now, and only while its row is in the window", () => {
-  const s = stripOf(build(strip(), ctx()));
-  const [b] = sboxes([{ items: [s] }]);
-  const [gate] = LAYOUT.onPress;
-  const send = gate.commands.find((c) => c.type === "SendEvent");
-  const y = (ms) => evalExpr(send.arguments[4], scope(s, b, ms));
+  const x = expand(strip());
+  const y = (ms) => ev(tell(boxesOf(x, ms)[0]).mmY, boxesOf(x, ms)[0].s);
   // box centre = rect.y + strip offset + box.y + h/2; the strip runs
   // +300 -> -2500 over 28s
   assert.strictEqual(y(0), 200 + 300 + 55);
@@ -128,61 +120,48 @@ test("the tap is aimed where the box is now, and only while its row is in the wi
   assert.strictEqual(y(28000), y(0)); // loops
   // box rows 40..70: below the window (0..300) at the start, in it once
   // the strip has moved up 100 px (1s), gone past the top later
-  const visible = (ms) => evalExpr(gate.when, scope(s, b, ms));
+  const visible = (ms) => { const b = boxesOf(x, ms)[0]; return ev(press(b).when, b.s); };
   assert.deepStrictEqual([0, 1000, 3000, 4000].map(visible), [false, true, true, false]);
   // played once: it stays at the end
-  const once = stripOf(build(strip({ loop: false }), ctx()));
-  assert.strictEqual(evalExpr(send.arguments[4], scope(once, sboxes([{ items: [once] }])[0], 60000)), 200 - 2500 + 55);
+  const once = expand(strip({ loop: false }));
+  const b = boxesOf(once, 60000)[0];
+  assert.strictEqual(ev(tell(b).mmY, b.s), 200 - 2500 + 55);
 });
 
-test("a celebrating strip box calls MmStripDone at the box's place now (dp)", () => {
-  const cel = layouts(refreshArgs, "1", "822", true).MmSBox.items[0].onPress[0].commands.find((c) => c.type === "MmStripDone");
-  const s = stripOf(build(strip(), { ...ctx(), listIndex: () => 3 }));
-  const b = sboxes([{ items: [s] }])[0];
-  assert.strictEqual(scope(s, b, 0).mmLi, 3);
+test("a strip box hands the screen's MmAfterTick its list and its place now (dp)", () => {
+  const x = expand(strip(), { ...ctx(), listIndex: () => 3 });
+  const b = boxesOf(x)[0];
+  const cel = press(b).commands.find((c) => c.type === "MmAfterTick");
+  assert.strictEqual(ev(cel.mmL, b.s), 3);
   // canvas 555 at the start -> dp at scale 0.5
-  assert.strictEqual(evalExpr(cel.mmBy, scope(s, b, 0)), 0 + 0.5 * 555);
-  assert.ok(!layouts(refreshArgs, "1", "822", false).MmSBox.items[0].onPress[0].commands.some((c) => c.type === "MmStripDone"));
+  assert.strictEqual(ev(cel.mmBy, b.s), 0 + 0.5 * 555);
 });
 
 test("held presses tick strip boxes too; no sprites, no boxes", () => {
   const now = Date.now();
-  const boxes = (c, extra) => sboxes(build(strip(extra), c));
-  const held = boxes(ctx("501:1:" + now + ",502:0:" + now + ","));
-  assert.deepStrictEqual(held.map((b) => b.mmT0 === true), [true, false]);
-  assert.strictEqual(boxes(ctx(), { sprites: null }).length, 0);
+  const held = boxesOf(expand(strip(), ctx("501:1:" + now + ",502:0:" + now + ",")));
+  assert.deepStrictEqual(held.map((b) => b.s.mmT0), [true, false]);
+  assert.strictEqual(boxesOf(expand(strip({ sprites: null }))).length, 0);
 });
 
-test("ids unique and from the overlay's prefix; sequencers prefixed", () => {
-  const ids = [];
-  const seqs = [];
-  (function walk(n) {
-    if (Array.isArray(n)) return n.forEach(walk);
-    if (!n || typeof n !== "object") return;
-    if (n.id) ids.push(n.id);
-    if (n.sequencer) seqs.push(n.sequencer);
-    Object.values(n).forEach(walk);
-  })(build(strip(), ctx()));
-  assert.strictEqual(new Set(ids).size, ids.length);
-  ids.forEach((id) => assert.match(id, /^mmp1o4/));
-  seqs.forEach((s) => assert.match(s, /^(scroll|fastcheck$)/));
+test("box ids unique and from the overlay's prefix, as apl.js sets ticks in place", () => {
+  const ids = boxesOf(expand(strip())).map((b) => b.id);
+  assert.deepStrictEqual(ids, ["mmp1o4Box0", "mmp1o4Box1"]);
 });
 
-test("size: a box is a few hundred bytes (Dave's 113 strip boxes made a 245 KB screen)", () => {
+test("size: a box is one short row (Dave's 113 strip boxes once made a 245 KB screen)", () => {
   const boxes = Array.from({ length: 40 }, (_, i) => ({ x: 10, y: 40 + i * 60, w: 30, h: 30, checked: i % 3 === 0, kind: "todo", widgetSettingId: 7, payload: { id: 1000 + i, projectId: 9 } }));
   const bytes = JSON.stringify(build(strip({ boxes }), ctx())).length;
-  assert.ok(bytes < 40 * 150, "40 boxes are " + bytes + " bytes");
+  assert.ok(bytes < 40 * 50 + 600, "40 boxes are " + bytes + " bytes");
 });
 
 test("a box of another size or list says so, and is drawn at its own size", () => {
   const odd = strip();
   odd.boxes = odd.boxes.concat([{ x: 10, y: 80, w: 20, h: 30, checked: false, payload: { id: 503 } }, { x: 10, y: 120, w: 30, h: 30, checked: false, payload: { id: 504 } }]);
-  const c = build(odd, { ...ctx(), listIndex: (b) => (b.payload.id === 504 ? 7 : 2) });
-  const bs = sboxes(c);
-  const s = stripOf(c);
-  const o = bs.find((b) => b.mmTid === "503");
-  assert.strictEqual(o.mmW, 10);
-  assert.deepStrictEqual(geom(s, o), [5 - 8, 40 - 8, 10 + 16, 15 + 16]);
-  assert.strictEqual(scope(s, bs.find((b) => b.mmTid === "504"), 0).mmLi, 7);
-  assert.strictEqual(scope(s, o, 0).mmLi, 2);
+  const bs = boxesOf(expand(odd, { ...ctx(), listIndex: (b) => (b.payload.id === 504 ? 7 : 2) }));
+  const o = bs.find((b) => b.s.mmTid === "503");
+  assert.strictEqual(o.s.mmW, 10);
+  assert.deepStrictEqual(geom(o), [5 - 8, 40 - 8, 10 + 16, 15 + 16]);
+  assert.strictEqual(bs.find((b) => b.s.mmTid === "504").s.mmLi, 7);
+  assert.strictEqual(o.s.mmLi, 2);
 });

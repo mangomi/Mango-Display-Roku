@@ -163,8 +163,11 @@ test("a whole new screen resumes each slideshow at the next photo (the Roku's st
   assert.strictEqual(d.document.mainTemplate.items[0].items[0].onMount[0].commands[1].arguments[10], "${'mmSsIw44p0:' + mmSsIw44p0}");
   assert.strictEqual(bind(d, "mmSsIw44p0"), 1);
   const box = JSON.stringify(rootOf(d).items[0]);
-  assert.match(box, /"name":"mmSsIdx","value":2/);
-  assert.match(box, /c\.jpg/);
+  assert.match(box, /"mmIdx":2/);
+  assert.match(box, /"mmFirst":"https:\/\/x\/c\.jpg"/);
+  // the loop keeps the number on the root through the screen's MmSsKeep
+  const keep = d.document.commands.MmSsKeep.commands[0];
+  assert.deepStrictEqual([keep.componentId, keep.property, keep.when], ["mmRoot", "mmSsIw44p0", "${mmK == 'mmSsIw44p0'}"]);
   // no report: from the first photo
   assert.strictEqual(bind(apl.displayScreen(vp, m, paired, "", false, 0, ""), "mmSsIw44p0"), 0);
 });

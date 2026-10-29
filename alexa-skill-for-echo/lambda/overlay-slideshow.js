@@ -27,6 +27,12 @@
 // on top (B fades in over A, or out to reveal A), slides move both photos
 // (they never overlap) and flip squashes one before the other expands.
 //
+// The loop, the two Images and every transition are the package's
+// MmSlideshow layout (apl-package.js); a screen carries one instance per
+// widget with its place, its settings and its photo list. The list is a
+// root variable (ctx.photoList, apl.js), so pages sharing a background
+// send its photos once.
+//
 // Photos can be ~3000px originals. The Roku caps decode at the widget
 // size (loadWidth); here the device decodes whatever it is sent, so
 // Unsplash URLs ask the image CDN for the widget's size instead.
@@ -89,32 +95,35 @@ function affixes(urls) {
 }
 
 /** The commands that bring Image `x` in over `y` (component ids) with the
- * widget's transition; w/h the rect in dp. `xOnTop`: x is B. */
-function swapCommands(transition, x, y, xOnTop, w, h) {
-  const slides = { slideleft: [w, 0], slideright: [-w, 0], slideup: [0, h], slidedown: [0, -h] };
-  if (slides[transition]) {
-    const [dx, dy] = slides[transition];
-    return [
-      place(x, T(dx, dy), 1),
-      { type: "Parallel", commands: [
-        anim(x, SWAP_MS, EASE, T(dx, dy), T()),
-        anim(y, SWAP_MS, EASE, T(), T(-dx, -dy)),
-      ] },
-    ];
-  }
-  if (transition === "flip") {
-    // the pages' card flip: squash the old photo, expand the new one
-    return [
-      anim(y, SWAP_MS / 2, "ease-in", T(), SQUASHED),
-      place(x, SQUASHED, 1),
-      anim(x, SWAP_MS / 2, "ease-out", SQUASHED, T()),
-    ];
-  }
+ * widget's transition, one `when` per transition on mmTr; the rect in dp
+ * is mmW x mmH. `xOnTop`: x is B. */
+function swapCommands(x, y, xOnTop) {
+  const W = "${mmW}", H = "${mmH}", mW = "${-mmW}", mH = "${-mmH}";
+  const slides = { slideleft: [W, 0, mW, 0], slideright: [mW, 0, W, 0], slideup: [0, H, 0, mH], slidedown: [0, mH, 0, H] };
+  const when = (name, commands) => ({ type: "Sequential", when: "${mmTr == '" + name + "'}", commands });
+  const out = Object.entries(slides).map(([name, [dx, dy, ox, oy]]) => when(name, [
+    place(x, T(dx, dy), 1),
+    { type: "Parallel", commands: [
+      anim(x, SWAP_MS, EASE, T(dx, dy), T()),
+      anim(y, SWAP_MS, EASE, T(), T(ox, oy)),
+    ] },
+  ]));
+  // the pages' card flip: squash the old photo, expand the new one
+  out.push(when("flip", [
+    anim(y, SWAP_MS / 2, "ease-in", T(), SQUASHED),
+    place(x, SQUASHED, 1),
+    anim(x, SWAP_MS / 2, "ease-out", SQUASHED, T()),
+  ]));
   // fade and unknown names: the top photo fades in over the old one, or
   // fades out to reveal the new one beneath it
-  return xOnTop
-    ? [place(x, T(), 0), anim(x, SWAP_MS, EASE, null, null, 0, 1)]
-    : [place(x, T(), 1), anim(y, SWAP_MS, EASE, null, null, 1, 0)];
+  const known = Object.keys(slides).concat("flip");
+  out.push({
+    type: "Sequential", when: "${" + known.map((k) => "mmTr != '" + k + "'").join(" && ") + "}",
+    commands: xOnTop
+      ? [place(x, T(), 0), anim(x, SWAP_MS, EASE, null, null, 0, 1)]
+      : [place(x, T(), 1), anim(y, SWAP_MS, EASE, null, null, 1, 0)],
+  });
+  return out;
 }
 
 /** APL components for one `slideshow` or `background` overlay. */
@@ -173,15 +182,34 @@ function build(cfg, ctx) {
   const key = resumeKey(cfg, ctx.pageIndex, p);
   const last = ctx.resume && ctx.resume.get(key);
   const start = ph.cycles && Number.isInteger(last) ? (last + 1) % ph.urls.length : 0;
-  const ids = { box: p + "ss", A: p + "ssA", B: p + "ssB" };
-  const { r, urls } = ph;
-  const crop = cfg.cropToFill === true;
+  const { r, urls, cycles } = ph;
   const { pre, mids, suf } = affixes(urls);
   const s = Number(cfg.intervalSeconds);
   const intervalMs = Math.max(MIN_INTERVAL_S, Number.isFinite(s) && s > 0 ? s : DEFAULT_INTERVAL_S) * 1000;
-  const transition = String(cfg.transition || "fade");
-  const full = { position: "absolute", left: 0, top: 0, width: r.w, height: r.h };
-  const set = (property, value, when) => ({ type: "SetValue", componentId: ids.box, property, value, when });
+  const brightness = typeof cfg.brightness === "number" ? cfg.brightness : 1;
+  const r2 = (v) => Math.round(v * 100) / 100;
+  return [{
+    type: "MmSlideshow", id: p + "ss",
+    position: "absolute", left: r2(r.x), top: r2(r.y), width: r2(r.w), height: r2(r.h),
+    mmId: p + "ss", mmKey: key, mmW: r2(r.w), mmH: r2(r.h),
+    // one photo sent as a pair: nothing to cycle (and re-setting an Image
+    // to the URL it already shows would never fire onLoad)
+    mmCyc: cycles, mmFirst: urls[start],
+    mmPre: pre, mmUrls: ctx.photoList ? ctx.photoList(mids) : mids, mmSuf: suf, mmN: urls.length, mmIdx: start,
+    mmMs: intervalMs, mmTr: String(cfg.transition || "fade"),
+    ...(cfg.cropToFill === true ? { mmCrop: true } : {}),
+    ...(cfg.pageColor ? { mmColor: cfg.pageColor } : {}),
+    ...(brightness < 1 ? { mmDim: 1 - Math.max(0, brightness) } : {}),
+  }];
+}
+
+/** The package's slideshow (apl-package.js). The state lives on the
+ * widget's container (mmSs*, above), the photo on show on its Images
+ * <mmId>A and <mmId>B. */
+function layouts() {
+  const ids = { box: "${mmId}", A: "${mmId}A", B: "${mmId}B" };
+  const full = { position: "absolute", left: 0, top: 0, width: "100%", height: "100%" };
+  const set = (property, value) => ({ type: "SetValue", componentId: ids.box, property, value });
 
   // A shows the first photo from the start, like any Image - nothing waits
   // on onLoad to make a photo visible. The handlers only report (fast
@@ -189,8 +217,10 @@ function build(cfg, ctx) {
   // loads for the skill's log, to learn whether this Echo fires onLoad.
   const image = (x) => ({
     type: "Image", id: ids[x], ...full,
-    source: x === "A" ? urls[start] : "",
-    scale: crop ? "best-fill" : "best-fit",
+    // A's first photo is a fixed string: a source over mmSsIdx would
+    // follow the index before the photo is due
+    source: x === "A" ? "${mmFirst}" : "",
+    scale: "${mmCrop ? 'best-fill' : 'best-fit'}",
     opacity: x === "A" ? 1 : 0,
     onLoad: [set("mmSsLoaded", x), { type: "SetValue", componentId: "mmRoot", property: "mmDiagLoads", value: "${mmDiagLoads + 1}" }],
     onFail: [set("mmSsFailed", true)],
@@ -213,60 +243,58 @@ function build(cfg, ctx) {
       waitFor(x),
       // loaded, or the wait ran out: switch; only a reported failure skips
       { type: "Sequential", when: "${!mmSsFailed}", commands: [
-        ...swapCommands(transition, ids[x], ids[y], x === "B", r.w, r.h),
+        ...swapCommands(ids[x], ids[y], x === "B"),
         { type: "SetValue", componentId: ids[y], property: "opacity", value: 0 },
         set("mmSsFront", x),
       ] },
     ],
   });
-  const items = [];
-  // page color sits under the photos (the layered page render is
-  // transparent where they show through)
-  if (cfg.pageColor) items.push({ type: "Frame", ...full, backgroundColor: cfg.pageColor });
-  items.push(image("A"), image("B"));
-  // the portal dims with filter:brightness(n): black at 1-n on top
-  const brightness = typeof cfg.brightness === "number" ? cfg.brightness : 1;
-  if (brightness < 1) items.push({ type: "Frame", ...full, backgroundColor: "black", opacity: 1 - Math.max(0, brightness) });
-
-  // one photo sent as a pair: nothing to cycle (and re-setting an Image to
-  // the URL it already shows would never fire onLoad)
-  const cycles = new Set(urls).size > 1;
   const run = {
-    type: "Sequential", sequencer: "slideshow" + p,
-    commands: [
-      ...(cycles ? [{
-        type: "Sequential", repeatCount: 1000000,
-        commands: [
-          { type: "Idle", delay: intervalMs },
-          set("mmSsIdx", "${(mmSsIdx + 1) % mmSsN}"),
-          // remembered on the root, reported with every refresh (resumeKey)
-          { type: "SetValue", componentId: "mmRoot", property: key, value: "${mmSsIdx}" },
-          set("mmSsNext", "${mmSsFront == 'A' ? 'B' : 'A'}"),
-          // a photo that failed (or never showed) is simply passed over
-          advance("B", "A"),
-          advance("A", "B"),
-        ],
-      }] : []),
-    ],
+    type: "Sequential", sequencer: "slideshow${mmId}", when: "${mmCyc}",
+    commands: [{
+      type: "Sequential", repeatCount: 1000000,
+      commands: [
+        { type: "Idle", delay: "${mmMs}" },
+        set("mmSsIdx", "${(mmSsIdx + 1) % mmSsN}"),
+        // remembered on the root, reported with every refresh (resumeKey;
+        // the screen's MmSsKeep, apl.js)
+        { type: "MmSsKeep", mmK: "${mmKey}", mmI: "${mmSsIdx}" },
+        set("mmSsNext", "${mmSsFront == 'A' ? 'B' : 'A'}"),
+        // a photo that failed (or never showed) is simply passed over
+        advance("B", "A"),
+        advance("A", "B"),
+      ],
+    }],
   };
-
-  return [{
-    type: "Container", id: ids.box,
-    position: "absolute", left: r.x, top: r.y, width: r.w, height: r.h,
-    bind: [
-      { name: "mmSsPre", value: pre },
-      { name: "mmSsUrls", value: cycles ? mids : [] },
-      { name: "mmSsSuf", value: suf },
-      { name: "mmSsN", value: urls.length },
-      { name: "mmSsIdx", value: start },
-      { name: "mmSsFront", value: "A" },
-      { name: "mmSsLoaded", value: "" },
-      { name: "mmSsFailed", value: false },
-      { name: "mmSsNext", value: "" },
-    ],
-    onMount: [run],
-    items,
-  }];
+  return {
+    MmSlideshow: {
+      parameters: ["mmId", "mmKey", "mmW", "mmH", "mmCyc", "mmFirst", "mmPre", "mmUrls", "mmSuf", "mmN", "mmIdx", "mmMs", "mmTr",
+        { name: "mmCrop", default: false }, { name: "mmColor", default: "" }, { name: "mmDim", default: 0 }],
+      items: [{
+        type: "Container",
+        bind: [
+          { name: "mmSsPre", value: "${mmPre}" },
+          { name: "mmSsUrls", value: "${mmUrls}" },
+          { name: "mmSsSuf", value: "${mmSuf}" },
+          { name: "mmSsN", value: "${mmN}" },
+          { name: "mmSsIdx", value: "${mmIdx}" },
+          { name: "mmSsFront", value: "A" },
+          { name: "mmSsLoaded", value: "" },
+          { name: "mmSsFailed", value: false },
+          { name: "mmSsNext", value: "" },
+        ],
+        onMount: [run],
+        items: [
+          // page color sits under the photos (the layered page render is
+          // transparent where they show through)
+          { type: "Frame", when: "${mmColor != ''}", ...full, backgroundColor: "${mmColor}" },
+          image("A"), image("B"),
+          // the portal dims with filter:brightness(n): black at 1-n on top
+          { type: "Frame", when: "${mmDim > 0}", ...full, backgroundColor: "black", opacity: "${mmDim}" },
+        ],
+      }],
+    },
+  };
 }
 
-module.exports = { build, updateCommands, resumeKey, parseResume, sized, affixes, swapCommands };
+module.exports = { build, layouts, updateCommands, resumeKey, parseResume, sized, affixes, swapCommands };

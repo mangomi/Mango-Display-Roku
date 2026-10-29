@@ -55,19 +55,24 @@ test("checkboxes: drawn with the manifest's sprites, press ticks then tells the 
   assert.strictEqual(box.type, "MmBox");
   assert.deepStrictEqual([box.id, box.mmT0, box.mmTid, box.mmPg, box.mmCx, box.mmCy], ["mmBox0_501", false, "501", "0", "115", "215"]);
   assert.ok(JSON.stringify(box).length < 400, "a box instance stays small");
-  // the behaviour lives once, in the layout
-  const tw = touch.layouts(["refresh", "3", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}", "${mmLayout}", "${mmPageUrls}", "${mmCur}"], "1", "822").MmBox.items[0];
+  // the behaviour lives once, in the package's layout
+  const tw = touch.layouts().MmBox.items[0];
   assert.strictEqual(tw.type, "TouchWrapper");
   assert.deepStrictEqual(tw.bind, [{ name: "mmTicked", value: "${mmT0}" }]);
   assert.strictEqual(tw.item.items[0].source, "${mmTicked ? mmBoxC : mmBoxE}");
-  const [tick, hold, send, fast, dwell] = tw.onPress;
+  const [tick, after, hold, send, fast, dwell] = tw.onPress;
   assert.deepStrictEqual([tick.property, tick.value], ["mmTicked", "${!mmTicked}"]);
+  assert.strictEqual(after.type, "MmAfterTick");
   assert.strictEqual(hold.componentId, touch.ROOT_ID);
   assert.match(hold.value, /mmTid \+ ':' \+ \(mmTicked \? 1 : 0\)/);
-  // ver + the presses ride along so the reply can be the result screen
-  assert.deepStrictEqual(send.arguments.slice(0, 10), ["touch", "tap", "${mmPg}", "${mmCx}", "${mmCy}", "${mmTid}", "1", "822", "3", "${overrides}"]);
-  assert.strictEqual(fast.sequencer, "fastcheck");
+  assert.deepStrictEqual([send.type, send.mmK, send.mmP, send.mmX, send.mmY, send.mmT], ["MmTell", "tap", "${mmPg}", "${mmCx}", "${mmCy}", "${mmTid}"]);
+  assert.strictEqual(fast.type, "MmFastCheck");
   assert.strictEqual(dwell.type, "MmRestartDwell");
+  // the screen's MmTell: ver + the presses ride along so the reply can be
+  // the result screen
+  const tell = touch.screenCommands(["refresh", "3", "1", "822", "${overrides}"], "1", "822").MmTell.commands[0];
+  assert.deepStrictEqual(tell.arguments.slice(0, 10), ["touch", "${mmK}", "${mmP}", "${mmX}", "${mmY}", "${mmT}", "1", "822", "3", "${overrides}"]);
+  assert.strictEqual(touch.commandDefinitions().MmFastCheck.commands[0].sequencer, "fastcheck");
 });
 test("calendar swipes only when the user allows calendar scrolling; read by the page layer", () => {
   assert.strictEqual(touch.touchComponents(ctx({ calendarScroll: false })).length, 1);
@@ -92,8 +97,8 @@ test("calendar swipes only when the user allows calendar scrolling; read by the 
   assert.match(gate.when, /mmSwipeAt == 0 \|\| utcTime - mmSwipeAt > 8000/);
   assert.strictEqual(gate.commands[0].componentId, touch.ROOT_ID);
   const up = gate.commands.find((c) => /'swipeup'/.test(c.when || ""));
-  const ev = up.commands.find((c) => c.type === "SendEvent");
-  assert.deepStrictEqual(ev.arguments.slice(0, 6), ["touch", "swipeup", "0", "700", "500", "31"]);
+  const ev = up.commands.find((c) => c.type === "MmTell");
+  assert.deepStrictEqual([ev.mmK, ev.mmP, ev.mmX, ev.mmY, ev.mmT], ["swipeup", "0", "700", "500", "31"]);
 });
 
 test("one page layer reads both swipes: sideways turns the page, up/down on the calendar scrolls it", () => {
@@ -128,12 +133,12 @@ test("display screen carries the touch layer and the held presses", () => {
   assert.strictEqual(layer.filter((i) => i.type === "TouchWrapper").length, 0); // the calendar is read by the layer
   const boxes = layer.find((i) => i.bind && i.bind[0].name === "mmBoxE").items;
   assert.strictEqual(boxes.length, 2);
-  assert.ok(d.document.layouts.MmBox, "the checkbox is defined once on the screen");
+  assert.ok(require("../apl-package").contents().layouts.MmBox && d.document.import, "the checkbox is defined once, in the package");
   assert.deepStrictEqual(root.onMount[0].commands[1].arguments,
     ["refresh", "${mmVer}", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}", "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}", ""]);
   assert.strictEqual(root.bind.find((b) => b.name === "mmVer").value, "3");
   assert.strictEqual(boxes.find((b) => b.id === "mmBox0_501").mmT0, true); // the held press
-  const tap = d.document.layouts.MmBox.items[0].onPress.find((c) => c.type === "SendEvent");
+  const tap = d.document.commands.MmTell.commands[0];
   assert.deepStrictEqual(tap.arguments.slice(8), ["${mmVer}", "${overrides}", "${mmLayout}", "${mmPageUrls}", "${mmCur}", ""]);
 });
 
@@ -161,13 +166,14 @@ test("no bound variable or SetValue target shadows a built-in component property
 test("swipe: the Roku spinner centred on the calendar at once, cleared after 15s if no redraw", () => {
   const cal = touch.touchComponents(ctx({ calendarScroll: true }))[0];
   const sp = cal.items[0];
-  assert.match(sp.source, /^data:image\/png;base64,/);
+  assert.strictEqual(sp.type, "MmSpinner"); // the art is the package's (spinner.js)
+  assert.match(require("../apl-package").contents().resources[0].strings.mmSpinnerPng, /^data:image\/png;base64,/);
   assert.strictEqual(sp.opacity, "${mmSwiping == '31' ? 1 : 0}");
   assert.strictEqual(sp.left + sp.width / 2, 600 / 2); // centre of the 600-wide region
   const g = touch.calendarGestures(ctx({ calendarScroll: true }));
   const send = g.onPress[0].commands.find((c) => /'swipeup'/.test(c.when || "")).commands;
   assert.deepStrictEqual([send[0].componentId, send[0].property, send[0].value], [touch.ROOT_ID, "mmSwiping", "31"]);
-  assert.ok(send.findIndex((c) => c.type === "SendEvent") > 0); // spinner before the round trip
+  assert.ok(send.findIndex((c) => c.type === "MmTell") > 0); // spinner before the round trip
   const hide = send.find((c) => c.sequencer === "busyhide");
   assert.strictEqual(hide.commands[0].delay, 15000);
 });

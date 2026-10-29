@@ -63,6 +63,8 @@ per-GB processing.
 | 33 | Environment tags | `Environment=test` / `Environment=prod` on services, task definitions, target groups and tables | free |
 | 34 | 2026-10-28: `ET` added to `NATIVE_SCROLL_PREFIXES` (capture.js) so the Echo Show gets `scroll` strips for overflowing lists and month cells instead of filmed sheets (test only; the Echo skill's overlay-scroll.js plays them). Prod unchanged. | free |
 | 35 | 2026-10-28: `ET` added to `NATIVE_WEATHER_PREFIXES` (capture.js): the Echo Show gets decomposable weather icons as `motion` overlays instead of filmed sheets (test only; the Echo skill's overlay-motion.js plays them). Prod unchanged. | free |
+| 36 | 2026-10-29: CloudFront `ERYTMHZUWUXMT` default behaviour got the managed response-headers policy `Managed-SimpleCORS` (60669652-455b-4ae9-85a4-c4c02393f86c): every object is served with `Access-Control-Allow-Origin: *`, needed by the Echo Show's APL package import. ONE distribution serves test and prod, so this applies to `prod/` too; Roku/tvOS ignore the header. Dave approved 2026-10-29. | free |
+| 37 | 2026-10-29: S3 `mango-echo-assets` (us-east-1, private, AES256, tags Project=echo show app) is a SECOND origin (`mango-echo-assets-s3`, same OAC `E2VP9FNAB45830`) on CloudFront `ERYTMHZUWUXMT`; cache behaviour `*/echo/*` → that bucket with Managed-CachingOptimized + Managed-SimpleCORS. Holds the Echo Show APL packages at `<root>/echo/apl/mango-<version>.json` (test/ and prod/), NO lifecycle rule — old versions stay. Written by the Echo deploy (AWS CLI), never by the render service. Roku/tvOS never request `*/echo/*`. Dave approved 2026-10-29. | pennies |
 
 **Live at** `https://roku-control.mangodisplay.com`
 — the only address compiled into the channel, and it survives an ALB

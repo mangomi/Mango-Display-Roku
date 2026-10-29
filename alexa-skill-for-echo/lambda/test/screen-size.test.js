@@ -12,7 +12,7 @@ const strip = (n) => ({
   segments: [{ file: "s0.png", h: 2048 }, { file: "s1.png", h: 2048 }], stripW: 400, stripH: 4096,
   fromY: 300, toY: -4096, durationMs: 240000, loop: true,
   sprites: { empty: "e.png", checked: "c.png" },
-  boxes: Array.from({ length: n }, (_, i) => ({ x: 10, y: 10 + i * 8, w: 24, h: 24, checked: i % 2 === 0, payload: { id: 5000 + i } })),
+  boxes: Array.from({ length: n }, (_, i) => ({ x: 10, y: 10 + i * 3, w: 24, h: 24, checked: i % 2 === 0, payload: { id: 5000 + i } })),
 });
 const display = (boxes, extra = {}) => ({
   assetBase: "https://a/", version: 9,
@@ -41,14 +41,14 @@ test("a screen under the cap is sent as it is", () => {
 });
 
 test("a long scrolling list over the cap: ticks drawn, not pressable, and it fits", () => {
-  const fit = apl.fittedScreen(vp, display(500), paired, "", false, 0, "");
+  const fit = apl.fittedScreen(vp, display(1200), paired, "", false, 0, "");
   assert.ok(fit.fullBytes > apl.MAX_SCREEN_BYTES, "full screen is " + fit.fullBytes);
   assert.strictEqual(fit.level, apl.LITE.STATIC_STRIP_BOXES);
   assert.ok(fit.bytes <= apl.MAX_SCREEN_BYTES, "sent " + fit.bytes);
   assert.strictEqual(count(fit.directive, (n) => n.type === "MmSBox"), 0);
   // every tick still drawn, with its state
-  assert.strictEqual(count(fit.directive, (n) => n.source === "${mmSChecked}"), 250);
-  assert.strictEqual(count(fit.directive, (n) => n.source === "${mmSEmpty}"), 250);
+  assert.strictEqual(count(fit.directive, (n) => n.type === "MmSTick" && n.mmT0 === true), 600);
+  assert.strictEqual(count(fit.directive, (n) => n.type === "MmSTick" && n.mmT0 === undefined), 600);
   // the strip still scrolls
   assert.ok(count(fit.directive, (n) => n.type === "AnimateItem" && n.repeatCount === 1000000) >= 1);
 });

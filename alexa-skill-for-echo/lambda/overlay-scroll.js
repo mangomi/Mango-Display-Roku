@@ -134,37 +134,46 @@ function build(cfg, ctx) {
   }
 
   // checkboxes ride the strip, at their strip position. Each is an
-  // instance of the MmSBox layout (layouts() below): only its place and
-  // identity travel per box (~250 bytes instead of ~1.35 KB). Dave's
-  // chores + to-do strips carry 113 boxes, and written out in full they
-  // made a 245 KB screen the Echo never took (2026-10-28).
+  // instance of the MmSBox layout (layouts() below) carrying only its
+  // identity, its centre on the canvas and when it is in the window; the
+  // rest (its box in dp, its list) the layout works out from the strip's
+  // binds, and a box's own size or list travel only when they differ from
+  // the strip's. Dave's chores + to-do strips carry 113 boxes: written out
+  // in full they made a 245 KB screen the Echo never took, and at ~220
+  // bytes a box the screen still went over the cap as tasks were added
+  // (2026-10-28). Now ~120 bytes a box.
   const sprites = cfg.sprites;
   const boxes = Array.isArray(cfg.boxes) ? cfg.boxes : [];
   const hasBoxes = !!(sprites && sprites.empty && sprites.checked && boxes.length);
+  const usual = (vals) => {
+    const n = new Map();
+    vals.forEach((v) => n.set(v, (n.get(v) || 0) + 1));
+    return [...n.entries()].sort((x, y) => y[1] - x[1])[0][0];
+  };
+  const shown = hasBoxes ? pressable(cfg) : [];
+  const lists = shown.map(({ box: b }) => (ctx.listIndex ? ctx.listIndex(b) : -1));
+  const bw = shown.length ? usual(shown.map(({ box: b }) => b.w)) : 0;
+  const bh = shown.length ? usual(shown.map(({ box: b }) => b.h)) : 0;
+  const bl = shown.length ? usual(lists) : -1;
   if (hasBoxes) {
     // the presses the screen still holds apply here as to page targets
     const { states } = applyOverrides({ targets: { items: boxes } }, ctx.overrides);
-    const pad = PAD * s;
-    pressable(cfg).forEach(({ box: b, index: i, span }) => {
+    shown.forEach(({ box: b, index: i, span }, k) => {
       // a screen over the size cap (apl.js LITE): the tick is drawn, at
       // about half the bytes, but cannot be pressed while it scrolls
-      if (ctx.lite >= 1) {
-        items.push({
-          type: "Image", position: "absolute", left: r2(b.x * s), top: r2(b.y * s), width: r2(b.w * s), height: r2(b.h * s),
-          source: states[i] === true ? "${mmSChecked}" : "${mmSEmpty}", scale: "fill",
-        });
-        return;
-      }
-      items.push({
-        type: "MmSBox",
-        id: boxId(idPrefix, i),
-        position: "absolute",
-        left: r2(b.x * s - pad), top: r2(b.y * s - pad), width: r2(b.w * s + pad * 2), height: r2(b.h * s + pad * 2),
-        mmT0: states[i] === true, mmTid: targetId(b) || "", mmA: span[0], mmZ: span[1],
+      const where = {
+        ...(states[i] === true ? { mmT0: true } : {}),
         // the box centre on the canvas: x fixed, y at the strip's start
-        mmX: String(Math.round(cfg.rect.x + b.x + b.w / 2)), mmY: r2(cfg.rect.y + m.fromY + b.y + b.h / 2),
-        mmL: ctx.listIndex ? ctx.listIndex(b) : -1, mmBx: r2(win.x + (b.x + b.w / 2) * s),
-        mmW: r2(b.w * s), mmH: r2(b.h * s),
+        mmX: r2(cfg.rect.x + b.x + b.w / 2), mmY: r2(cfg.rect.y + m.fromY + b.y + b.h / 2),
+        ...(b.w !== bw ? { mmW: r2(b.w * s) } : {}),
+        ...(b.h !== bh ? { mmH: r2(b.h * s) } : {}),
+      };
+      // a screen over the size cap (apl.js LITE): the tick is drawn, in
+      // fewer bytes, but cannot be pressed while it scrolls
+      if (ctx.lite >= 1) return items.push({ type: "MmSTick", ...where });
+      items.push({
+        type: "MmSBox", id: boxId(idPrefix, i), mmTid: targetId(b) || "", mmA: span[0], mmZ: span[1], ...where,
+        ...(lists[k] !== bl ? { mmL: lists[k] } : {}),
       });
     });
   }
@@ -184,7 +193,11 @@ function build(cfg, ctx) {
       { name: "mmSMs", value: m.ms }, { name: "mmSLp", value: m.loop },
       { name: "mmSPer", value: Number(((m.toY - m.fromY) / m.ms).toPrecision(6)) }, // canvas px a ms
       { name: "mmSPg", value: String(pageIndex) }, { name: "mmSPad", value: r2(PAD * s) },
-      { name: "mmSOy", value: r2(place.oy) }, { name: "mmSSc", value: r2(place.scale) },
+      // canvas -> dp (place), and where a box's centre sits in the strip
+      { name: "mmSS", value: place.scale }, { name: "mmSOx", value: r2(place.ox) }, { name: "mmSOy", value: r2(place.oy) },
+      { name: "mmSRx", value: r2(cfg.rect.x) }, { name: "mmSRy", value: r2(cfg.rect.y + m.fromY) },
+      // the usual box size (dp) and list, for boxes that do not say
+      { name: "mmSBw", value: r2(bw * s) }, { name: "mmSBh", value: r2(bh * s) }, { name: "mmSL", value: bl },
     ] : []),
     onMount: [{
       type: "Sequential",
@@ -221,17 +234,39 @@ const CY = "Math.round(mmY + mmSPer * " + PHASE + ")";
  * touch.js's checkbox press; ignored while the row is outside the window
  * (mmA..mmZ, visibleSpan); the tap's y is where the box is NOW. */
 function layouts(refreshArgs, major, minor, celebrate) {
+  const size = [{ name: "mmT0", default: false }, { name: "mmW", default: -1 }, { name: "mmH", default: -1 }];
   return {
+    // the not-pressable tick of a screen over the size cap
+    MmSTick: {
+      parameters: ["mmX", "mmY"].concat(size),
+      items: [{
+        type: "Image",
+        bind: [{ name: "mmBw", value: "${mmW < 0 ? mmSBw : mmW}" }, { name: "mmBh", value: "${mmH < 0 ? mmSBh : mmH}" }],
+        position: "absolute",
+        left: "${(mmX - mmSRx) * mmSS - mmBw / 2}", top: "${(mmY - mmSRy) * mmSS - mmBh / 2}", width: "${mmBw}", height: "${mmBh}",
+        source: "${mmT0 ? mmSChecked : mmSEmpty}", scale: "fill",
+      }],
+    },
     MmSBox: {
-      parameters: ["mmT0", "mmTid", "mmA", "mmZ", "mmX", "mmY", "mmL", "mmBx", "mmW", "mmH"],
+      parameters: ["mmTid", "mmA", "mmZ", "mmX", "mmY"].concat(size, [{ name: "mmL", default: -9 }]),
       items: [{
         type: "TouchWrapper",
-        // mmTicked, never "checked" (touch.js)
-        bind: [{ name: "mmTicked", value: "${mmT0}" }],
+        // mmTicked, never "checked" (touch.js); mmBw/mmBh the box in dp,
+        // mmLi its list - the strip's unless the box says
+        bind: [
+          { name: "mmTicked", value: "${mmT0}" },
+          { name: "mmBw", value: "${mmW < 0 ? mmSBw : mmW}" },
+          { name: "mmBh", value: "${mmH < 0 ? mmSBh : mmH}" },
+          { name: "mmLi", value: "${mmL == -9 ? mmSL : mmL}" },
+        ],
+        // the box and a finger's room around it, at its strip position
+        position: "absolute",
+        left: "${(mmX - mmSRx) * mmSS - mmBw / 2 - mmSPad}", top: "${(mmY - mmSRy) * mmSS - mmBh / 2 - mmSPad}",
+        width: "${mmBw + 2 * mmSPad}", height: "${mmBh + 2 * mmSPad}",
         item: {
           type: "Container", width: "100%", height: "100%",
           items: [{
-            type: "Image", position: "absolute", left: "${mmSPad}", top: "${mmSPad}", width: "${mmW}", height: "${mmH}",
+            type: "Image", position: "absolute", left: "${mmSPad}", top: "${mmSPad}", width: "${mmBw}", height: "${mmBh}",
             source: "${mmTicked ? mmSChecked : mmSEmpty}", scale: "fill",
           }],
         },
@@ -242,16 +277,16 @@ function layouts(refreshArgs, major, minor, celebrate) {
             // tick now, ask later
             { type: "SetValue", property: "mmTicked", value: "${!mmTicked}" },
             // the celebration, as for a page box: the document's
-            // MmStripDone (apl.js), at where the box is now
+            // MmStripDone (apl.js), at where the box is now (dp)
             ...(celebrate ? [{
-              type: "MmStripDone", mmL: "${mmL}", mmTicked: "${mmTicked}", mmBx: "${mmBx}",
-              mmBy: "${mmSOy + mmSSc * (mmY + mmSPer * " + PHASE + ")}",
+              type: "MmStripDone", mmL: "${mmLi}", mmTicked: "${mmTicked}", mmBx: "${mmSOx + mmSS * mmX}",
+              mmBy: "${mmSOy + mmSS * (mmY + mmSPer * " + PHASE + ")}",
             }] : []),
             {
               type: "SetValue", componentId: ROOT_ID, property: "overrides", when: "${mmTid != ''}",
               value: "${overrides + mmTid + ':' + (mmTicked ? 1 : 0) + ':' + utcTime + ','}",
             },
-            { type: "SendEvent", arguments: ["touch", "tap", "${mmSPg}", "${mmX}", "${" + CY + "}", "${mmTid}", major, minor,
+            { type: "SendEvent", arguments: ["touch", "tap", "${mmSPg}", "${Math.round(mmX)}", "${" + CY + "}", "${mmTid}", major, minor,
               refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8], refreshArgs[10]] },
             fastCheck(refreshArgs),
             { type: "MmRestartDwell" },

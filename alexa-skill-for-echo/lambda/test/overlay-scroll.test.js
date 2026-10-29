@@ -73,21 +73,31 @@ test("Roku defaults: fromY 0, toY -stripH, 10s, strip size from the segments", (
 const LAYOUT = layouts(refreshArgs, "1", "822", false).MmSBox.items[0];
 const stripOf = (c) => c[0].items[0];
 const sboxes = (c) => stripOf(c).items.filter((x) => x.type === "MmSBox");
-// what a press expression sees: the strip's binds, the box's parameters
-const scope = (s, b, ms) => ({
-  ...Object.fromEntries(s.bind.map((v) => [v.name, v.value])), ...b,
-  mmScrollT0: 1000, elapsedTime: 1000 + ms, Math,
-});
+// what an expression inside a box sees: the strip's binds, the box's
+// parameters (with the layout's defaults), then the layout's own binds
+const MS = layouts(refreshArgs, "1", "822", false).MmSBox;
+const scope = (s, b, ms) => {
+  const v = { ...Object.fromEntries(s.bind.map((x) => [x.name, x.value])), mmScrollT0: 1000, elapsedTime: 1000 + ms, Math };
+  for (const p of MS.parameters) if (typeof p === "object") v[p.name] = p.default;
+  Object.assign(v, b);
+  for (const x of LAYOUT.bind) v[x.name] = evalExpr(x.value, v);
+  return v;
+};
+const geom = (s, b) => ["left", "top", "width", "height"].map((k) => Math.round(evalExpr(LAYOUT[k], scope(s, b, 0)) * 100) / 100);
 
 test("boxes ride the strip and press like touch.js's checkboxes", () => {
-  const boxes = sboxes(build(strip(), ctx()));
+  const c = build(strip(), ctx());
+  const boxes = sboxes(c);
   assert.strictEqual(boxes.length, 2);
   const [b] = boxes;
   const pad = 8; // 16 canvas px
-  assert.deepStrictEqual([b.left, b.top, b.width, b.height], [5 - pad, 20 - pad, 15 + 2 * pad, 15 + 2 * pad]);
-  assert.deepStrictEqual([b.mmT0, boxes[1].mmT0, b.mmTid, b.mmX, b.mmW], [false, true, "501", "125", 15]);
+  assert.deepStrictEqual(geom(stripOf(c), b), [5 - pad, 20 - pad, 15 + 2 * pad, 15 + 2 * pad]);
+  assert.deepStrictEqual([b.mmT0, boxes[1].mmT0, b.mmTid, b.mmX], [undefined, true, "501", 125]);
+  // a box only carries what differs from the strip's usual box
+  assert.ok(!("mmW" in b) && !("mmH" in b) && !("mmL" in b));
+  assert.ok(JSON.stringify(b).length < 130, JSON.stringify(b));
   // the behaviour lives once, in the layout
-  assert.deepStrictEqual(LAYOUT.bind, [{ name: "mmTicked", value: "${mmT0}" }]);
+  assert.deepStrictEqual(LAYOUT.bind[0], { name: "mmTicked", value: "${mmT0}" });
   assert.strictEqual(LAYOUT.item.items[0].source, "${mmTicked ? mmSChecked : mmSEmpty}");
   const [gate] = LAYOUT.onPress;
   const [tick, hold, send, fast, dwell] = gate.commands;
@@ -96,7 +106,7 @@ test("boxes ride the strip and press like touch.js's checkboxes", () => {
   assert.match(hold.value, /mmTid \+ ':' \+ \(mmTicked \? 1 : 0\)/);
   // touch.js's argument layout: kind, page, x, y, id, major, minor, ver, presses, layout, urls, page shown
   assert.deepStrictEqual(send.arguments.filter((_, i) => i !== 4),
-    ["touch", "tap", "${mmSPg}", "${mmX}", "${mmTid}", "1", "822", "${mmVer}", "${overrides}", "${mmLayout}", "${mmPageUrls}", "${mmCur}", undefined]);
+    ["touch", "tap", "${mmSPg}", "${Math.round(mmX)}", "${mmTid}", "1", "822", "${mmVer}", "${overrides}", "${mmLayout}", "${mmPageUrls}", "${mmCur}", undefined]);
   assert.strictEqual(fast.sequencer, "fastcheck");
   assert.strictEqual(dwell.type, "MmRestartDwell");
   // nothing is sent from a fast-mode handler
@@ -129,7 +139,7 @@ test("a celebrating strip box calls MmStripDone at the box's place now (dp)", ()
   const cel = layouts(refreshArgs, "1", "822", true).MmSBox.items[0].onPress[0].commands.find((c) => c.type === "MmStripDone");
   const s = stripOf(build(strip(), { ...ctx(), listIndex: () => 3 }));
   const b = sboxes([{ items: [s] }])[0];
-  assert.strictEqual(b.mmL, 3);
+  assert.strictEqual(scope(s, b, 0).mmLi, 3);
   // canvas 555 at the start -> dp at scale 0.5
   assert.strictEqual(evalExpr(cel.mmBy, scope(s, b, 0)), 0 + 0.5 * 555);
   assert.ok(!layouts(refreshArgs, "1", "822", false).MmSBox.items[0].onPress[0].commands.some((c) => c.type === "MmStripDone"));
@@ -139,7 +149,7 @@ test("held presses tick strip boxes too; no sprites, no boxes", () => {
   const now = Date.now();
   const boxes = (c, extra) => sboxes(build(strip(extra), c));
   const held = boxes(ctx("501:1:" + now + ",502:0:" + now + ","));
-  assert.deepStrictEqual(held.map((b) => b.mmT0), [true, false]);
+  assert.deepStrictEqual(held.map((b) => b.mmT0 === true), [true, false]);
   assert.strictEqual(boxes(ctx(), { sprites: null }).length, 0);
 });
 
@@ -161,5 +171,18 @@ test("ids unique and from the overlay's prefix; sequencers prefixed", () => {
 test("size: a box is a few hundred bytes (Dave's 113 strip boxes made a 245 KB screen)", () => {
   const boxes = Array.from({ length: 40 }, (_, i) => ({ x: 10, y: 40 + i * 60, w: 30, h: 30, checked: i % 3 === 0, kind: "todo", widgetSettingId: 7, payload: { id: 1000 + i, projectId: 9 } }));
   const bytes = JSON.stringify(build(strip({ boxes }), ctx())).length;
-  assert.ok(bytes < 40 * 320, "40 boxes are " + bytes + " bytes");
+  assert.ok(bytes < 40 * 150, "40 boxes are " + bytes + " bytes");
+});
+
+test("a box of another size or list says so, and is drawn at its own size", () => {
+  const odd = strip();
+  odd.boxes = odd.boxes.concat([{ x: 10, y: 80, w: 20, h: 30, checked: false, payload: { id: 503 } }, { x: 10, y: 120, w: 30, h: 30, checked: false, payload: { id: 504 } }]);
+  const c = build(odd, { ...ctx(), listIndex: (b) => (b.payload.id === 504 ? 7 : 2) });
+  const bs = sboxes(c);
+  const s = stripOf(c);
+  const o = bs.find((b) => b.mmTid === "503");
+  assert.strictEqual(o.mmW, 10);
+  assert.deepStrictEqual(geom(s, o), [5 - 8, 40 - 8, 10 + 16, 15 + 16]);
+  assert.strictEqual(scope(s, bs.find((b) => b.mmTid === "504"), 0).mmLi, 7);
+  assert.strictEqual(scope(s, o, 0).mmLi, 2);
 });

@@ -135,7 +135,8 @@ test("display screen carries the touch layer and the held presses", () => {
   assert.strictEqual(boxes.length, 2);
   assert.ok(require("../apl-package").contents().layouts.MmBox && d.document.import, "the checkbox is defined once, in the package");
   assert.deepStrictEqual(root.onMount[0].commands[1].arguments,
-    ["refresh", "${mmVer}", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}", "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}", ""]);
+    ["refresh", "${mmVer}", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}", "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}", "",
+      require("../apl-package").screenCode()]);
   assert.strictEqual(root.bind.find((b) => b.name === "mmVer").value, "3");
   assert.strictEqual(boxes.find((b) => b.id === "mmBox0_501").mmT0, true); // the held press
   const tap = d.document.commands.MmTell.commands[0];

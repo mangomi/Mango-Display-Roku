@@ -48,3 +48,22 @@ test("a 404 while the fleet hands the display over is not a reset: the screen st
   const res = await handler(envelope(["refresh", "284", "1", "822", "", "0", "abc", "", "0", "0"]));
   assert.ok(!res.response.directives || res.response.directives.length === 0);
 });
+
+test("a deploy with new screen code rebuilds the screen at the next heartbeat; the same code does not", async (t) => {
+  const real = global.fetch;
+  t.after(() => { global.fetch = real; });
+  const manifest = { canvas: { width: 1080, height: 1920 }, pages: [{ image: "p0.png", overlays: [] }] };
+  global.fetch = async (url) => /\/version\?/.test(url)
+    ? { status: 200, text: async () => '{"version":284,"busy":false}' }
+    : { status: 200, text: async () => JSON.stringify({ version: 284, assetBase: "https://a/", manifest }) };
+  const code = require("../apl-package").screenCode();
+  const beat = (c) => handler(envelope(["refresh", "284", "1", "822", "", "0", "abc", "", "0", "0", ""].concat(c === undefined ? [] : [c])));
+  // an older screen, or one from before screens reported their code
+  for (const old of ["0123456789ab", undefined]) {
+    const d = (await beat(old)).response.directives[0];
+    assert.strictEqual(d.type, "Alexa.Presentation.APL.RenderDocument", String(old));
+    assert.deepStrictEqual(d.document.import.map((i) => i.version), [code]);
+  }
+  const same = (await beat(code)).response;
+  assert.ok(!same.directives || same.directives.length === 0);
+});

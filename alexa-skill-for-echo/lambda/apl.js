@@ -201,7 +201,7 @@ function displayView(vp, display) {
     vp: [vp.w, vp.h], canvas, gestures: manifest.gestures || null, assetBase, effects: manifest.effects || [],
     // new screen code (a new package) is a new screen, so a deploy reaches
     // every Echo at its next refresh instead of waiting for an edit
-    code: aplPackage.enabled() ? aplPackage.version() : "inline",
+    code: aplPackage.screenCode(),
     night: manifest.night === true,
     pages: pages.map((page) => {
       const t = page && page.targets;
@@ -292,7 +292,7 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume, li
   // presses, busy, layout fingerprint, page images, page on screen (all
   // bound on the root, so an in-place update keeps them current)
   const refreshArgs = ["refresh", "${mmVer}", paired.major, paired.minor, "${overrides}", "${mmBusy ? 1 : 0}",
-    "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}", ssArg];
+    "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}", ssArg, aplPackage.screenCode()];
   let pending = overrides;
   const L = listsOf(pages, overrides);
   // each distinct photo list once, on the root (pages sharing a

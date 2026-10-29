@@ -10,9 +10,10 @@
 //                                 straight to its page
 //   ["pair"]                   -> every 5s on the pairing screen
 //   ["loading", "", maj, min]  -> every 5s on "Connected": first page yet?
-//   ["refresh", ver, maj, min, overrides, busyShown, layout, pageUrls, page, photoLoads, slideshows]
+//   ["refresh", ver, maj, min, overrides, busyShown, layout, pageUrls, page, photoLoads, slideshows, screen code]
 //                              -> every 10s on the display (1.5s after a
 //                                 touch): version moved? busy changed?
+//                                 new screen code (apl-package.js)?
 //   ["touch", kind, page, x, y, id, maj, min, ver, overrides, layout, pageUrls, current, slideshows]
 //                              -> a checkbox press or calendar swipe
 //                                 (touch.js): forward to /interact and
@@ -28,6 +29,7 @@ const env = require("./env");
 const identity = require("./identity");
 const backend = require("./backend");
 const apl = require("./apl");
+const aplPackage = require("./apl-package");
 
 function respond({ directives = [], speech, end } = {}) {
   const response = { directives };
@@ -136,6 +138,13 @@ async function onUserEvent(envelope) {
       return respond({ directives: [apl.pairingScreen(e.vp, e.code, false)] });
     }
     if (String(v.version) !== ver) return showDisplay(e, ver, false, true, overrides, shown);
+    // the screen runs older screen code than this deploy (or predates the
+    // report): a whole new screen, so the Echo loads the new package
+    if (args[11] !== aplPackage.screenCode()) {
+      console.log("[Mango] " + e.code + " screen code " + (args[11] || "none") + " -> " + aplPackage.screenCode());
+      // no `held`: the version is the same, and the screen must still go
+      return showDisplay(e, null, false, true, overrides, shown);
+    }
     // same pictures, but the service started/finished applying an edit:
     // flip the spinner without a redraw (the Roku's onBusyChange)
     if ((v.busy ? "1" : "0") !== busyShown && busyShown !== undefined) {

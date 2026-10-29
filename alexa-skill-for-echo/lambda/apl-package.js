@@ -53,7 +53,12 @@ const version = () => built().version;
 const fileName = () => NAME + "-" + version() + ".json";
 const url = () => env.aplPackageBase + fileName();
 
+/** What a screen built now runs: the package version, or "inline". The
+ * screen reports it with every refresh; a deploy that changes it gets the
+ * Echo a whole new screen (index.js). */
+const screenCode = () => (enabled() ? version() : "inline");
+
 /** The screen's import entry. */
 const importEntry = () => ({ name: NAME, version: version(), source: url() });
 
-module.exports = { contents, enabled, version, fileName, url, importEntry, json: () => built().json, APL_VERSION, NAME };
+module.exports = { contents, enabled, version, screenCode, fileName, url, importEntry, json: () => built().json, APL_VERSION, NAME };

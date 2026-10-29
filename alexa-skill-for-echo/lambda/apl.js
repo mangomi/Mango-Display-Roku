@@ -25,6 +25,7 @@ const effects = require("./effects");
 const scroll = require("./overlay-scroll");
 const slideshow = require("./overlay-slideshow");
 const celebrations = require("./celebrations");
+const aplPackage = require("./apl-package");
 
 /** The confetti a box press runs after its tick: its list's open count
  * moves, then a burst on the box - or the finale when that emptied the
@@ -55,7 +56,7 @@ const crypto = require("crypto");
 const PAGE_ID = "mmPage";
 const PREV_ID = "mmPagePrev";
 
-const APL_VERSION = "2023.2";
+const APL_VERSION = aplPackage.APL_VERSION;
 const PAIR_TICK_MS = 5000;     // the TVs' pairing poll cadence
 // How long a backend change (calendar edit, layout) may take to show. The
 // TVs are told at once over a held /wait; the Echo has to ask.
@@ -136,6 +137,7 @@ function doc(items, tickMs, args, overrides = "", busy = false, opts = {}) {
       }],
     },
   };
+  if (opts.import) d.import = opts.import;
   if (opts.commands) d.commands = opts.commands;
   if (opts.layouts) d.layouts = opts.layouts;
   return d;
@@ -327,15 +329,17 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume, li
       { name: "mmDiagLoads", value: 0 },
     ].concat(ssKeys.map((k) => ({ name: k, value: ssWas.has(k) ? ssWas.get(k) : 0 })))
       .concat(pagesMod.rootBinds(pages, cur, manifest.gestures)).concat(L.binds),
+    // the fixed code comes from the package when it is on (apl-package.js)
+    import: aplPackage.enabled() ? [aplPackage.importEntry()] : undefined,
     commands: {
-      ...pagesMod.commandDefinitions(vp.w, vp.h), ...celebrations.commandDefinitions(),
+      ...(aplPackage.enabled() ? {} : pagesMod.commandDefinitions(vp.w, vp.h)), ...celebrations.commandDefinitions(),
       // a scroll-strip box's tick: the page box's celebration, defined once
       ...(celebrateAfterTick(L).length ? { MmStripDone: { parameters: ["mmL", "mmBx", "mmBy", "mmTicked"], commands: celebrateAfterTick(L) } } : {}),
     },
     // after an edit, turn from where the screen was to the page edited;
     // otherwise just start the dwell
     // effects are layout instances too (effect-all.js), so they stay small
-    layouts: { ...touch.layouts(refreshArgs, paired.major, paired.minor, celebrateAfterTick(L)), ...scroll.layouts(refreshArgs, paired.major, paired.minor, celebrateAfterTick(L).length > 0), ...require("./effect-all").layouts() },
+    layouts: { ...touch.layouts(refreshArgs, paired.major, paired.minor, celebrateAfterTick(L)), ...scroll.layouts(refreshArgs, paired.major, paired.minor, celebrateAfterTick(L).length > 0), ...(aplPackage.enabled() ? {} : require("./effect-all").layouts()) },
     onMount: editedPage(manifest, cur) !== null ? [{ type: "MmGoTo", to: editedPage(manifest, cur) }] : [{ type: "MmRotate" }],
   }));
 }

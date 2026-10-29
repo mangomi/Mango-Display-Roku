@@ -20,12 +20,15 @@ const ENVS = {
     setupHost: "testapp.mangodisplay.com",
     // the render service control endpoint (render-service/fleet.js)
     controlBase: "https://roku-control-test.mangodisplay.com",
+    // the screen's code package (apl-package.js)
+    aplPackageBase: "https://rokuassets.mangodisplay.com/test/echo/apl/",
   },
   production: {
     name: "production",
     apiBase: "https://api.mangomirror.com/v1.0.5/",
     setupHost: "app.mangodisplay.com",
     controlBase: "https://roku-control.mangodisplay.com",
+    aplPackageBase: "https://rokuassets.mangodisplay.com/prod/echo/apl/",
   },
 };
 

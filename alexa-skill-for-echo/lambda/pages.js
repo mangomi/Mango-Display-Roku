@@ -55,17 +55,21 @@ const anim = (id, ms, easing, from, to, opFrom, opTo) => {
   return { type: "AnimateItem", componentId: id, duration: ms, easing, value };
 };
 
-/** The document's named commands. W/H: the page layer size in dp. */
+/** The document's named commands. W/H: the page layer size in dp, or
+ * the name of an APL value holding it ("viewport.width"), for the
+ * package (apl-package.js), which is the same for every Echo. */
 function commandDefinitions(W, H) {
+  const len = (v, k) => (typeof v === "number" ? k * v : "${" + (k < 0 ? "-" : "") + v + "}");
+  const w = len(W, 1), mw = len(W, -1), h = len(H, 1), mh = len(H, -1);
   const IN = "mmP${to}";
   const OUT = "mmP${from}";
   const set = (id, property, value) => ({ type: "SetValue", componentId: id, property, value });
   // entering-page transitions other than flip: [incoming start, outgoing end, opacity?]
   const moves = {
-    slideleft: [T(W), T(-W), false],
-    slideright: [T(-W), T(W), false],
-    slideup: [T(0, H), T(0, -H), false],
-    slidedown: [T(0, -H), T(0, H), false],
+    slideleft: [T(w), T(mw), false],
+    slideright: [T(mw), T(w), false],
+    slideup: [T(0, h), T(0, mh), false],
+    slidedown: [T(0, mh), T(0, h), false],
     pop: [T(0, 0, 0, 0.3, 0.3), T(), true],
     rotate: [T(0, 0, 180, 0.3, 0.3), T(), true],
   };

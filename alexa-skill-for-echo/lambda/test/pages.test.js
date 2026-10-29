@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const apl = require("../apl");
 const pages = require("../pages");
+const aplPackage = require("../apl-package");
 
 const vp = { w: 1080, h: 1920 };
 const paired = { major: "1", minor: "822" };
@@ -18,6 +19,11 @@ const manifest = {
 const display = { manifest, assetBase: "https://a/", version: 7 };
 const rootOf = (d) => d.document.mainTemplate.items[0].items[0];
 const bind = (d, n) => rootOf(d).bind.find((b) => b.name === n).value;
+// the named commands a screen can run: its own and its package's
+const commandsOf = (d) => {
+  assert.deepStrictEqual(d.document.import, [aplPackage.importEntry()]);
+  return { ...aplPackage.contents().commands, ...(d.document.commands || {}) };
+};
 
 test("every page is its own layer; only the current one is shown", () => {
   const d = apl.displayScreen(vp, display, paired, "", false, 1);
@@ -38,7 +44,7 @@ test("the Roku's rotation rules: delaySeconds min 3 default 60, autoRotate per p
 });
 
 test("turns run on the Echo from named commands, on one sequencer, never two at once", () => {
-  const cmds = apl.displayScreen(vp, display, paired, "", false, 0).document.commands;
+  const cmds = commandsOf(apl.displayScreen(vp, display, paired, "", false, 0));
   for (const name of ["MmTurn", "MmRotate", "MmPageNext", "MmPagePrev", "MmRestartDwell"]) assert.ok(cmds[name], name);
   assert.deepStrictEqual(cmds.MmTurn.parameters, ["from", "to"]);
   for (const name of ["MmRotate", "MmPageNext", "MmPagePrev", "MmRestartDwell"]) {
@@ -65,7 +71,7 @@ test("a horizontal swipe anywhere turns the page: each page layer IS the swipe c
     assert.match(l.onUp[0].when, /< 0/); // finger moves left -> next
   }
   // inner touch targets stay above, inside the wrapper (MmTurn animates the layer id)
-  assert.ok(d.document.commands.MmTurn);
+  assert.ok(commandsOf(d).MmTurn);
 });
 
 test("in place across pages: only the pages whose pictures changed cross-fade", () => {
@@ -115,7 +121,7 @@ test("a layout edit takes the screen to the page being edited (showPage)", () =>
   const d = apl.displayScreen(vp, edited, paired, "", false, 1);
   assert.strictEqual(bind(d, "mmCur"), 1);
   assert.deepStrictEqual(rootOf(d).onMount.find((c) => /^Mm/.test(c.type)), { type: "MmGoTo", to: 0 });
-  assert.ok(d.document.commands.MmGoTo);
+  assert.ok(commandsOf(d).MmGoTo);
   // in place: the same turn, appended to the update
   const v = apl.displayView(vp, display);
   const up = apl.inPlaceUpdate(vp, edited, paired, "", false, { layout: v.layout, url: v.urls.join("|"), page: "2" });

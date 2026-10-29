@@ -1,0 +1,15 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "mango display",
+      "intents": [
+        { "name": "AMAZON.CancelIntent", "samples": [] },
+        { "name": "AMAZON.HelpIntent", "samples": [] },
+        { "name": "AMAZON.StopIntent", "samples": [] },
+        { "name": "AMAZON.NavigateHomeIntent", "samples": [] },
+        { "name": "ShowDisplayIntent", "slots": [], "samples": ["show my display", "show my screen", "start"] }
+      ],
+      "types": []
+    }
+  }
+}

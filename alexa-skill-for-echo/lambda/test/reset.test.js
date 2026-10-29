@@ -1,0 +1,72 @@
+const test = require("node:test");
+const assert = require("node:assert");
+const { handler } = require("../index");
+
+// a heartbeat from Dave's paired Echo
+const envelope = (args) => ({
+  version: "1.0",
+  session: { sessionId: "s-1", new: false, application: { applicationId: "x" } },
+  context: {
+    System: {
+      device: { deviceId: "dev-1", supportedInterfaces: { "Alexa.Presentation.APL": { runtime: { maxVersion: "2026.2" } } } },
+      user: { userId: "user-1" }, application: { applicationId: "x" },
+    },
+    Viewport: { pixelWidth: 1080, pixelHeight: 1920, dpi: 160 },
+  },
+  request: { type: "Alexa.Presentation.APL.UserEvent", requestId: "r", arguments: args },
+});
+
+test("reset in the webapp: the next heartbeat puts the pairing screen back", async (t) => {
+  const real = global.fetch;
+  t.after(() => { global.fetch = real; });
+  // after a reset the service no longer knows the display, and the
+  // backend has dropped the claim
+  global.fetch = async (url) => /\/version\?/.test(url)
+    ? { status: 404, text: async () => '{"error":"unknown display"}' }
+    : { status: 200, text: async () => '{"error":"Mirror not registered"}' };
+  const res = await handler(envelope(["refresh", "284", "1", "822", "", "0", "abc", "", "0", "0"]));
+  const d = res.response.directives && res.response.directives[0];
+  assert.ok(d, "a new screen");
+  assert.strictEqual(d.token, "pairing");
+  assert.ok(JSON.stringify(d.document).includes("Display Device Code"));
+});
+
+test("a service hiccup is not a reset: the screen stays", async (t) => {
+  const real = global.fetch;
+  t.after(() => { global.fetch = real; });
+  global.fetch = async () => ({ status: 502, text: async () => "" });
+  const res = await handler(envelope(["refresh", "284", "1", "822", "", "0", "abc", "", "0", "0"]));
+  assert.ok(!res.response.directives || res.response.directives.length === 0);
+});
+
+test("a 404 while the fleet hands the display over is not a reset: the screen stays", async (t) => {
+  const real = global.fetch;
+  t.after(() => { global.fetch = real; });
+  global.fetch = async (url) => /\/version\?/.test(url)
+    ? { status: 404, text: async () => '{"error":"unknown display"}' }
+    : { status: 200, text: async () => '{"object":{"isActive":true,"major":1,"minor":822}}' };
+  const res = await handler(envelope(["refresh", "284", "1", "822", "", "0", "abc", "", "0", "0"]));
+  assert.ok(!res.response.directives || res.response.directives.length === 0);
+});
+
+test("a deploy with new screen code rebuilds the screen at the next heartbeat; the same code does not", async (t) => {
+  const real = global.fetch;
+  t.after(() => { global.fetch = real; });
+  const manifest = { canvas: { width: 1080, height: 1920 }, pages: [{ image: "p0.png", overlays: [] }] };
+  global.fetch = async (url) => /\/version\?/.test(url)
+    ? { status: 200, text: async () => '{"version":284,"busy":false}' }
+    : { status: 200, text: async () => JSON.stringify({ version: 284, assetBase: "https://a/", manifest }) };
+  const code = require("../apl-package").screenCode();
+  // the screen reports the layout it has: the same as now, so only the code differs
+  const apl = require("../apl");
+  const layout = apl.displayView({ w: 1080, h: 1920, pw: 1080, ph: 1920 }, { manifest, assetBase: "https://a/", version: 284 }).layout;
+  const beat = (c) => handler(envelope(["refresh", "284", "1", "822", "", "0", layout, "https://a/p0.png?h=v284", "0", "0", ""].concat(c === undefined ? [] : [c])));
+  // an older screen, or one from before screens reported their code
+  for (const old of ["0123456789ab", undefined]) {
+    const d = (await beat(old)).response.directives[0];
+    assert.strictEqual(d.type, "Alexa.Presentation.APL.RenderDocument", String(old));
+    assert.deepStrictEqual(d.document.import.map((i) => i.version), [code]);
+  }
+  const same = (await beat(code)).response;
+  assert.ok(!same.directives || same.directives.length === 0);
+});

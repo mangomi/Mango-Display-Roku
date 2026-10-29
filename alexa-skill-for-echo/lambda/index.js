@@ -142,8 +142,10 @@ async function onUserEvent(envelope) {
     // report): a whole new screen, so the Echo loads the new package
     if (args[11] !== aplPackage.screenCode()) {
       console.log("[Mango] " + e.code + " screen code " + (args[11] || "none") + " -> " + aplPackage.screenCode());
-      // no `held`: the version is the same, and the screen must still go
-      return showDisplay(e, null, false, true, overrides, shown);
+      // no `held`: the version is the same, and the screen must still go;
+      // no layout: never in place, which would leave the old code running
+      // and this firing at every heartbeat
+      return showDisplay(e, null, false, true, overrides, { ...shown, layout: "" });
     }
     // same pictures, but the service started/finished applying an edit:
     // flip the spinner without a redraw (the Roku's onBusyChange)

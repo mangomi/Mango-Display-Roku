@@ -57,7 +57,10 @@ test("a deploy with new screen code rebuilds the screen at the next heartbeat; t
     ? { status: 200, text: async () => '{"version":284,"busy":false}' }
     : { status: 200, text: async () => JSON.stringify({ version: 284, assetBase: "https://a/", manifest }) };
   const code = require("../apl-package").screenCode();
-  const beat = (c) => handler(envelope(["refresh", "284", "1", "822", "", "0", "abc", "", "0", "0", ""].concat(c === undefined ? [] : [c])));
+  // the screen reports the layout it has: the same as now, so only the code differs
+  const apl = require("../apl");
+  const layout = apl.displayView({ w: 1080, h: 1920, pw: 1080, ph: 1920 }, { manifest, assetBase: "https://a/", version: 284 }).layout;
+  const beat = (c) => handler(envelope(["refresh", "284", "1", "822", "", "0", layout, "https://a/p0.png?h=v284", "0", "0", ""].concat(c === undefined ? [] : [c])));
   // an older screen, or one from before screens reported their code
   for (const old of ["0123456789ab", undefined]) {
     const d = (await beat(old)).response.directives[0];

@@ -48,10 +48,12 @@ const ctx = (gestures, states = [false, true]) => ({
 
 test("checkboxes: drawn with the manifest's sprites, press ticks then tells the portal", () => {
   const comps = touch.touchComponents(ctx({ calendarScroll: false }));
-  assert.strictEqual(comps.length, 1); // the page's box layer
-  const layer = comps[0];
-  assert.deepStrictEqual(layer.bind.map((b) => [b.name, b.value]), [["mmBoxE", "https://a/box_empty.png"], ["mmBoxC", "https://a/box_checked.png"]]);
-  const box = layer.items[0];
+  // the boxes straight on the page: a page-sized layer around them took
+  // every tap meant for what lies beneath (the scrolling lists)
+  assert.deepStrictEqual(comps.map((c) => c.type), ["MmBox", "MmBox"]);
+  assert.deepStrictEqual(touch.pageBinds(ctx({})).map((b) => [b.name, b.value]),
+    [["mmBoxE", "https://a/box_empty.png"], ["mmBoxC", "https://a/box_checked.png"]]);
+  const box = comps[0];
   assert.strictEqual(box.type, "MmBox");
   assert.deepStrictEqual([box.id, box.mmT0, box.mmTid, box.mmPg, box.mmCx, box.mmCy], ["mmBox0_501", false, "501", "0", "115", "215"]);
   assert.ok(JSON.stringify(box).length < 400, "a box instance stays small");
@@ -75,13 +77,13 @@ test("checkboxes: drawn with the manifest's sprites, press ticks then tells the 
   assert.strictEqual(touch.commandDefinitions().MmFastCheck.commands[0].sequencer, "fastcheck");
 });
 test("calendar swipes only when the user allows calendar scrolling; read by the page layer", () => {
-  assert.strictEqual(touch.touchComponents(ctx({ calendarScroll: false })).length, 1);
+  assert.strictEqual(touch.touchComponents(ctx({ calendarScroll: false })).length, 2);
   assert.strictEqual(touch.calendarGestures(ctx({ calendarScroll: false })), null);
   const comps = touch.touchComponents(ctx({ calendarScroll: true }));
-  assert.strictEqual(comps.length, 2);
-  // the calendar area itself is no TouchWrapper: inside the page layer's
-  // wrapper it never got a drag on the Echo
-  assert.strictEqual(comps[0].type, "Container");
+  assert.strictEqual(comps.length, 3);
+  // the calendar area is just its spinner: no TouchWrapper (inside the page
+  // layer's wrapper it never got a drag on the Echo), no container
+  assert.strictEqual(comps[0].type, "MmSpinner");
   const g = touch.calendarGestures(ctx({ calendarScroll: true }));
   // onDown/onUp run in fast mode where SendEvent is ignored: they may only
   // record; the send happens in onPress (normal mode)
@@ -131,8 +133,13 @@ test("display screen carries the touch layer and the held presses", () => {
   assert.match(root.bind[0].value, /^501:1:/);
   const layer = root.items.find((i) => i.id === "mmP0").item.items;
   assert.strictEqual(layer.filter((i) => i.type === "TouchWrapper").length, 0); // the calendar is read by the layer
-  const boxes = layer.find((i) => i.bind && i.bind[0].name === "mmBoxE").items;
+  const boxes = layer.filter((i) => i.type === "MmBox");
   assert.strictEqual(boxes.length, 2);
+  const binds = root.items.find((i) => i.id === "mmP0").bind.map((b) => b.name);
+  assert.ok(binds.includes("mmBoxE") && binds.includes("mmBoxC"), "the sprites on the page layer");
+  // nothing see-through spans the page above what is drawn before it: the
+  // Echo gives a tap to the topmost thing under the finger
+  assert.ok(!layer.some((i) => i.type === "Container" && i.width === "100%"), "a page-sized container on the page");
   assert.ok(require("../apl-package").contents().layouts.MmBox && d.document.import, "the checkbox is defined once, in the package");
   assert.deepStrictEqual(root.onMount[0].commands[1].arguments,
     ["refresh", "${mmVer}", "1", "822", "${overrides}", "${mmBusy ? 1 : 0}", "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}", "",
@@ -165,12 +172,12 @@ test("no bound variable or SetValue target shadows a built-in component property
 });
 
 test("swipe: the Roku spinner centred on the calendar at once, cleared after 15s if no redraw", () => {
-  const cal = touch.touchComponents(ctx({ calendarScroll: true }))[0];
-  const sp = cal.items[0];
+  const sp = touch.touchComponents(ctx({ calendarScroll: true }))[0];
   assert.strictEqual(sp.type, "MmSpinner"); // the art is the package's (spinner.js)
   assert.match(require("../apl-package").contents().resources[0].strings.mmSpinnerPng, /^data:image\/png;base64,/);
   assert.strictEqual(sp.opacity, "${mmSwiping == '31' ? 1 : 0}");
-  assert.strictEqual(sp.left + sp.width / 2, 600 / 2); // centre of the 600-wide region
+  const r = place.rect(page.regions[0].rect);
+  assert.strictEqual(sp.left + sp.width / 2, r.x + r.w / 2); // centre of the calendar region
   const g = touch.calendarGestures(ctx({ calendarScroll: true }));
   const send = g.onPress[0].commands.find((c) => /'swipeup'/.test(c.when || "")).commands;
   assert.deepStrictEqual([send[0].componentId, send[0].property, send[0].value], [touch.ROOT_ID, "mmSwiping", "31"]);

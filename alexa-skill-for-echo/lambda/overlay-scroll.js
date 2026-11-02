@@ -23,7 +23,7 @@
 // scrolled outside the window (the Roku's itemVisible).
 //
 // The strip, its motion and its boxes' behaviour are the package's
-// MmStrip / MmSBox / MmSTick layouts (apl-package.js); a screen carries
+// MmStrip / MmSBox layouts (apl-package.js); a screen carries
 // one MmStrip instance per strip with its numbers, its segments as rows
 // [file, top dp, height dp] and its boxes as rows (BOX_ROW below), so a
 // box costs ~40 bytes of the screen (Dave's 113 boxes: ~120 bytes each
@@ -194,54 +194,59 @@ const CY = "Math.round(mmY + mmSPer * " + PHASE + ")";
 function layouts() {
   const size = [{ name: "mmT0", default: false }, { name: "mmW", default: -1 }, { name: "mmH", default: -1 }];
   const dflt = (name, d) => ({ name, default: d });
-  const all = { position: "absolute", left: 0, top: 0, width: "100%", height: "100%" };
+  // the strip and all it holds, in strip dp
+  const whole = { position: "absolute", left: 0, top: 0, width: "${mmSw}", height: "${mmSh}" };
+  const segments = {
+    type: "Container", ...whole, data: "${mmSegs}", items: [{
+      type: "Image", position: "absolute", left: 0, top: "${data[1]}", width: "${mmSw}", height: "${data[2]}",
+      source: "${mmAB + data[0]}", scale: "fill",
+    }],
+  };
+  // one box per row (BOX_ROW)
+  const box = {
+    type: "MmSBox", id: "${mmId}Box${data[0]}", mmTid: "${data[1]}", mmA: "${data[2]}", mmZ: "${data[3]}",
+    mmX: "${data[4]}", mmY: "${data[5]}", mmT0: "${data[6] == 1}", mmW: "${data[7]}", mmH: "${data[8]}", mmL: "${data[9]}",
+  };
+  // The boxes are the strip's own children (its data, the segments its
+  // firstItem) and the last thing drawn in it: the Echo hands a tap to the
+  // topmost thing under the finger, see-through or not (touch.js). Without
+  // boxes the strip holds just the segments.
+  const strip = (withBoxes) => ({
+    type: "Container",
+    when: withBoxes ? "${mmBoxes.length > 0}" : "${mmBoxes.length == 0}",
+    ...whole,
+    transform: [{ translateY: "${mmFrom}" }],
+    bind: [
+      { name: "mmScrollT0", value: 0 },
+      { name: "mmSEmpty", value: "${mmAB + mmE}" }, { name: "mmSChecked", value: "${mmAB + mmC}" },
+      { name: "mmSMs", value: "${mmMs}" }, { name: "mmSLp", value: "${mmLp}" }, { name: "mmSPer", value: "${mmPer}" },
+      { name: "mmSPg", value: "${mmPg}" }, { name: "mmSPad", value: "${mmPad}" },
+      { name: "mmSS", value: "${mmS}" }, { name: "mmSOx", value: "${mmOx}" }, { name: "mmSOy", value: "${mmOy}" },
+      { name: "mmSRx", value: "${mmRx}" }, { name: "mmSRy", value: "${mmRy}" },
+      { name: "mmSBw", value: "${mmBw}" }, { name: "mmSBh", value: "${mmBh}" }, { name: "mmSL", value: "${mmBl}" },
+    ],
+    // no componentId: each acts on the strip, whose handler runs it
+    onMount: [{
+      type: "Sequential",
+      sequencer: "scroll${mmId}",
+      commands: [
+        // when the motion started, for a press's position
+        { type: "SetValue", property: "mmScrollT0", value: "${elapsedTime}" },
+        {
+          type: "AnimateItem", duration: "${mmMs}", easing: "linear", repeatCount: "${mmLp ? 1000000 : 0}",
+          value: [{ property: "transform", from: [{ translateY: "${mmFrom}" }], to: [{ translateY: "${mmTo}" }] }],
+        },
+      ],
+    }],
+    ...(withBoxes ? { data: "${mmBoxes}", firstItem: segments, items: [box] } : { items: [segments] }),
+  });
   return {
     MmStrip: {
       parameters: ["mmId", "mmSw", "mmSh", "mmFrom", "mmTo", "mmMs", "mmLp", "mmSegs",
         dflt("mmBoxes", []), dflt("mmE", ""), dflt("mmC", ""), dflt("mmPer", 0), dflt("mmPg", "0"),
         dflt("mmPad", 0), dflt("mmS", 1), dflt("mmOx", 0), dflt("mmOy", 0), dflt("mmRx", 0), dflt("mmRy", 0),
         dflt("mmBw", 0), dflt("mmBh", 0), dflt("mmBl", -1)],
-      items: [{
-        type: "Container",
-        items: [{
-          type: "Container",
-          position: "absolute", left: 0, top: 0, width: "${mmSw}", height: "${mmSh}",
-          transform: [{ translateY: "${mmFrom}" }],
-          bind: [
-            { name: "mmScrollT0", value: 0 },
-            { name: "mmSEmpty", value: "${mmAB + mmE}" }, { name: "mmSChecked", value: "${mmAB + mmC}" },
-            { name: "mmSMs", value: "${mmMs}" }, { name: "mmSLp", value: "${mmLp}" }, { name: "mmSPer", value: "${mmPer}" },
-            { name: "mmSPg", value: "${mmPg}" }, { name: "mmSPad", value: "${mmPad}" },
-            { name: "mmSS", value: "${mmS}" }, { name: "mmSOx", value: "${mmOx}" }, { name: "mmSOy", value: "${mmOy}" },
-            { name: "mmSRx", value: "${mmRx}" }, { name: "mmSRy", value: "${mmRy}" },
-            { name: "mmSBw", value: "${mmBw}" }, { name: "mmSBh", value: "${mmBh}" }, { name: "mmSL", value: "${mmBl}" },
-          ],
-          // no componentId: each acts on the strip, whose handler runs it
-          onMount: [{
-            type: "Sequential",
-            sequencer: "scroll${mmId}",
-            commands: [
-              // when the motion started, for a press's position
-              { type: "SetValue", property: "mmScrollT0", value: "${elapsedTime}" },
-              {
-                type: "AnimateItem", duration: "${mmMs}", easing: "linear", repeatCount: "${mmLp ? 1000000 : 0}",
-                value: [{ property: "transform", from: [{ translateY: "${mmFrom}" }], to: [{ translateY: "${mmTo}" }] }],
-              },
-            ],
-          }],
-          items: [
-            { type: "Container", ...all, data: "${mmSegs}", items: [{
-              type: "Image", position: "absolute", left: 0, top: "${data[1]}", width: "${mmSw}", height: "${data[2]}",
-              source: "${mmAB + data[0]}", scale: "fill",
-            }] },
-            // one box per row (BOX_ROW)
-            { type: "Container", ...all, data: "${mmBoxes}", items: [
-              { type: "MmSBox", id: "${mmId}Box${data[0]}", mmTid: "${data[1]}", mmA: "${data[2]}", mmZ: "${data[3]}",
-                mmX: "${data[4]}", mmY: "${data[5]}", mmT0: "${data[6] == 1}", mmW: "${data[7]}", mmH: "${data[8]}", mmL: "${data[9]}" },
-            ] },
-          ],
-        }],
-      }],
+      items: [{ type: "Container", items: [strip(true), strip(false)] }],
     },
     MmSBox: {
       parameters: ["mmTid", "mmA", "mmZ", "mmX", "mmY"].concat(size, [{ name: "mmL", default: -9 }]),

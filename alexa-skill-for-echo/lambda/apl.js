@@ -321,7 +321,8 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume, li
       refreshArgs, major: paired.major, minor: paired.minor, listIndex: (item) => L.index(i, item),
     };
     layerItems.push(...touch.touchComponents(tctx));
-    items.push(pagesMod.layer(i, cur, vp, layerItems, touch.calendarGestures(tctx)));
+    const g = touch.calendarGestures(tctx) || {};
+    items.push(pagesMod.layer(i, cur, vp, layerItems, { ...g, binds: (g.binds || []).concat(touch.pageBinds(tctx)) }));
   });
   const held = allHeld(pages, overrides);
   if (lite < LITE.NO_EFFECTS) items.push(...effects.displayEffects(manifest.effects || [], { place, canvas, assetBase, vp }));

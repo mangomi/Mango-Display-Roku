@@ -33,7 +33,10 @@ const strip = (extra) => ({
 function expand(cfg, c = ctx()) {
   const inst = build(cfg, c)[0];
   const { node: win, scope } = inflate(inst, { mmAB: "https://a/" });
-  const strip = win.items[0];
+  // the one strip template whose `when` holds
+  const shown = win.items.filter((c) => ev(c.when, scope));
+  assert.strictEqual(shown.length, 1);
+  const strip = shown[0];
   const s = { ...scope };
   for (const b of strip.bind) s[b.name] = ev(b.value, s);
   return { inst, win, strip, s };
@@ -41,7 +44,7 @@ function expand(cfg, c = ctx()) {
 // its boxes, `ms` into the motion: per row the layout it drew, the
 // component and what that sees
 function boxesOf(x, ms = 0) {
-  return dataChildren(x.strip.items[1], { ...x.s, mmScrollT0: 1000, elapsedTime: 1000 + ms }).map(({ template, scope }) => {
+  return !x.strip.data ? [] : dataChildren(x.strip, { ...x.s, mmScrollT0: 1000, elapsedTime: 1000 + ms }).map(({ template, scope }) => {
     const { type, when, id, ...rest } = template;
     const { node, scope: bs } = inflate({ type, ...rest }, scope);
     return { type, id: ev(id, scope), node, s: bs };
@@ -54,9 +57,8 @@ const tell = (b) => press(b).commands.find((c) => c.type === "MmTell");
 test("a clipping window at the rect, the strip inside it, segments stacked", () => {
   const x = expand(strip());
   assert.deepStrictEqual([x.inst.left, x.inst.top, x.inst.width, x.inst.height], [50, 100, 200, 150]);
-  assert.strictEqual(x.win.items.length, 1);
   assert.deepStrictEqual([ev(x.strip.width, x.s), ev(x.strip.height, x.s)], [200, 1250]);
-  const segs = dataChildren(x.strip.items[0], x.s).map(({ template: t, scope }) => [ev(t.source, scope), ev(t.top, scope), ev(t.height, scope)]);
+  const segs = dataChildren(x.strip.firstItem || x.strip.items[0], x.s).map(({ template: t, scope }) => [ev(t.source, scope), ev(t.top, scope), ev(t.height, scope)]);
   assert.deepStrictEqual(segs, [["https://a/scroll_a_0.png", 0, 1000], ["https://a/scroll_a_1.png", 1000, 250]]);
 });
 
@@ -96,7 +98,7 @@ test("boxes ride the strip and press like touch.js's checkboxes", () => {
   assert.ok(JSON.stringify(x.inst.mmBoxes[0]).length < 45, JSON.stringify(x.inst.mmBoxes[0]));
   // the behaviour lives once, in the package's layout
   assert.deepStrictEqual(b.node.bind[0], { name: "mmTicked", value: "${mmT0}" });
-  assert.strictEqual(ev(b.node.item.items[0].source, b.s), "https://a/box_empty.png");
+  assert.strictEqual(ev(b.node.item.items.find((c) => c.type === "Image").source, b.s), "https://a/box_empty.png");
   const [tick, after, hold, send, fast, dwell] = press(b).commands;
   assert.strictEqual(tick.value, "${!mmTicked}");
   assert.strictEqual(after.type, "MmAfterTick");
@@ -164,4 +166,15 @@ test("a box of another size or list says so, and is drawn at its own size", () =
   assert.deepStrictEqual(geom(o), [5 - 8, 40 - 8, 10 + 16, 15 + 16]);
   assert.strictEqual(bs.find((b) => b.s.mmTid === "504").s.mmLi, 7);
   assert.strictEqual(o.s.mmLi, 2);
+});
+
+test("boxes are the strip's own children, drawn last in it", () => {
+  const x = expand(strip());
+  assert.strictEqual(x.strip.data, "${mmBoxes}");
+  assert.deepStrictEqual(x.strip.items.map((c) => c.type), ["MmSBox"]);
+  assert.strictEqual(x.strip.firstItem.data, "${mmSegs}");
+  // no boxes: the other strip, just the segments
+  const bare = expand(strip({ boxes: [] }));
+  assert.strictEqual(bare.strip.data, undefined);
+  assert.strictEqual(bare.strip.items[0].data, "${mmSegs}");
 });

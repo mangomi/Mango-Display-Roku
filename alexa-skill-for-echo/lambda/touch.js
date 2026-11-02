@@ -113,6 +113,15 @@ function commandDefinitions() {
   };
 }
 
+/** What the page layer binds for its checkboxes: the sprite URLs the
+ * MmBox layout reads (mmBoxE/mmBoxC). */
+function pageBinds(ctx) {
+  const t = ctx.page && ctx.page.targets;
+  const sprites = t && t.sprites;
+  if (!(t && Array.isArray(t.items) && sprites && sprites.empty && sprites.checked)) return [];
+  return [{ name: "mmBoxE", value: ctx.assetBase + sprites.empty }, { name: "mmBoxC", value: ctx.assetBase + sprites.checked }];
+}
+
 /** APL components for the page's checkboxes and calendar areas. */
 function touchComponents(ctx) {
   const { page, pageIndex, place, assetBase, states, gestures, refreshArgs, major, minor, listIndex } = ctx;
@@ -124,7 +133,7 @@ function touchComponents(ctx) {
     // each box is an instance of the MmBox layout (layouts() below): only
     // its place and identity travel per box (~250 bytes instead of ~1.3 KB
     // - 16 boxes alone were 20 KB of a 70 KB screen); the sprite URLs are
-    // bound once on this page's box layer
+    // bound once on the page layer (pageBinds)
     const boxes = [];
     t.items.forEach((it, i) => {
       if (!it.rect) return;
@@ -143,19 +152,17 @@ function touchComponents(ctx) {
         mmL: listIndex ? listIndex(it) : -1, mmBx: r2(box.x + box.w / 2), mmBy: r2(box.y + box.h / 2),
       });
     });
-    out.push({
-      type: "Container", position: "absolute", left: 0, top: 0, width: "100%", height: "100%",
-      bind: [{ name: "mmBoxE", value: assetBase + sprites.empty }, { name: "mmBoxC", value: assetBase + sprites.checked }],
-      items: boxes,
-    });
+    // straight on the page, never in a container of their own: the Echo
+    // hands a tap to the topmost thing under the finger, see-through or
+    // not, so a page-sized box layer took every press meant for the
+    // scrolling lists beneath it (Dave's Echo, found in the APL authoring
+    // tool, 2026-11-02). The sprite URLs are the page layer's (pageBinds).
+    out.push(...boxes);
   }
-  // calendar areas draw only their spinner here; the swipe itself is
-  // read by the page layer (calendarGestures below)
+  // calendar areas draw only their spinner here, again straight on the
+  // page; the swipe itself is read by the page layer (calendarGestures)
   for (const c of calendars(ctx)) {
-    under.push({
-      type: "Container", position: "absolute", left: c.r.x, top: c.r.y, width: c.r.w, height: c.r.h,
-      items: [spinnerRef(c.r.w / 2, c.r.h / 2, place.len(SPINNER_PX), "${mmSwiping == '" + c.regId + "' ? 1 : 0}")],
-    });
+    under.push(spinnerRef(c.r.x + c.r.w / 2, c.r.y + c.r.h / 2, place.len(SPINNER_PX), "${mmSwiping == '" + c.regId + "' ? 1 : 0}"));
   }
   return under.concat(out);
 }
@@ -239,7 +246,7 @@ const r2 = (v) => Math.round(v * 100) / 100;
  * Instances carry mmT0 (ticked at build), mmTid (task id), mmPg/mmCx/mmCy
  * (page, canvas centre for /interact), mmW/mmH/mmPad (the drawn box) and
  * mmL/mmBx/mmBy (its list number and dp centre, for the celebration).
- * The sprite URLs come from mmBoxE/mmBoxC bound on the page's box layer. */
+ * The sprite URLs come from mmBoxE/mmBoxC bound on the page layer (pageBinds). */
 function layouts() {
   return {
     MmBox: {
@@ -277,5 +284,5 @@ function layouts() {
 }
 
 module.exports = {
-  ROOT_ID, touchComponents, calendarGestures, applyOverrides, parseOverrides, targetId, boxId, layouts, screenCommands, commandDefinitions,
+  ROOT_ID, touchComponents, pageBinds, calendarGestures, applyOverrides, parseOverrides, targetId, boxId, layouts, screenCommands, commandDefinitions,
 };

@@ -26,6 +26,7 @@ const scroll = require("./overlay-scroll");
 const slideshow = require("./overlay-slideshow");
 const celebrations = require("./celebrations");
 const aplPackage = require("./apl-package");
+const calSlots = require("./calendar-slots");
 
 /** The confetti a box press runs after its tick: its list's open count
  * moves, then a burst on the box - or the finale when that emptied the
@@ -176,7 +177,10 @@ function pairingScreen(vp, code, connected, paired) {
  * the checkbox ticks. */
 function displayView(vp, display) {
   const { manifest, assetBase } = display;
-  const pages = manifest.pages || [];
+  // a calendar's scrolling cells leave the overlay list for its slots
+  // (calendar-slots.js), so the other overlays keep their numbers - and
+  // their ids - whatever month is shown
+  const pages = (manifest.pages || []).map(calSlots.separate);
   const canvas = manifest.canvas || { width: 1920, height: 1080 };
   const place = placement(canvas, vp);
   // the hash busts the Echo's image cache only when the pixels changed
@@ -206,14 +210,16 @@ function displayView(vp, display) {
     pages: pages.map((page) => {
       const t = page && page.targets;
       return {
-        image: page && page.image, overlays: (page && page.overlays) || [], regions: (page && page.regions) || [],
+        // the calendar's slots: their number is layout, their days are not
+        image: page && page.image, regions: (page && page.regions) || [], calSlots: calSlots.slotCount(page),
+        overlays: (page && page.overlays) || [],
         dwell: pagesMod.dwellMs(page), auto: !!(page && page.autoRotate), transition: page && page.transition,
         sprites: (t && t.sprites) || null,
         targets: ((t && t.items) || []).map((it) => [touch.targetId(it), it.rect, it.kind]),
       };
     }),
   }, stable)).digest("hex").slice(0, 12);
-  return { manifest, assetBase, pages, canvas, place, urls, layout };
+  return { manifest, assetBase, pages, canvas, place, urls, layout, calKey: calSlots.key(pages, place) };
 }
 
 /** One page's image as two stacked layers: mmPagePrev<i> (on top, normally
@@ -292,7 +298,7 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume, li
   // presses, busy, layout fingerprint, page images, page on screen (all
   // bound on the root, so an in-place update keeps them current)
   const refreshArgs = ["refresh", "${mmVer}", paired.major, paired.minor, "${overrides}", "${mmBusy ? 1 : 0}",
-    "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}", ssArg, aplPackage.screenCode()];
+    "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}", ssArg, aplPackage.screenCode(), "${mmCalKey}"];
   let pending = overrides;
   const L = listsOf(pages, overrides);
   // each distinct photo list once, on the root (pages sharing a
@@ -315,7 +321,7 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume, li
     const layerItems = [...ov.under];
     if (page && page.image) layerItems.push(...pageImages(view, i));
     // LITE.STILL: the moving parts go, the page pictures stay
-    if (lite < LITE.STILL) layerItems.push(...ov.over);
+    if (lite < LITE.STILL) layerItems.push(...ov.over, ...calSlots.build(page, i, place));
     const tctx = {
       page, pageIndex: i, place, assetBase, states: held.states, gestures: manifest.gestures,
       refreshArgs, major: paired.major, minor: paired.minor, listIndex: (item) => L.index(i, item),
@@ -337,6 +343,8 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume, li
       // the asset base, for the package's layouts (strip segments, sprites)
       { name: "mmAB", value: assetBase },
       { name: "mmLayout", value: view.layout },
+      // what the calendar slots hold (calendar-slots.js)
+      { name: "mmCalKey", value: view.calKey },
       { name: "mmPageUrls", value: view.urls.join("|") },
       // photo loads this screen saw (overlay-slideshow.js) - logged by the
       // skill, to learn whether the Echo fires Image onLoad
@@ -457,6 +465,11 @@ function inPlaceUpdate(vp, display, paired, overrides, busy, shown) {
     }
   });
   cmds.push(root("mmPageUrls", view.urls.join("|")));
+  // a new month: refill the calendar's scrolling cells, the rest stays
+  if (view.calKey !== (shown.cal || "")) {
+    view.pages.forEach((page, p) => cmds.push(...calSlots.updateCommands(page, p, view.place)));
+    cmds.push(root("mmCalKey", view.calKey));
+  }
   // a layout edit on another page: go and show it (pages.js MmGoTo)
   const sp = editedPage(view.manifest, shown.page);
   // otherwise a fresh dwell, as the Roku's in-place path re-arms its

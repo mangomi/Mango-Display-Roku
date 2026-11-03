@@ -116,7 +116,7 @@ async function onUserEvent(envelope) {
   if (rotate) args = args.slice(1);
   if (args[0] === "touch") return onTouch(e, args);
   const [what, ver, major, minor, overrides, busyShown, layout, pageUrls, page] = args;
-  const shown = { layout, url: pageUrls, page, ss: args[10] };
+  const shown = { layout, url: pageUrls, page, ss: args[10], cal: args[12] };
   // the stay-awake test's evidence: does the heartbeat still arrive, in
   // which session, and how long after launch (CloudWatch)
   console.log("[Mango] event " + (rotate ? "rotate/" : "") + what + " " + e.code +
@@ -170,7 +170,7 @@ const TOUCH_BUDGET_MS = 6500;
 async function onTouch(e, args) {
   const started = Date.now();
   const deadline = started + TOUCH_BUDGET_MS;
-  const [, kind, page, x, y, id, major, minor, ver, overrides, layout, pageUrls, current, ss] = args;
+  const [, kind, page, x, y, id, major, minor, ver, overrides, layout, pageUrls, current, ss, cal] = args;
   e.major = major; e.minor = minor;
   // wait from the version on screen; the gesture runs alongside
   const result = ver ? backend.waitForNewVersion(e, ver, deadline) : Promise.resolve(null);
@@ -184,7 +184,7 @@ async function onTouch(e, args) {
     return respond();
   }
   console.log("[Mango] touch " + kind + ": result v" + d.version + " in " + (Date.now() - started) + "ms");
-  return respond({ directives: [screenFor(e, d, overrides, { layout, url: pageUrls, page: current, ss })] });
+  return respond({ directives: [screenFor(e, d, overrides, { layout, url: pageUrls, page: current, ss, cal })] });
 }
 
 exports.handler = async (envelope) => {

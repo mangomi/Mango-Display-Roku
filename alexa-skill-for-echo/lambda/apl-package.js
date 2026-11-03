@@ -25,6 +25,7 @@ const touch = require("./touch");
 const scroll = require("./overlay-scroll");
 const slideshow = require("./overlay-slideshow");
 const spinner = require("./spinner");
+const calSlots = require("./calendar-slots");
 
 const APL_VERSION = "2023.2";
 const NAME = "mango";
@@ -34,7 +35,8 @@ function contents() {
     type: "APL",
     version: APL_VERSION,
     resources: spinner.resources(),
-    layouts: { ...effectAll.layouts(), ...touch.layouts(), ...scroll.layouts(), ...slideshow.layouts(), ...spinner.layouts() },
+    layouts: { ...effectAll.layouts(), ...touch.layouts(), ...scroll.layouts(), ...slideshow.layouts(), ...spinner.layouts(),
+      ...calSlots.layouts() },
     commands: { ...pages.commandDefinitions("viewport.width", "viewport.height"), ...touch.commandDefinitions() },
   };
 }

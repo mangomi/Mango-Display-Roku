@@ -90,7 +90,7 @@ function screenCommands(refreshArgs, major, minor) {
     MmTell: {
       parameters: ["mmK", "mmP", "mmX", "mmY", "mmT"],
       commands: [{ type: "SendEvent", arguments: ["touch", "${mmK}", "${mmP}", "${mmX}", "${mmY}", "${mmT}", major, minor,
-        refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8], refreshArgs[10]] }],
+        refreshArgs[1], "${overrides}", refreshArgs[6], refreshArgs[7], refreshArgs[8], refreshArgs[10], refreshArgs[12]] }],
     },
     MmRefresh: { parameters: [], commands: [{ type: "SendEvent", arguments: refreshArgs }] },
   };

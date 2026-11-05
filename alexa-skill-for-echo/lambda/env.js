@@ -32,4 +32,8 @@ const ENVS = {
   },
 };
 
-module.exports = ENVS[process.env.MANGO_ENV === "production" ? "production" : "test"];
+module.exports = {
+  ...ENVS[process.env.MANGO_ENV === "production" ? "production" : "test"],
+  // one skill, whose development and live stages each call their own Lambda
+  skillId: "amzn1.ask.skill.ccb7fdb4-ecce-462b-965b-f01016ff42b8",
+};

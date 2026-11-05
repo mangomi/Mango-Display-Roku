@@ -31,7 +31,7 @@ const viewport = portrait
 function envelope(request) {
   return {
     version: "1.0",
-    session: { new: request.type === "LaunchRequest", sessionId: "amzn1.echo-api.session.LOCAL" },
+    session: { new: request.type === "LaunchRequest", sessionId: "amzn1.echo-api.session.LOCAL", application: { applicationId: require("../lambda/env").skillId } },
     context: {
       System: { user: { userId: USER }, device: { deviceId: DEVICE, supportedInterfaces: { "Alexa.Presentation.APL": { runtime: { maxVersion: "2023.2" } } } } },
       Viewport: viewport,

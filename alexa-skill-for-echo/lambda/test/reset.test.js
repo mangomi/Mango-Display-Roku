@@ -1,15 +1,16 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { handler } = require("../index");
+const env = require("../env");
 
 // a heartbeat from Dave's paired Echo
 const envelope = (args) => ({
   version: "1.0",
-  session: { sessionId: "s-1", new: false, application: { applicationId: "x" } },
+  session: { sessionId: "s-1", new: false, application: { applicationId: env.skillId } },
   context: {
     System: {
       device: { deviceId: "dev-1", supportedInterfaces: { "Alexa.Presentation.APL": { runtime: { maxVersion: "2026.2" } } } },
-      user: { userId: "user-1" }, application: { applicationId: "x" },
+      user: { userId: "user-1" }, application: { applicationId: env.skillId },
     },
     Viewport: { pixelWidth: 1080, pixelHeight: 1920, dpi: 160 },
   },

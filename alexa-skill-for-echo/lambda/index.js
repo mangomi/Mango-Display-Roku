@@ -31,11 +31,20 @@ const backend = require("./backend");
 const apl = require("./apl");
 const aplPackage = require("./apl-package");
 
-function respond({ directives = [], speech, end } = {}) {
+function respond({ directives = [], speech, reprompt, end } = {}) {
   const response = { directives };
   if (speech) response.outputSpeech = { type: "PlainText", text: speech };
+  if (reprompt) response.reprompt = { outputSpeech: { type: "PlainText", text: reprompt } };
   if (end !== undefined) response.shouldEndSession = end;
   return { version: "1.0", response };
+}
+
+/** Is this request for our skill? (Alexa's security requirement; the
+ * Lambda's trigger checks it too.) */
+function forThisSkill(envelope) {
+  const app = (envelope.session && envelope.session.application) ||
+    (envelope.context && envelope.context.System && envelope.context.System.application);
+  return !!app && app.applicationId === env.skillId;
 }
 
 function supportsApl(envelope) {
@@ -88,15 +97,22 @@ function screenFor(e, d, overrides, shown) {
   return fit.directive;
 }
 
-/** One pairing iteration. `onScreen`: the pairing screen is already up. */
-async function pairStep(e, onScreen) {
+/** One pairing iteration. `onScreen`: the pairing screen is already up;
+ * `welcome`: a launch, so say what the code on the screen is for. */
+async function pairStep(e, onScreen, welcome) {
   const p = await backend.pairingStep(e.code, e.w, e.h);
   if (p.state === "linked") {
     e.major = p.major; e.minor = p.minor;
     return showDisplay(e, null, true, false);
   }
-  return respond(onScreen ? {} : { directives: [apl.pairingScreen(e.vp, e.code, false)] });
+  if (onScreen) return respond();
+  return respond({
+    directives: [apl.pairingScreen(e.vp, e.code, false)],
+    ...(welcome ? { speech: "Welcome to Mango Display. To connect this screen, go to " + spokenHost() + " and enter the code you see here." } : {}),
+  });
 }
+
+const spokenHost = () => env.setupHost.replace(/\./g, " dot ");
 
 async function onLaunch(envelope) {
   if (!supportsApl(envelope)) {
@@ -106,7 +122,7 @@ async function onLaunch(envelope) {
   const aplIf = envelope.context.System.device.supportedInterfaces["Alexa.Presentation.APL"] || {};
   console.log("[Mango] launch on " + env.name + ": code " + e.code + ", screen " + e.w + "x" + e.h +
     ", APL up to " + ((aplIf.runtime && aplIf.runtime.maxVersion) || "?"));
-  return pairStep(e, false);
+  return pairStep(e, false, true);
 }
 
 async function onUserEvent(envelope) {
@@ -189,6 +205,7 @@ async function onTouch(e, args) {
 
 exports.handler = async (envelope) => {
   const req = envelope.request;
+  if (!forThisSkill(envelope)) throw new Error("request for another skill");
   try {
     switch (req.type) {
       case "LaunchRequest":
@@ -197,9 +214,19 @@ exports.handler = async (envelope) => {
         return await onUserEvent(envelope);
       case "IntentRequest": {
         const name = req.intent.name;
-        if (name === "AMAZON.StopIntent" || name === "AMAZON.CancelIntent") return respond({ end: true });
+        if (name === "AMAZON.StopIntent" || name === "AMAZON.CancelIntent" || name === "AMAZON.NavigateHomeIntent" ||
+            name === "AMAZON.NoIntent") return respond({ end: true });
         if (name === "AMAZON.HelpIntent") {
-          return respond({ speech: "Mango Display shows your display on this screen. Enter the code on the screen at " + env.setupHost + " to connect it." });
+          const ask = "Would you like to see your display?";
+          return respond({
+            speech: "Mango Display keeps your calendar, lists and photos on this screen until you say stop. " +
+              "To connect a new screen, enter the code it shows at " + spokenHost() + ". " + ask,
+            reprompt: ask, end: false,
+          });
+        }
+        if (name === "AMAZON.FallbackIntent") {
+          const ask = "You can say show my display, or say stop to close it. What would you like to do?";
+          return respond({ speech: "Sorry, Mango Display can't help with that. " + ask, reprompt: ask, end: false });
         }
         return await onLaunch(envelope);
       }

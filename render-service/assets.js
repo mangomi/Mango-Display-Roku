@@ -59,24 +59,30 @@ const publicRoot = () => (PUBLIC_BASE ? PUBLIC_BASE + "/" + rootedKey("") : "");
  * fonts for Chromium; publish them once per process under <root>/fonts/
  * (immutable, content-named by file) and hand devices the base in
  * display.json so FontTask can fetch the few a manifest names. */
-let fontsPublished = null;
-function publishFonts(dir) {
+/* One static set per task: files baked into the image, published under
+ * <root>/<prefix>/ exactly once, content never changing under a name
+ * (immutable cache headers), so a second task or a restart only lists
+ * and uploads what is missing. Fonts were the first such set; the
+ * celebration art the Echo Show client draws is the second (Dave,
+ * 2026-10-27). */
+const staticPublished = {};
+function publishStatic(dir, prefix, match, contentTypeOf, label) {
   if (!enabled()) return Promise.resolve(0);
-  if (fontsPublished) return fontsPublished;
-  fontsPublished = (async () => {
+  if (staticPublished[prefix]) return staticPublished[prefix];
+  staticPublished[prefix] = (async () => {
     const want = [];
     const walk = (d, rel) => {
       for (const name of fs.readdirSync(d)) {
         const p = path.join(d, name);
         if (fs.statSync(p).isDirectory()) walk(p, rel + name + "/");
-        else if (/\.(ttf|otf)$/i.test(name)) want.push({ path: p, key: rootedKey("fonts/" + rel + name) });
+        else if (match.test(name)) want.push({ path: p, key: rootedKey(prefix + "/" + rel + name) });
       }
     };
     walk(dir, "");
     const have = new Set();
     let token;
     do {
-      const page = await s3().send(new ListObjectsV2Command({ Bucket: BUCKET, Prefix: rootedKey("fonts/"), ContinuationToken: token }));
+      const page = await s3().send(new ListObjectsV2Command({ Bucket: BUCKET, Prefix: rootedKey(prefix + "/"), ContinuationToken: token }));
       for (const o of page.Contents || []) have.add(o.Key);
       token = page.IsTruncated ? page.NextContinuationToken : undefined;
     } while (token);
@@ -88,20 +94,28 @@ function publishFonts(dir) {
           Bucket: BUCKET,
           Key: f.key,
           Body: fs.readFileSync(f.path),
-          ContentType: /\.otf$/i.test(f.path) ? "font/otf" : "font/ttf",
+          ContentType: contentTypeOf(f.path),
           CacheControl: "public, max-age=31536000, immutable",
         }),
       );
       n++;
     }
-    console.log("fonts: " + want.length + " on the CDN (" + n + " uploaded now)");
+    console.log(label + ": " + want.length + " on the CDN (" + n + " uploaded now)");
     return n;
   })().catch((e) => {
-    fontsPublished = null;
-    console.error("fonts: publish failed:", e.message);
+    staticPublished[prefix] = null;
+    console.error(label + ": publish failed:", e.message);
     return 0;
   });
-  return fontsPublished;
+  return staticPublished[prefix];
+}
+function publishFonts(dir) {
+  return publishStatic(dir, "fonts", /\.(ttf|otf)$/i, (p) => (/\.otf$/i.test(p) ? "font/otf" : "font/ttf"), "fonts");
+}
+/* images/celebrations/* from the Roku channel (the burst art), for clients
+ * that cannot bundle it: <root>/celebrations/<file> */
+function publishCelebrations(dir) {
+  return publishStatic(dir, "celebrations", /\.(png|webp|jpe?g)$/i, (p) => (/\.webp$/i.test(p) ? "image/webp" : /\.jpe?g$/i.test(p) ? "image/jpeg" : "image/png"), "celebrations");
 }
 
 const TYPES = {
@@ -379,4 +393,4 @@ class AssetPublisher {
   }
 }
 
-module.exports = { publicRoot, publishFonts, AssetPublisher, derivePrefix, enabled, BUCKET };
+module.exports = { publicRoot, publishFonts, publishCelebrations, AssetPublisher, derivePrefix, enabled, BUCKET };

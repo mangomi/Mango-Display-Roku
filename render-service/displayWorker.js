@@ -18,8 +18,12 @@ const path = require("path");
 const WebSocket = require("ws");
 const { InteractionSession } = require("./session");
 const { RenderPool } = require("./renderPool");
-const { AssetPublisher, derivePrefix, enabled: r2Enabled, publicRoot, publishFonts } = require("./assets");
+const { AssetPublisher, derivePrefix, enabled: r2Enabled, publicRoot, publishFonts, publishCelebrations } = require("./assets");
 const FONT_DIR = process.env.MANGO_FONT_DIR || "/usr/local/share/fonts/mangodisplay";
+/* the Roku channel's celebration art, baked into the image (Dockerfile)
+ * and published under <root>/celebrations/ for clients that cannot
+ * bundle it (Echo Show, 2026-10-27) */
+const CELEBRATION_DIR = process.env.MANGO_CELEBRATION_DIR || "/usr/local/share/mangodisplay/celebrations";
 
 /* The layout space is the device's own resolution (Dave, 2026-09-02): the
  * portal is opened at exactly the pixels the TV shows, so text is
@@ -71,17 +75,26 @@ class DisplayWorker {
   applyOrientation(orientation) {
     const o = parseInt(orientation, 10) || 0;
     const rotation = o === 1 || o === 90 ? 90 : o === 2 || o === 270 ? 270 : 0;
-    const portrait = rotation !== 0;
+    const turned = rotation !== 0;
+    /* The canvas is the screen the device reports, AS REPORTED, so the
+     * picture fills it (Dave, 2026-10-27): an Echo Show mounted portrait
+     * says 1080x1920 and gets a portrait layout with nothing set. The old
+     * code normalised every report to landscape and needed the
+     * orientation setting to turn it - true only for Roku / Apple TV,
+     * which always report landscape, and for those nothing changes here.
+     * The orientation setting keeps its real meaning: the screen is
+     * mounted turned relative to what it reports (a TV on its side), so
+     * the layout is the reported size swapped and the device rotates. */
     const dev = this.deviceOut || { w: 1920, h: 1080 };
-    const long = Math.max(dev.w, dev.h);
-    const short = Math.min(dev.w, dev.h);
+    const w = turned ? dev.h : dev.w;
+    const h = turned ? dev.w : dev.h;
     const next = {
       rotation,
       /* the layout space: the device's own pixels */
-      canvasW: portrait ? short : long,
-      canvasH: portrait ? long : short,
-      outW: portrait ? short : long,
-      outH: portrait ? long : short,
+      canvasW: w,
+      canvasH: h,
+      outW: w,
+      outH: h,
     };
     const d = this.display;
     const changed = Object.keys(next).some((k) => d[k] !== next[k]);
@@ -99,7 +112,8 @@ class DisplayWorker {
       outH: opts.outH || 1080,
       rotation: 0,
     };
-    /* the device reports its own resolution in landscape; rotation swaps
+    /* the device's own screen as it reports it (landscape for Roku and
+     * Apple TV, portrait for a portrait-mounted Echo Show); rotation swaps
      * the working geometry but this stays as reported */
     this.deviceOut = { w: this.display.outW, h: this.display.outH };
     /* canvasW/H (the layout space) are set by applyOrientation */
@@ -163,6 +177,7 @@ class DisplayWorker {
     /* once per process; a display's first publish waits for it so its
      * manifest never names a fontBase with nothing behind it */
     if (r2Enabled() && fs.existsSync(FONT_DIR)) await publishFonts(FONT_DIR);
+    if (r2Enabled() && fs.existsSync(CELEBRATION_DIR)) await publishCelebrations(CELEBRATION_DIR);
     /* what the bucket already holds for this display, so the reaper can
      * prune art left behind by earlier processes (best effort) */
     const seeded = await this.publisher.seedFromRemote().catch(() => 0);

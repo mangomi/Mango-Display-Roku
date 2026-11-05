@@ -22,6 +22,11 @@ const ENVS = {
     controlBase: "https://roku-control-test.mangodisplay.com",
     // the screen's code package (apl-package.js)
     aplPackageBase: "https://rokuassets.mangodisplay.com/test/echo/apl/",
+    // "Mango Display Test" on the company developer account
+    skillId: "amzn1.ask.skill.9d53ff8a-88ee-48c1-bb87-3c8b9427918f",
+    // the old test skill on a personal account, until Dave's Echo has the
+    // new one; nothing that ships uses it
+    alsoAccepts: ["amzn1.ask.skill.ccb7fdb4-ecce-462b-965b-f01016ff42b8"],
   },
   production: {
     name: "production",
@@ -29,11 +34,10 @@ const ENVS = {
     setupHost: "app.mangodisplay.com",
     controlBase: "https://roku-control.mangodisplay.com",
     aplPackageBase: "https://rokuassets.mangodisplay.com/prod/echo/apl/",
+    // "Mango Display" on the company developer account, the public skill
+    skillId: "amzn1.ask.skill.117359b3-7ca0-4ca7-929f-c748c96fe8b9",
+    alsoAccepts: [],
   },
 };
 
-module.exports = {
-  ...ENVS[process.env.MANGO_ENV === "production" ? "production" : "test"],
-  // one skill, whose development and live stages each call their own Lambda
-  skillId: "amzn1.ask.skill.ccb7fdb4-ecce-462b-965b-f01016ff42b8",
-};
+module.exports = ENVS[process.env.MANGO_ENV === "production" ? "production" : "test"];

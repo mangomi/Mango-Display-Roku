@@ -49,3 +49,22 @@ test("launching on an unclaimed Echo says what the code is for; the 5s check sta
   const tick = await handler(req({ type: "Alexa.Presentation.APL.UserEvent", arguments: ["pair"] }));
   assert.strictEqual(tick.response.outputSpeech, undefined);
 });
+
+test("each environment has its own skill; production accepts only the public one", () => {
+  const load = (mango) => {
+    const file = require.resolve("../env");
+    const saved = process.env.MANGO_ENV, cached = require.cache[file];
+    delete require.cache[file];
+    if (mango) process.env.MANGO_ENV = mango; else delete process.env.MANGO_ENV;
+    const e = require("../env");
+    if (saved === undefined) delete process.env.MANGO_ENV; else process.env.MANGO_ENV = saved;
+    delete require.cache[file];
+    if (cached) require.cache[file] = cached;
+    return e;
+  };
+  const prod = load("production"), testEnv = load();
+  assert.strictEqual(prod.skillId, "amzn1.ask.skill.117359b3-7ca0-4ca7-929f-c748c96fe8b9");
+  assert.strictEqual(testEnv.skillId, "amzn1.ask.skill.9d53ff8a-88ee-48c1-bb87-3c8b9427918f");
+  assert.deepStrictEqual(prod.alsoAccepts, []);
+  assert.ok(!prod.skillId.includes("ccb7fdb4"));
+});

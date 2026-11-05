@@ -44,7 +44,7 @@ function respond({ directives = [], speech, reprompt, end } = {}) {
 function forThisSkill(envelope) {
   const app = (envelope.session && envelope.session.application) ||
     (envelope.context && envelope.context.System && envelope.context.System.application);
-  return !!app && app.applicationId === env.skillId;
+  return !!app && (app.applicationId === env.skillId || env.alsoAccepts.includes(app.applicationId));
 }
 
 function supportsApl(envelope) {

@@ -18,7 +18,9 @@
             "dashboard",
             "family",
             "chores"
-          ]
+          ],
+          "smallIconUri": "file://assets/images/icon-108.png",
+          "largeIconUri": "file://assets/images/icon-512.png"
         },
         "en-CA": {
           "name": "Mango Display",
@@ -36,7 +38,9 @@
             "dashboard",
             "family",
             "chores"
-          ]
+          ],
+          "smallIconUri": "file://assets/images/icon-108.png",
+          "largeIconUri": "file://assets/images/icon-512.png"
         }
       },
       "isAvailableWorldwide": false,

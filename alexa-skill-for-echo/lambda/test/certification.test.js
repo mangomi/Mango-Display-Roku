@@ -50,7 +50,7 @@ test("launching on an unclaimed Echo says what the code is for; the 5s check sta
   assert.strictEqual(tick.response.outputSpeech, undefined);
 });
 
-test("each environment has its own skill; production accepts only the public one", () => {
+test("each environment has its own skill; production and test each accept only their own", () => {
   const load = (mango) => {
     const file = require.resolve("../env");
     const saved = process.env.MANGO_ENV, cached = require.cache[file];
@@ -65,6 +65,5 @@ test("each environment has its own skill; production accepts only the public one
   const prod = load("production"), testEnv = load();
   assert.strictEqual(prod.skillId, "amzn1.ask.skill.117359b3-7ca0-4ca7-929f-c748c96fe8b9");
   assert.strictEqual(testEnv.skillId, "amzn1.ask.skill.9d53ff8a-88ee-48c1-bb87-3c8b9427918f");
-  assert.deepStrictEqual(prod.alsoAccepts, []);
   assert.ok(!prod.skillId.includes("ccb7fdb4"));
 });

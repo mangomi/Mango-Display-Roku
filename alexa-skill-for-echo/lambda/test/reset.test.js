@@ -66,7 +66,8 @@ test("a deploy with new screen code rebuilds the screen at the next heartbeat; t
   for (const old of ["0123456789ab", undefined]) {
     const d = (await beat(old)).response.directives[0];
     assert.strictEqual(d.type, "Alexa.Presentation.APL.RenderDocument", String(old));
-    assert.deepStrictEqual(d.document.import.map((i) => i.version), [code]);
+    assert.strictEqual(d.document.import[0].version, code);
+    assert.strictEqual(d.document.import[1].name, "mangoscreen");
   }
   const same = (await beat(code)).response;
   assert.ok(!same.directives || same.directives.length === 0);

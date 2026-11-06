@@ -22,6 +22,17 @@ const ENVS = {
     controlBase: "https://roku-control-test.mangodisplay.com",
     // the screen's code package (apl-package.js)
     aplPackageBase: "https://rokuassets.mangodisplay.com/test/echo/apl/",
+    // where whole screens go as files (screen-file.js)
+    screenFiles: {
+      bucket: "mango-echo-assets",
+      prefix: "test/echo/screens/",
+      base: "https://rokuassets.mangodisplay.com/test/echo/screens/",
+    },
+    // photo lists, and the short addresses that read them (photo-links/)
+    photos: {
+      prefix: "test/echo/photos/",
+      base: "https://7rfishgdiifutn7y2cv4rtgcma0mbugo.lambda-url.us-east-1.on.aws/",
+    },
     // "Mango Display Test" on the company developer account
     skillId: "amzn1.ask.skill.9d53ff8a-88ee-48c1-bb87-3c8b9427918f",
   },
@@ -36,6 +47,11 @@ const ENVS = {
       bucket: "mango-echo-assets",
       prefix: "prod/echo/screens/",
       base: "https://rokuassets.mangodisplay.com/prod/echo/screens/",
+    },
+    // photo lists, and the short addresses that read them (photo-links/)
+    photos: {
+      prefix: "prod/echo/photos/",
+      base: "https://iiqqujq5ieqlive3gsxqyj5ol40wvhop.lambda-url.us-east-1.on.aws/",
     },
     // "Mango Display" on the company developer account, the public skill
     skillId: "amzn1.ask.skill.117359b3-7ca0-4ca7-929f-c748c96fe8b9",

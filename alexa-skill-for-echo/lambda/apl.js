@@ -180,8 +180,7 @@ function displayView(vp, display) {
   // a calendar's scrolling cells leave the overlay list for its slots
   // (calendar-slots.js), so the other overlays keep their numbers - and
   // their ids - whatever month is shown
-  // and a long photo list is cut to what a screen can carry
-  const pages = slideshow.fitPhotoLists((manifest.pages || []).map(calSlots.separate));
+  const pages = (manifest.pages || []).map(calSlots.separate);
   const canvas = manifest.canvas || { width: 1920, height: 1080 };
   const place = placement(canvas, vp);
   // the hash busts the Echo's image cache only when the pixels changed
@@ -199,8 +198,6 @@ function displayView(vp, display) {
   // cycles is layout; the list itself is handed over in place.
   const stable = (k, v) => {
     if (k === "sample" || k === "textRect" || k === "checked") return undefined;
-    // ... except a list too long for a reply: a change is a new screen
-    if (k === "images" && slideshow.isLongList(v)) return crypto.createHash("sha1").update(v.join("|")).digest("hex");
     if (k === "images" && Array.isArray(v)) return new Set(v).size > 1;
     return v;
   };
@@ -304,21 +301,12 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume, li
     "${mmLayout}", "${mmPageUrls}", "${mmCur}", "${mmDiagLoads}", ssArg, aplPackage.screenCode(), "${mmCalKey}"];
   let pending = overrides;
   const L = listsOf(pages, overrides);
-  // each distinct photo list once, on the root (pages sharing a
-  // background would otherwise carry it twice)
-  const photoLists = [];
-  const photoList = (mids) => {
-    const k = JSON.stringify(mids);
-    let n = photoLists.findIndex((l) => l.k === k);
-    if (n < 0) n = photoLists.push({ k, mids }) - 1;
-    return "${mmPh" + n + "}";
-  };
   const items = [];
   pages.forEach((page, i) => {
     const ov = overlays.pageOverlays(page, {
       place, canvas, assetBase, vp, pageIndex: i, refreshArgs, major: paired.major, minor: paired.minor,
       states: touch.applyOverrides(page, pending).states, overrides: pending, resume: ssWas,
-      listIndex: (item) => L.index(i, item), photoList,
+      listIndex: (item) => L.index(i, item),
     }, i);
     const held = touch.applyOverrides(page, pending);
     const layerItems = [...ov.under];
@@ -353,7 +341,6 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume, li
       // skill, to learn whether the Echo fires Image onLoad
       { name: "mmDiagLoads", value: 0 },
     ].concat(ssKeys.map((k) => ({ name: k, value: ssWas.has(k) ? ssWas.get(k) : 0 })))
-      .concat(photoLists.map((l, n) => ({ name: "mmPh" + n, value: l.mids })))
       .concat(pagesMod.rootBinds(pages, cur, manifest.gestures)).concat(L.binds),
     // the fixed code comes from the package (apl-package.js), or is
     // written into the screen when it is off; the screen adds only what
@@ -382,6 +369,18 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume, li
 function inlinePackage() {
   const c = aplPackage.contents();
   return { layouts: c.layouts, resources: c.resources };
+}
+
+/** The photo list files this display needs saved (overlay-slideshow.js). */
+function photoFiles(vp, display) {
+  const view = displayView(vp, display);
+  const out = [];
+  view.pages.forEach((page, p) => ((page && page.overlays) || []).forEach((o, oi) => {
+    if (!o || (o.type !== "slideshow" && o.type !== "background")) return;
+    const f = slideshow.listFile(o, { place: view.place, canvas: view.canvas, vp, assetBase: display.assetBase, pageIndex: p, idPrefix: "p" + p + "o" + oi });
+    if (f) out.push(f);
+  }));
+  return out;
 }
 
 /** Every checkbox a page carries: its own targets and the boxes riding
@@ -441,7 +440,7 @@ function inPlaceUpdate(vp, display, paired, overrides, busy, shown) {
       if (id) cmds.push({ type: "SetValue", componentId: touch.boxId(p, id), property: "mmTicked", value: held.states[i] === true });
     });
     ((page && page.overlays) || []).forEach((o, oi) => {
-      if (o && (o.type === "slideshow" || o.type === "background") && !slideshow.isLongList(o.images)) {
+      if (o && (o.type === "slideshow" || o.type === "background")) {
         cmds.push(...slideshow.updateCommands(o, { place: view.place, canvas: view.canvas, vp, idPrefix: "p" + p + "o" + oi }));
       }
     });
@@ -499,4 +498,4 @@ function busyCommands(on) {
 }
 
 module.exports = {
-  fittedScreen, MAX_SCREEN_BYTES, LITE, LITE_NAMES, viewportDp, placement, pairingScreen, displayScreen, busyCommands, inPlaceUpdate, displayView };
+  fittedScreen, MAX_SCREEN_BYTES, LITE, LITE_NAMES, viewportDp, placement, pairingScreen, displayScreen, busyCommands, inPlaceUpdate, displayView, photoFiles };

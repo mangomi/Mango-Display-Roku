@@ -145,8 +145,7 @@ test("a new random photo list for an image widget updates in place, not a whole 
   assert.ok(up, "photo list change is contents");
   const set = (prop) => up.commands.find((c) => c.componentId === "p0o0ss" && c.property === prop);
   assert.deepStrictEqual(set("mmSsN").value, 4);
-  assert.deepStrictEqual(set("mmSsUrls").value.map((m) => set("mmSsPre").value + m + set("mmSsSuf").value),
-    ["https://x/q.jpg", "https://x/r.jpg", "https://x/s.jpg", "https://x/t.jpg"]);
+  assert.ok(!JSON.stringify(up).includes("x/q.jpg"), "the list stays in its file");
   // but a widget that stops or starts cycling is a layout change
   const lone = JSON.parse(JSON.stringify(before));
   lone.manifest.pages[0].overlays = [ss(["https://x/a.jpg", "https://x/a.jpg"])];
@@ -164,7 +163,7 @@ test("a whole new screen resumes each slideshow at the next photo (the Roku's st
   assert.strictEqual(bind(d, "mmSsIw44p0"), 1);
   const box = JSON.stringify(rootOf(d).items[0]);
   assert.match(box, /"mmIdx":2/);
-  assert.match(box, /"mmFirst":"https:\/\/x\/c\.jpg"/);
+  assert.match(box, /"mmFirst":"[^"]+\/2\.jpg"/);
   // the loop keeps the number on the root through the screen's MmSsKeep
   const keep = d.document.commands.MmSsKeep.commands[0];
   assert.deepStrictEqual([keep.componentId, keep.property, keep.when], ["mmRoot", "mmSsIw44p0", "${mmK == 'mmSsIw44p0'}"]);

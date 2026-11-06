@@ -40,15 +40,19 @@ function split(directive) {
   return { json, version, key: env.screenFiles.prefix + version + ".json", reply };
 }
 
-/** Saves the file (the SDK comes with the Lambda runtime). */
-async function save(key, json) {
-  if (uploaded.has(key)) return;
+/** Saves a file to the bucket (the SDK comes with the Lambda runtime; only
+ * the Lambda saves, so tests and local runs do not). `listFile`: a photo list,
+ * replaced in place and cached briefly; a screen never changes. */
+async function save(key, json, listFile = false) {
+  const stamp = key + "#" + crypto.createHash("sha1").update(json).digest("hex");
+  if (uploaded.has(stamp) || !process.env.AWS_LAMBDA_FUNCTION_NAME) return;
   const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
   await new S3Client({}).send(new PutObjectCommand({
-    Bucket: env.screenFiles.bucket, Key: key, Body: json,
-    ContentType: "application/json", CacheControl: "public, max-age=31536000, immutable",
+    Bucket: env.screenFiles.bucket, Key: key, Body: json, ContentType: "application/json",
+    CacheControl: listFile ? "public, max-age=30" : "public, max-age=31536000, immutable",
   }));
-  uploaded.add(key);
+  if (listFile) for (const u of uploaded) if (u.startsWith(key + "#")) uploaded.delete(u);
+  uploaded.add(stamp);
 }
 
 module.exports = { split, save, NAME };

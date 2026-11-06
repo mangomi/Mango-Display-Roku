@@ -14,14 +14,19 @@ const display = (images, version = 4) => ({
   assetBase: "https://a/", version,
 });
 
-test("a 200-photo display: the file carries every photo and the reply stays tiny", () => {
-  const f = screenFile.split(apl.displayScreen(vp, display(list(1)), paired, ""));
+test("a 200-photo display: no photo address in the file or the reply; the lists are saved apart", () => {
+  const d = display(list(1));
+  const f = screenFile.split(apl.displayScreen(vp, d, paired, ""));
   assert.ok(JSON.stringify(f.reply).length < 3000, JSON.stringify(f.reply).length + " bytes");
   const file = JSON.parse(f.json);
   assert.strictEqual(f.reply.document.mainTemplate.items[0].type, "MmScreen");
   assert.ok(file.layouts.MmScreen.items[0].items[0].id === "mmRoot");
   assert.ok(file.commands.MmSsKeep);
-  assert.ok(f.json.includes("&o=" + 199 * 104729), "the last photo");
+  assert.ok(!f.json.includes("icloud"));
+  assert.ok(f.json.length < 20000, f.json.length + " bytes");
+  const saved = apl.photoFiles(vp, d);
+  assert.strictEqual(saved.length, 3);
+  assert.ok(saved.every((x) => JSON.parse(x.json).urls.length === 200 && x.key.startsWith("prod/echo/photos/")));
   const imp = f.reply.document.import;
   assert.deepStrictEqual(imp.map((i) => i.name), ["mango", "mangoscreen"]);
   assert.strictEqual(imp[1].source, "https://rokuassets.mangodisplay.com/prod/echo/screens/" + f.version + ".json");
@@ -34,10 +39,14 @@ test("the same screen is the same file", () => {
   assert.strictEqual(a.version, b.version);
 });
 
-test("a tick stays a small live update; a changed long list is a new screen", () => {
+test("a new photo list, of any length, is a tiny live update and never a rebuild", () => {
   const shown = (x) => { const v = apl.displayView(vp, x); return { layout: v.layout, url: v.urls.join("|"), cal: v.calKey }; };
-  const up = apl.inPlaceUpdate(vp, display(list(1), 5), paired, "", false, shown(display(list(1))));
-  assert.ok(up, "the same list stays in place");
+  const up = apl.inPlaceUpdate(vp, display(list(9, 20000), 5), paired, "", false, shown(display(list(1))));
+  assert.ok(up, "no rebuild");
   assert.ok(JSON.stringify(up).length < 5000, JSON.stringify(up).length + " bytes");
-  assert.strictEqual(apl.inPlaceUpdate(vp, display(list(9), 5), paired, "", false, shown(display(list(1)))), null);
+  assert.ok(!JSON.stringify(up).includes("icloud"));
+  // the saved list is the new one, at the same address
+  const before = apl.photoFiles(vp, display(list(1)))[0], after = apl.photoFiles(vp, display(list(9)))[0];
+  assert.strictEqual(after.key, before.key);
+  assert.notStrictEqual(after.json, before.json);
 });

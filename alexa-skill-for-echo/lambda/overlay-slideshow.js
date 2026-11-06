@@ -16,7 +16,8 @@
 // onLoad never showed at all (2026-10-27) - so onLoad only shortens the
 // wait, and nothing's visibility depends on it. The state lives on the slideshow's container:
 //
-//   mmSsUrls   the photo list (mmSsPre + each + mmSsSuf: see affixes)
+//   mmSsBase   where the photos are: mmSsBase + number + ".jpg"
+//   mmSsN      how many there are
 //   mmSsIdx    the photo shown or loading
 //   mmSsFront  "A" | "B": the Image on show
 //   mmSsLoaded which Image last finished loading ("A" | "B" | "")
@@ -29,15 +30,22 @@
 //
 // The loop, the two Images and every transition are the package's
 // MmSlideshow layout (apl-package.js); a screen carries one instance per
-// widget with its place, its settings and its photo list. The list is a
-// root variable (ctx.photoList, apl.js), so pages sharing a background
-// send its photos once.
+// widget with its place, its settings and its photo count.
+//
+// The photo list never travels to the Echo. A widget's photos have short
+// addresses (photo-links/index.js redirects <base><number>.jpg to that
+// photo in the latest list), and the skill saves each new list to a file
+// that service reads. So a list of any length costs the screen nothing and
+// a new one takes effect at the next photo, with no rebuild (Dave's design,
+// 2026-11-06; three lists of 200 iCloud URLs had made a 260 KB screen). A
+// list that changes order simply gives a different photo for that number.
 //
 // Photos can be ~3000px originals. The Roku caps decode at the widget
 // size (loadWidth); here the device decodes whatever it is sent, so
 // Unsplash URLs ask the image CDN for the widget's size instead.
 
 const { EASE } = require("./pages");
+const crypto = require("crypto");
 const env = require("./env");
 
 const DEFAULT_INTERVAL_S = 60;
@@ -80,67 +88,6 @@ function sized(url, wPx, hPx, cropToFill) {
   u.searchParams.set("fit", cropToFill ? "crop" : "clip");
   u.searchParams.delete("crop"); // centred, like the portal's cover
   return u.toString();
-}
-
-/** Splits URLs into their shared start and end and what differs between
- * them: { pre, mids, suf }. A photo list from one source repeats a long
- * query string on every URL; sent once, 30 Unsplash photos shrink from
- * ~9 KB to ~2 KB of the document. */
-function affixes(urls) {
-  let pre = urls[0];
-  for (const u of urls) while (!u.startsWith(pre)) pre = pre.slice(0, -1);
-  const rest = urls.map((u) => u.slice(pre.length));
-  let suf = rest[0];
-  for (const u of rest) while (!u.endsWith(suf)) suf = suf.slice(1);
-  return { pre, mids: rest.map((u) => u.slice(0, u.length - suf.length)), suf };
-}
-
-// A long photo list is the one thing in a display that can outgrow Alexa's
-// screen cap on its own: 200 signed iCloud URLs are ~90 KB, and three such
-// widgets made a 260 KB screen the Echo refused, leaving it on "loading"
-// (2026-11-06). So a screen carries a window of each list, within
-// LIST_BYTES (and a share of ALL_LISTS_BYTES when there are many widgets).
-// The window moves on each day, so the whole album still comes round. The
-// Roku and Apple TV read the full list themselves and have no such cap.
-const LIST_BYTES = 12000;
-const ALL_LISTS_BYTES = 40000;
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** `images`, or a window of them within `budget` bytes of document. */
-function photoWindow(images, budget, day) {
-  const urls = images.filter((u) => typeof u === "string" && u);
-  if (urls.length < 3) return images;
-  const { pre, mids, suf } = affixes(urls);
-  const cost = (m) => m.length + 3; // the quotes and comma
-  if (mids.reduce((n, m) => n + cost(m), 0) + pre.length + suf.length <= budget) return images;
-  const out = [];
-  let used = pre.length + suf.length;
-  const start = day % urls.length;
-  for (let k = 0; k < urls.length; k++) {
-    const i = (start + k) % urls.length;
-    used += cost(mids[i]);
-    if (used > budget && out.length >= 2) break;
-    out.push(urls[i]);
-  }
-  return out;
-}
-
-/** A list too long to hand to a running screen in a reply: when it changes,
- * the screen is rebuilt as a new file instead. */
-const isLongList = (images) => !!env.screenFiles && Array.isArray(images) && images.join("").length > 8000;
-
-/** The pages with every photo list cut down to what a screen can carry. */
-function fitPhotoLists(pages, now = Date.now()) {
-  if (env.screenFiles) return pages; // the screen is a file: nothing to fit (screen-file.js)
-  const isList = (o) => o && (o.type === "slideshow" || o.type === "background") && Array.isArray(o.images);
-  const n = pages.reduce((c, p) => c + ((p && p.overlays) || []).filter(isList).length, 0);
-  if (!n) return pages;
-  const budget = Math.min(LIST_BYTES, Math.floor(ALL_LISTS_BYTES / n));
-  const day = Math.floor(now / DAY_MS);
-  return pages.map((p) => (!p || !Array.isArray(p.overlays) ? p : {
-    ...p,
-    overlays: p.overlays.map((o) => (isList(o) ? { ...o, images: photoWindow(o.images, budget, day) } : o)),
-  }));
 }
 
 /** The commands that bring Image `x` in over `y` (component ids) with the
@@ -190,20 +137,32 @@ function photos(cfg, ctx) {
   return { r, urls, cycles: new Set(urls).size > 1 };
 }
 
+/** Where a widget's photos are. Hard to guess, like the display's own asset
+ * address it is derived from. */
+function photoId(cfg, ctx) {
+  const key = resumeKey(cfg, ctx.pageIndex, ctx.idPrefix);
+  return crypto.createHash("sha256").update([ctx.assetBase, key, ctx.vp && ctx.vp.w, ctx.vp && ctx.vp.h].join("|")).digest("hex").slice(0, 32);
+}
+const photoBase = (cfg, ctx) => env.photos.base + photoId(cfg, ctx) + "/";
+
+/** The list file for a widget that cycles (the skill saves it), or null. */
+function listFile(cfg, ctx) {
+  const ph = photos(cfg, ctx);
+  if (!ph || !ph.cycles) return null;
+  return { key: env.photos.prefix + photoId(cfg, ctx) + ".json", json: JSON.stringify({ urls: ph.urls }) };
+}
+
 /** A new photo list for a slideshow already on screen (apl.js
- * inPlaceUpdate). An image widget fed from a random source gets a fresh
- * list on every render - every calendar swipe - so the list is contents,
- * not layout: hand it over and let the loop carry on, instead of a whole
- * new screen (which blinked everything and restarted the slideshow). A
- * lone photo that changed is set directly. */
+ * inPlaceUpdate). The list itself is in its file, read at the next photo;
+ * the screen only needs the new count. An image widget fed from a random
+ * source gets a fresh list on every render, so this must stay this small.
+ * A lone photo that changed is set directly. */
 function updateCommands(cfg, ctx) {
   const ph = photos(cfg, ctx);
   if (!ph) return [];
   const p = ctx.idPrefix;
   if (!ph.cycles) return [{ type: "SetValue", componentId: p + "ssA", property: "source", value: ph.urls[0] }];
-  const { pre, mids, suf } = affixes(ph.urls);
-  const set = (property, value) => ({ type: "SetValue", componentId: p + "ss", property, value });
-  return [set("mmSsPre", pre), set("mmSsUrls", mids), set("mmSsSuf", suf), set("mmSsN", ph.urls.length)];
+  return [{ type: "SetValue", componentId: p + "ss", property: "mmSsN", value: ph.urls.length }];
 }
 
 /** The root variable that keeps this slideshow's photo number, so a whole
@@ -232,7 +191,7 @@ function build(cfg, ctx) {
   const last = ctx.resume && ctx.resume.get(key);
   const start = ph.cycles && Number.isInteger(last) ? (last + 1) % ph.urls.length : 0;
   const { r, urls, cycles } = ph;
-  const { pre, mids, suf } = affixes(urls);
+  const base = cycles ? photoBase(cfg, ctx) : "";
   const s = Number(cfg.intervalSeconds);
   const intervalMs = Math.max(MIN_INTERVAL_S, Number.isFinite(s) && s > 0 ? s : DEFAULT_INTERVAL_S) * 1000;
   const brightness = typeof cfg.brightness === "number" ? cfg.brightness : 1;
@@ -243,8 +202,8 @@ function build(cfg, ctx) {
     mmId: p + "ss", mmKey: key, mmW: r2(r.w), mmH: r2(r.h),
     // one photo sent as a pair: nothing to cycle (and re-setting an Image
     // to the URL it already shows would never fire onLoad)
-    mmCyc: cycles, mmFirst: urls[start],
-    mmPre: pre, mmUrls: ctx.photoList ? ctx.photoList(mids) : mids, mmSuf: suf, mmN: urls.length, mmIdx: start,
+    mmCyc: cycles, mmFirst: cycles ? base + start + ".jpg" : urls[0],
+    mmBase: base, mmN: urls.length, mmIdx: start,
     mmMs: intervalMs, mmTr: String(cfg.transition || "fade"),
     ...(cfg.cropToFill === true ? { mmCrop: true } : {}),
     ...(cfg.pageColor ? { mmColor: cfg.pageColor } : {}),
@@ -288,7 +247,7 @@ function layouts() {
     type: "Sequential", when: "${mmSsNext == '" + x + "'}",
     commands: [
       set("mmSsLoaded", ""), set("mmSsFailed", false),
-      { type: "SetValue", componentId: ids[x], property: "source", value: "${mmSsPre + mmSsUrls[mmSsIdx] + mmSsSuf}" },
+      { type: "SetValue", componentId: ids[x], property: "source", value: "${mmSsBase + mmSsIdx + '.jpg?t=' + Math.floor(utcTime / 3600000)}" },
       waitFor(x),
       // loaded, or the wait ran out: switch; only a reported failure skips
       { type: "Sequential", when: "${!mmSsFailed}", commands: [
@@ -317,14 +276,12 @@ function layouts() {
   };
   return {
     MmSlideshow: {
-      parameters: ["mmId", "mmKey", "mmW", "mmH", "mmCyc", "mmFirst", "mmPre", "mmUrls", "mmSuf", "mmN", "mmIdx", "mmMs", "mmTr",
+      parameters: ["mmId", "mmKey", "mmW", "mmH", "mmCyc", "mmFirst", "mmBase", "mmN", "mmIdx", "mmMs", "mmTr",
         { name: "mmCrop", default: false }, { name: "mmColor", default: "" }, { name: "mmDim", default: 0 }],
       items: [{
         type: "Container",
         bind: [
-          { name: "mmSsPre", value: "${mmPre}" },
-          { name: "mmSsUrls", value: "${mmUrls}" },
-          { name: "mmSsSuf", value: "${mmSuf}" },
+          { name: "mmSsBase", value: "${mmBase}" },
           { name: "mmSsN", value: "${mmN}" },
           { name: "mmSsIdx", value: "${mmIdx}" },
           { name: "mmSsFront", value: "A" },
@@ -346,4 +303,4 @@ function layouts() {
   };
 }
 
-module.exports = { build, layouts, updateCommands, resumeKey, parseResume, sized, affixes, swapCommands, fitPhotoLists, isLongList, LIST_BYTES };
+module.exports = { build, layouts, updateCommands, resumeKey, parseResume, sized, swapCommands, listFile, photoId };

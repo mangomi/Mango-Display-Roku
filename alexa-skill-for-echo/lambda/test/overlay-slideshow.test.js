@@ -7,7 +7,8 @@
 // only record (they run in fast mode on the Echo); the loop does the rest.
 const test = require("node:test");
 const assert = require("node:assert");
-const { build, sized, affixes } = require("../overlay-slideshow");
+const { build, sized, listFile, photoId, updateCommands } = require("../overlay-slideshow");
+const env = require("../env");
 const overlays = require("../overlays");
 const apl = require("../apl");
 const { ev, inflate } = require("./inflate");
@@ -17,6 +18,9 @@ const vp = { w: 960, h: 540, pw: 1920, ph: 1080 };
 const ctx = { place: apl.placement(canvas, vp), canvas, vp, idPrefix: "p0o2" };
 const photos = (n) => Array.from({ length: n }, (_, i) => "https://example.com/photo" + i + ".jpg");
 const widget = (extra) => ({ type: "slideshow", rect: { x: 100, y: 200, w: 800, h: 600 }, images: photos(3), intervalSeconds: 10, ...extra });
+
+// the short address of a photo (photo-links/)
+const addr = (i, cfg = widget()) => env.photos.base + photoId(cfg, ctx) + "/" + i + ".jpg";
 
 function walk(node, fn) {
   if (Array.isArray(node)) node.forEach((n) => walk(n, fn));
@@ -30,7 +34,7 @@ function walk(node, fn) {
  * container, what its expressions see, its drawn children. */
 function expand(cfg) {
   const [inst] = build(cfg, ctx);
-  const { node: box, scope: vars } = inflate(inst, { mmDiagLoads: 0 });
+  const { node: box, scope: vars } = inflate(inst, { mmDiagLoads: 0, utcTime: 7200000, Math });
   const E = (v) => ev(v, vars);
   return { inst, box, vars, E, items: box.items.filter((c) => c.when === undefined || E(c.when)) };
 }
@@ -53,7 +57,7 @@ function machine(cfg) {
         const id = evalv(c.componentId);
         if (id === box.id) vars[c.property] = evalv(c.value);
         else if (id === "mmRoot") continue; // the load count (apl.js)
-        else props[id][c.property] = evalv(c.value);
+        else props[id][c.property] = c.property === "source" ? String(evalv(c.value)).replace(/\?t=\d+$/, "") : evalv(c.value);
       } else if (c.type === "AnimateItem") {
         for (const v of c.value) if (v.property === "opacity") props[evalv(c.componentId)].opacity = v.to;
       }
@@ -94,25 +98,25 @@ function machine(cfg) {
 test("cycles A/B; the old photo stays up until the new one loads", () => {
   const m = machine(widget());
   // the first photo shows at once - no waiting on onLoad to be visible
-  assert.strictEqual(m.shown(), photos(3)[0]);
+  assert.strictEqual(m.shown(), addr(0));
   m.rest();
-  assert.strictEqual(m.shown(), photos(3)[0]);
+  assert.strictEqual(m.shown(), addr(0));
   m.tick();
-  assert.strictEqual(m.props[m.B].source, photos(3)[1]);
-  assert.strictEqual(m.shown(), photos(3)[0], "no empty frame while loading");
+  assert.strictEqual(m.props[m.B].source, addr(1));
+  assert.strictEqual(m.shown(), addr(0), "no empty frame while loading");
   m.load(m.B);
   m.rest();
-  assert.strictEqual(m.shown(), photos(3)[1]);
+  assert.strictEqual(m.shown(), addr(1));
   m.tick();
-  assert.strictEqual(m.props[m.A].source, photos(3)[2]);
-  assert.strictEqual(m.shown(), photos(3)[1]);
+  assert.strictEqual(m.props[m.A].source, addr(2));
+  assert.strictEqual(m.shown(), addr(1));
   m.load(m.A);
   m.rest();
-  assert.strictEqual(m.shown(), photos(3)[2]);
+  assert.strictEqual(m.shown(), addr(2));
   m.tick();
   m.load(m.B);
   m.rest();
-  assert.strictEqual(m.shown(), photos(3)[0], "wraps around");
+  assert.strictEqual(m.shown(), addr(0), "wraps around");
 });
 
 test("a failed photo is skipped, the old one stays", () => {
@@ -121,12 +125,12 @@ test("a failed photo is skipped, the old one stays", () => {
   m.tick();
   m.fail(m.B);
   m.rest();
-  assert.strictEqual(m.shown(), photos(3)[0]);
+  assert.strictEqual(m.shown(), addr(0));
   m.tick();
-  assert.strictEqual(m.props[m.B].source, photos(3)[2]);
+  assert.strictEqual(m.props[m.B].source, addr(2));
   m.load(m.B);
   m.rest();
-  assert.strictEqual(m.shown(), photos(3)[2]);
+  assert.strictEqual(m.shown(), addr(2));
 });
 
 test("an Echo that never reports onLoad still changes photos, after at most 3s", () => {
@@ -135,10 +139,10 @@ test("an Echo that never reports onLoad still changes photos, after at most 3s",
   m.tick();
   const polls = m.rest(); // B never reports a load
   assert.strictEqual(polls, 3000 / 250 - 1, "waited up to 3s in 250ms polls");
-  assert.strictEqual(m.shown(), photos(3)[1], "switched anyway");
+  assert.strictEqual(m.shown(), addr(1), "switched anyway");
   m.tick();
   m.rest();
-  assert.strictEqual(m.shown(), photos(3)[2], "and keeps cycling");
+  assert.strictEqual(m.shown(), addr(2), "and keeps cycling");
 });
 
 test("every transition leaves exactly the new photo visible", () => {
@@ -149,7 +153,7 @@ test("every transition leaves exactly the new photo visible", () => {
       m.tick();
       m.load(m.loading());
       m.rest();
-      assert.strictEqual(m.shown(), photos(3)[i % 3], transition);
+      assert.strictEqual(m.shown(), addr(i % 3), transition);
       assert.strictEqual([m.A, m.B].filter((x) => m.props[x].opacity > 0).length, 1, transition);
     }
   }
@@ -227,16 +231,46 @@ test("Unsplash photos are asked for at the widget's device pixels", () => {
   assert.strictEqual(new URL(sized("https://images.unsplash.com/p", 10, 10, false)).searchParams.get("fit"), "clip");
   assert.strictEqual(sized("https://example.com/a.jpg?w=1", 10, 10, true), "https://example.com/a.jpg?w=1");
   // device px = dp * pw / w: an 800x600 canvas rect at half scale on a 2x screen
-  const [box] = build(widget({ images: ["https://images.unsplash.com/a", "https://images.unsplash.com/b"] }), ctx);
-  assert.strictEqual(new URL(box.mmFirst).searchParams.get("w"), "800");
+  const file = listFile(widget({ images: ["https://images.unsplash.com/a", "https://images.unsplash.com/b"] }), ctx);
+  assert.strictEqual(new URL(JSON.parse(file.json).urls[0]).searchParams.get("w"), "800");
 });
 
-test("URLs travel as a shared start and end plus what differs", () => {
-  const urls = ["https://x.com/p/abc.jpg?q=1", "https://x.com/p/aXY.jpg?q=1", "https://x.com/p/abc.jpg?q=1"];
-  const { pre, mids, suf } = affixes(urls);
-  assert.deepStrictEqual([pre, mids, suf], ["https://x.com/p/a", ["bc", "XY", "bc"], ".jpg?q=1"]);
-  assert.deepStrictEqual(mids.map((m) => pre + m + suf), urls);
-  assert.deepStrictEqual(affixes(["u", "u"]), { pre: "u", mids: ["", ""], suf: "" });
+test("a photo's address changes each hour, so the Echo's picture memory cannot keep an old photo for ever", () => {
+  const m = machine(widget());
+  const { box } = expand(widget());
+  const flat = JSON.stringify(box.onMount);
+  assert.ok(flat.includes("mmSsBase + mmSsIdx + '.jpg?t=' + Math.floor(utcTime / 3600000)"));
+  assert.ok(m);
+});
+
+test("no photo address travels to the Echo, however long the list", () => {
+  const big = (n) => widget({ images: Array.from({ length: n }, (_, i) => "https://cvws.icloud-content.com/B/" + i + "/p.jpg?sig=" + i) });
+  const size = (n) => JSON.stringify(build(big(n), ctx)).length;
+  assert.strictEqual(size(20000) - size(200), "20000".length - "200".length);
+  assert.ok(!JSON.stringify(build(big(200), ctx)).includes("icloud"));
+  const file = listFile(big(200), ctx);
+  assert.strictEqual(JSON.parse(file.json).urls.length, 200);
+  assert.strictEqual(file.key, env.photos.prefix + photoId(big(200), ctx) + ".json");
+  // a new list on a running screen: only the count
+  const up = updateCommands(big(5000), ctx);
+  assert.deepStrictEqual(up, [{ type: "SetValue", componentId: "p0o2ss", property: "mmSsN", value: 5000 }]);
+});
+
+test("backgrounds use short addresses too; one photo sent twice stays a plain still", () => {
+  const bg = { type: "background", images: photos(3) };
+  const [inst] = build(bg, ctx);
+  assert.strictEqual(inst.mmFirst, env.photos.base + photoId(bg, ctx) + "/0.jpg");
+  assert.ok(listFile(bg, ctx));
+  const same = { type: "background", images: ["https://x/a.jpg", "https://x/a.jpg"] };
+  assert.strictEqual(listFile(same, ctx), null);
+  assert.strictEqual(build(same, ctx)[0].mmFirst, "https://x/a.jpg");
+});
+
+test("each widget and each display has its own list address", () => {
+  const a = photoId({ widgetSettingId: 1 }, { ...ctx, pageIndex: 0, assetBase: "https://a/" });
+  assert.notStrictEqual(a, photoId({ widgetSettingId: 2 }, { ...ctx, pageIndex: 0, assetBase: "https://a/" }));
+  assert.notStrictEqual(a, photoId({ widgetSettingId: 1 }, { ...ctx, pageIndex: 0, assetBase: "https://b/" }));
+  assert.strictEqual(a, photoId({ widgetSettingId: 1, images: ["new"] }, { ...ctx, pageIndex: 0, assetBase: "https://a/" }), "a new list keeps its address");
 });
 
 test("size: a 30-photo background and slideshow on each of 5 pages stays well under Alexa's limit", () => {
@@ -244,7 +278,7 @@ test("size: a 30-photo background and slideshow on each of 5 pages stays well un
     "https://images.unsplash.com/photo-16" + String(i).padStart(11, "0") + "-a1b2c3d4e5f6?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w1MjQ0NTd8MHwxfHNlYXJjaHwxfHxuYXR1cmV8ZW58MHx8fHwxNzAwMDAwMDAwfDA&ixlib=rb-4.0.3&q=80&w=3000");
   const one = JSON.stringify(build({ type: "background", images: unsplash, intervalSeconds: 30, brightness: 0.8, pageColor: "#000000", transition: "slideleft" }, ctx));
   // the loop and transitions are the package's: the screen carries the
-  // settings and the URLs, ~5 bytes a photo (affixes)
+  // settings and an address, never the photos
   assert.ok(one.length < 1200, "one 30-photo slideshow is " + one.length + " bytes");
   const page = (i) => ({
     image: "display_p" + i + ".png",
@@ -255,30 +289,8 @@ test("size: a 30-photo background and slideshow on each of 5 pages stays well un
   });
   const d = apl.displayScreen(vp, { manifest: { canvas, pages: [0, 1, 2, 3, 4].map(page) }, assetBase: "https://assets/", version: 1 }, { major: "1", minor: "2" });
   const bytes = JSON.stringify(d).length;
-  // ten 30-photo slideshows, far beyond a real display; the list is the
-  // same everywhere, so each size of it travels once (was ~78 KB)
+  // ten 30-photo slideshows, far beyond a real display
   assert.ok(bytes < 25000, "screen is " + bytes + " bytes");
-});
-
-test("a long photo list is cut to a window that fits; a short one is untouched", () => {
-  const { fitPhotoLists, LIST_BYTES } = require("../overlay-slideshow");
-  const icloud = (n) => Array.from({ length: n }, (_, k) => "https://cvws.icloud-content.com/B/" + k + "x".repeat(420) + (k * 7919) + "/photo.jpg?sig=" + k);
-  const page = (images) => ({ overlays: [{ type: "slideshow", images }, { type: "gif" }] });
-  const long = icloud(200);
-  const short = ["https://a/1.jpg", "https://a/2.jpg", "https://a/3.jpg"];
-  const out = fitPhotoLists([page(long), page(short)], 0)
-  const cut = out[0].overlays[0].images;
-  assert.ok(cut.length >= 2 && cut.length < 200);
-  assert.ok(cut.join("").length < LIST_BYTES * 2);
-  assert.strictEqual(out[1].overlays[0].images, short);
-  assert.strictEqual(out[0].overlays[1].type, "gif");
-  // the same all day, a different stretch of the album the next day
-  const day = 24 * 60 * 60 * 1000;
-  assert.deepStrictEqual(fitPhotoLists([page(long), page(short)], day / 2)[0].overlays[0].images, cut);
-  assert.notDeepStrictEqual(fitPhotoLists([page(long), page(short)], day)[0].overlays[0].images, cut);
-  // never fewer than a pair, however tight
-  const many = Array.from({ length: 40 }, () => page(long));
-  assert.ok(fitPhotoLists(many, 0)[0].overlays[0].images.length >= 2);
 });
 
 test("the production display that was refused now fits the cap", () => {

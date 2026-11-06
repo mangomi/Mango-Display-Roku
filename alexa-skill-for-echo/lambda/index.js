@@ -81,28 +81,18 @@ async function showDisplay(e, held, launch, quiet, overrides, shown) {
 /** A ready display as an in-place update of the screen that is up (same
  * layout: no blink) or else as a whole new screen. */
 async function screenFor(e, d, overrides, shown) {
+  // the photos' latest lists, before anything on screen can ask for them
+  await Promise.all(apl.photoFiles(e.vp, d).map((f) => screenFile.save(f.key, f.json, true)));
   const update = apl.inPlaceUpdate(e.vp, d, e, overrides, d.busy, shown);
   console.log("[Mango] " + e.code + " display v" + d.version + ", " + (d.manifest.pages || []).length + " page(s)" +
     (update ? " in place" : " new screen") + (d.manifest.showPage != null ? ", edit on page " + d.manifest.showPage : "") +
     (overrides ? ", holding presses " + overrides : ""));
   if (update) return update;
-  if (env.screenFiles) {
-    const f = screenFile.split(apl.displayScreen(e.vp, d, e, overrides, d.busy, shown && shown.page, shown && shown.ss));
-    await screenFile.save(f.key, f.json);
-    console.log("[Mango] " + e.code + " screen file " + f.version + ": " + Math.round(f.json.length / 1024) + " KB, reply " +
-      Math.round(JSON.stringify(f.reply).length / 1024) + " KB");
-    return f.reply;
-  }
-  // a whole new screen starts on the page the old one was showing; one
-  // over Alexa's size cap is sent lighter rather than refused (apl.js)
-  const fit = apl.fittedScreen(e.vp, d, e, overrides, d.busy, shown && shown.page, shown && shown.ss);
-  if (fit.level > 0) {
-    const kb = (n) => Math.round(n / 1024) + " KB";
-    console.log("[Mango] " + e.code + " SCREEN TOO BIG v" + d.version + ": " + kb(fit.fullBytes) + " full, sent " +
-      kb(fit.bytes) + " as '" + apl.LITE_NAMES[fit.level] + "' (cap " + kb(apl.MAX_SCREEN_BYTES) + ")" +
-      (fit.bytes > apl.MAX_SCREEN_BYTES ? " - STILL OVER, the Echo may refuse it" : ""));
-  }
-  return fit.directive;
+  const f = screenFile.split(apl.displayScreen(e.vp, d, e, overrides, d.busy, shown && shown.page, shown && shown.ss));
+  await screenFile.save(f.key, f.json);
+  console.log("[Mango] " + e.code + " screen file " + f.version + ": " + Math.round(f.json.length / 1024) + " KB, reply " +
+    Math.round(JSON.stringify(f.reply).length / 1024) + " KB");
+  return f.reply;
 }
 
 /** One pairing iteration. `onScreen`: the pairing screen is already up;

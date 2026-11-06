@@ -94,6 +94,49 @@ function affixes(urls) {
   return { pre, mids: rest.map((u) => u.slice(0, u.length - suf.length)), suf };
 }
 
+// A long photo list is the one thing in a display that can outgrow Alexa's
+// screen cap on its own: 200 signed iCloud URLs are ~90 KB, and three such
+// widgets made a 260 KB screen the Echo refused, leaving it on "loading"
+// (2026-11-06). So a screen carries a window of each list, within
+// LIST_BYTES (and a share of ALL_LISTS_BYTES when there are many widgets).
+// The window moves on each day, so the whole album still comes round. The
+// Roku and Apple TV read the full list themselves and have no such cap.
+const LIST_BYTES = 12000;
+const ALL_LISTS_BYTES = 40000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** `images`, or a window of them within `budget` bytes of document. */
+function photoWindow(images, budget, day) {
+  const urls = images.filter((u) => typeof u === "string" && u);
+  if (urls.length < 3) return images;
+  const { pre, mids, suf } = affixes(urls);
+  const cost = (m) => m.length + 3; // the quotes and comma
+  if (mids.reduce((n, m) => n + cost(m), 0) + pre.length + suf.length <= budget) return images;
+  const out = [];
+  let used = pre.length + suf.length;
+  const start = day % urls.length;
+  for (let k = 0; k < urls.length; k++) {
+    const i = (start + k) % urls.length;
+    used += cost(mids[i]);
+    if (used > budget && out.length >= 2) break;
+    out.push(urls[i]);
+  }
+  return out;
+}
+
+/** The pages with every photo list cut down to what a screen can carry. */
+function fitPhotoLists(pages, now = Date.now()) {
+  const isList = (o) => o && (o.type === "slideshow" || o.type === "background") && Array.isArray(o.images);
+  const n = pages.reduce((c, p) => c + ((p && p.overlays) || []).filter(isList).length, 0);
+  if (!n) return pages;
+  const budget = Math.min(LIST_BYTES, Math.floor(ALL_LISTS_BYTES / n));
+  const day = Math.floor(now / DAY_MS);
+  return pages.map((p) => (!p || !Array.isArray(p.overlays) ? p : {
+    ...p,
+    overlays: p.overlays.map((o) => (isList(o) ? { ...o, images: photoWindow(o.images, budget, day) } : o)),
+  }));
+}
+
 /** The commands that bring Image `x` in over `y` (component ids) with the
  * widget's transition, one `when` per transition on mmTr; the rect in dp
  * is mmW x mmH. `xOnTop`: x is B. */
@@ -297,4 +340,4 @@ function layouts() {
   };
 }
 
-module.exports = { build, layouts, updateCommands, resumeKey, parseResume, sized, affixes, swapCommands };
+module.exports = { build, layouts, updateCommands, resumeKey, parseResume, sized, affixes, swapCommands, fitPhotoLists, LIST_BYTES };

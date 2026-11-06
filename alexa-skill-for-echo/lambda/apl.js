@@ -180,7 +180,8 @@ function displayView(vp, display) {
   // a calendar's scrolling cells leave the overlay list for its slots
   // (calendar-slots.js), so the other overlays keep their numbers - and
   // their ids - whatever month is shown
-  const pages = (manifest.pages || []).map(calSlots.separate);
+  // and a long photo list is cut to what a screen can carry
+  const pages = slideshow.fitPhotoLists((manifest.pages || []).map(calSlots.separate));
   const canvas = manifest.canvas || { width: 1920, height: 1080 };
   const place = placement(canvas, vp);
   // the hash busts the Echo's image cache only when the pixels changed

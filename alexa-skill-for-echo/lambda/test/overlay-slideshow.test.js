@@ -259,3 +259,36 @@ test("size: a 30-photo background and slideshow on each of 5 pages stays well un
   // same everywhere, so each size of it travels once (was ~78 KB)
   assert.ok(bytes < 25000, "screen is " + bytes + " bytes");
 });
+
+test("a long photo list is cut to a window that fits; a short one is untouched", () => {
+  const { fitPhotoLists, LIST_BYTES } = require("../overlay-slideshow");
+  const icloud = (n) => Array.from({ length: n }, (_, k) => "https://cvws.icloud-content.com/B/" + k + "x".repeat(420) + (k * 7919) + "/photo.jpg?sig=" + k);
+  const page = (images) => ({ overlays: [{ type: "slideshow", images }, { type: "gif" }] });
+  const long = icloud(200);
+  const short = ["https://a/1.jpg", "https://a/2.jpg", "https://a/3.jpg"];
+  const out = fitPhotoLists([page(long), page(short)], 0)
+  const cut = out[0].overlays[0].images;
+  assert.ok(cut.length >= 2 && cut.length < 200);
+  assert.ok(cut.join("").length < LIST_BYTES * 2);
+  assert.strictEqual(out[1].overlays[0].images, short);
+  assert.strictEqual(out[0].overlays[1].type, "gif");
+  // the same all day, a different stretch of the album the next day
+  const day = 24 * 60 * 60 * 1000;
+  assert.deepStrictEqual(fitPhotoLists([page(long), page(short)], day / 2)[0].overlays[0].images, cut);
+  assert.notDeepStrictEqual(fitPhotoLists([page(long), page(short)], day)[0].overlays[0].images, cut);
+  // never fewer than a pair, however tight
+  const many = Array.from({ length: 40 }, () => page(long));
+  assert.ok(fitPhotoLists(many, 0)[0].overlays[0].images.length >= 2);
+});
+
+test("the production display that was refused now fits the cap", () => {
+  const apl = require("../apl");
+  const url = (k) => "https://cvws.icloud-content.com/B/" + k + "y".repeat(400) + "/p.jpg?o=" + (k * 104729) + "&s=" + k;
+  const list = Array.from({ length: 200 }, (_, k) => url(k));
+  const overlay = (w) => ({ type: "slideshow", page: 0, widgetSettingId: w, rect: { x: 0, y: 0, w: 500, h: 500 }, images: list.map((u) => u + w), intervalSeconds: 45, transition: "fade" });
+  const manifest = { canvas: { width: 1080, height: 1920 }, pages: [{ image: "p.png", imageHash: "a", regions: [], overlays: [overlay(1), overlay(2), overlay(3)] }] };
+  const vp = { w: 1080, h: 1920, pw: 1080, ph: 1920 };
+  const fit = apl.fittedScreen(vp, { manifest, assetBase: "https://a/", version: 4 }, { major: "2", minor: "62122" }, "");
+  assert.ok(fit.bytes <= apl.MAX_SCREEN_BYTES, fit.bytes + " bytes");
+  assert.strictEqual(fit.level, 0);
+});

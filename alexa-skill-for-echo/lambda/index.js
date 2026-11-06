@@ -29,6 +29,7 @@ const env = require("./env");
 const identity = require("./identity");
 const backend = require("./backend");
 const apl = require("./apl");
+const screenFile = require("./screen-file");
 const aplPackage = require("./apl-package");
 
 function respond({ directives = [], speech, reprompt, end } = {}) {
@@ -66,7 +67,7 @@ async function showDisplay(e, held, launch, quiet, overrides, shown) {
   const d = await backend.fetchDisplay(e, held, launch);
   if (d.state === "ready") {
     if (quiet && held !== null && String(d.version) === String(held)) return respond();
-    return respond({ directives: [screenFor(e, d, overrides, shown)] });
+    return respond({ directives: [await screenFor(e, d, overrides, shown)] });
   }
   if (d.state === "unpaired") {
     // removed in the webapp: same code, pairing screen again
@@ -79,12 +80,19 @@ async function showDisplay(e, held, launch, quiet, overrides, shown) {
 
 /** A ready display as an in-place update of the screen that is up (same
  * layout: no blink) or else as a whole new screen. */
-function screenFor(e, d, overrides, shown) {
+async function screenFor(e, d, overrides, shown) {
   const update = apl.inPlaceUpdate(e.vp, d, e, overrides, d.busy, shown);
   console.log("[Mango] " + e.code + " display v" + d.version + ", " + (d.manifest.pages || []).length + " page(s)" +
     (update ? " in place" : " new screen") + (d.manifest.showPage != null ? ", edit on page " + d.manifest.showPage : "") +
     (overrides ? ", holding presses " + overrides : ""));
   if (update) return update;
+  if (env.screenFiles) {
+    const f = screenFile.split(apl.displayScreen(e.vp, d, e, overrides, d.busy, shown && shown.page, shown && shown.ss));
+    await screenFile.save(f.key, f.json);
+    console.log("[Mango] " + e.code + " screen file " + f.version + ": " + Math.round(f.json.length / 1024) + " KB, reply " +
+      Math.round(JSON.stringify(f.reply).length / 1024) + " KB");
+    return f.reply;
+  }
   // a whole new screen starts on the page the old one was showing; one
   // over Alexa's size cap is sent lighter rather than refused (apl.js)
   const fit = apl.fittedScreen(e.vp, d, e, overrides, d.busy, shown && shown.page, shown && shown.ss);
@@ -200,7 +208,7 @@ async function onTouch(e, args) {
     return respond();
   }
   console.log("[Mango] touch " + kind + ": result v" + d.version + " in " + (Date.now() - started) + "ms");
-  return respond({ directives: [screenFor(e, d, overrides, { layout, url: pageUrls, page: current, ss, cal })] });
+  return respond({ directives: [await screenFor(e, d, overrides, { layout, url: pageUrls, page: current, ss, cal })] });
 }
 
 exports.handler = async (envelope) => {

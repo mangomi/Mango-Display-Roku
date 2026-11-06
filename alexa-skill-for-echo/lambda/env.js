@@ -31,6 +31,12 @@ const ENVS = {
     setupHost: "app.mangodisplay.com",
     controlBase: "https://roku-control.mangodisplay.com",
     aplPackageBase: "https://rokuassets.mangodisplay.com/prod/echo/apl/",
+    // where whole screens go as files (screen-file.js)
+    screenFiles: {
+      bucket: "mango-echo-assets",
+      prefix: "prod/echo/screens/",
+      base: "https://rokuassets.mangodisplay.com/prod/echo/screens/",
+    },
     // "Mango Display" on the company developer account, the public skill
     skillId: "amzn1.ask.skill.117359b3-7ca0-4ca7-929f-c748c96fe8b9",
   },

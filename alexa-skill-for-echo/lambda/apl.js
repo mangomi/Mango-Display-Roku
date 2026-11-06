@@ -199,6 +199,8 @@ function displayView(vp, display) {
   // cycles is layout; the list itself is handed over in place.
   const stable = (k, v) => {
     if (k === "sample" || k === "textRect" || k === "checked") return undefined;
+    // ... except a list too long for a reply: a change is a new screen
+    if (k === "images" && slideshow.isLongList(v)) return crypto.createHash("sha1").update(v.join("|")).digest("hex");
     if (k === "images" && Array.isArray(v)) return new Set(v).size > 1;
     return v;
   };
@@ -439,7 +441,7 @@ function inPlaceUpdate(vp, display, paired, overrides, busy, shown) {
       if (id) cmds.push({ type: "SetValue", componentId: touch.boxId(p, id), property: "mmTicked", value: held.states[i] === true });
     });
     ((page && page.overlays) || []).forEach((o, oi) => {
-      if (o && (o.type === "slideshow" || o.type === "background")) {
+      if (o && (o.type === "slideshow" || o.type === "background") && !slideshow.isLongList(o.images)) {
         cmds.push(...slideshow.updateCommands(o, { place: view.place, canvas: view.canvas, vp, idPrefix: "p" + p + "o" + oi }));
       }
     });

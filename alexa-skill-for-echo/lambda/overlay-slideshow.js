@@ -38,6 +38,7 @@
 // Unsplash URLs ask the image CDN for the widget's size instead.
 
 const { EASE } = require("./pages");
+const env = require("./env");
 
 const DEFAULT_INTERVAL_S = 60;
 const MIN_INTERVAL_S = 3;
@@ -124,8 +125,13 @@ function photoWindow(images, budget, day) {
   return out;
 }
 
+/** A list too long to hand to a running screen in a reply: when it changes,
+ * the screen is rebuilt as a new file instead. */
+const isLongList = (images) => !!env.screenFiles && Array.isArray(images) && images.join("").length > 8000;
+
 /** The pages with every photo list cut down to what a screen can carry. */
 function fitPhotoLists(pages, now = Date.now()) {
+  if (env.screenFiles) return pages; // the screen is a file: nothing to fit (screen-file.js)
   const isList = (o) => o && (o.type === "slideshow" || o.type === "background") && Array.isArray(o.images);
   const n = pages.reduce((c, p) => c + ((p && p.overlays) || []).filter(isList).length, 0);
   if (!n) return pages;
@@ -340,4 +346,4 @@ function layouts() {
   };
 }
 
-module.exports = { build, layouts, updateCommands, resumeKey, parseResume, sized, affixes, swapCommands, fitPhotoLists, LIST_BYTES };
+module.exports = { build, layouts, updateCommands, resumeKey, parseResume, sized, affixes, swapCommands, fitPhotoLists, isLongList, LIST_BYTES };

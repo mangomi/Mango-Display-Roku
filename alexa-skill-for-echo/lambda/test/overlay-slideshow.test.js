@@ -292,15 +292,3 @@ test("size: a 30-photo background and slideshow on each of 5 pages stays well un
   // ten 30-photo slideshows, far beyond a real display
   assert.ok(bytes < 25000, "screen is " + bytes + " bytes");
 });
-
-test("the production display that was refused now fits the cap", () => {
-  const apl = require("../apl");
-  const url = (k) => "https://cvws.icloud-content.com/B/" + k + "y".repeat(400) + "/p.jpg?o=" + (k * 104729) + "&s=" + k;
-  const list = Array.from({ length: 200 }, (_, k) => url(k));
-  const overlay = (w) => ({ type: "slideshow", page: 0, widgetSettingId: w, rect: { x: 0, y: 0, w: 500, h: 500 }, images: list.map((u) => u + w), intervalSeconds: 45, transition: "fade" });
-  const manifest = { canvas: { width: 1080, height: 1920 }, pages: [{ image: "p.png", imageHash: "a", regions: [], overlays: [overlay(1), overlay(2), overlay(3)] }] };
-  const vp = { w: 1080, h: 1920, pw: 1080, ph: 1920 };
-  const fit = apl.fittedScreen(vp, { manifest, assetBase: "https://a/", version: 4 }, { major: "2", minor: "62122" }, "");
-  assert.ok(fit.bytes <= apl.MAX_SCREEN_BYTES, fit.bytes + " bytes");
-  assert.strictEqual(fit.level, 0);
-});

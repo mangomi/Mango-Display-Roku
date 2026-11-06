@@ -245,41 +245,12 @@ function pageImages(view, i) {
   ];
 }
 
-// The size cap. Alexa refuses a screen (an APL RenderDocument) that is too
-// big, and the Echo then simply keeps the screen it has - the "frozen"
-// display Dave saw with a 245 KB screen (2026-10-28); 95 KB was taken.
-// Pictures do not count (the Echo fetches them by URL), only the
-// document: where everything goes and what each touch does. ~120 KB is
-// the working limit; aim under it with room for the rest of the reply.
-const MAX_SCREEN_BYTES = 110000;
-// Lighter screens, tried in turn while a screen is over the cap; each
-// level includes the ones before it.
-const LITE = {
-  NONE: 0,
-  NO_EFFECTS: 1, // display effects (snow, confetti...) off
-  STILL: 2, // no moving widgets either: the page pictures only
-};
-const LITE_NAMES = ["full", "no effects", "still pictures"];
-
-/** displayScreen, made lighter step by step (LITE) until it fits the cap.
- * Returns { directive, level, bytes, fullBytes }; `level` is the LITE
- * level used, the last one even if it is still too big. */
-function fittedScreen(vp, display, paired, overrides, busy, current, resume, maxBytes = MAX_SCREEN_BYTES) {
-  let fullBytes = 0;
-  for (let level = LITE.NONE; ; level++) {
-    const directive = displayScreen(vp, display, paired, overrides, busy, current, resume, level);
-    const bytes = JSON.stringify(directive).length;
-    if (level === LITE.NONE) fullBytes = bytes;
-    if (bytes <= maxBytes || level === LITE.STILL) return { directive, level, bytes, fullBytes };
-  }
-}
-
 /** Every page as its own layer (pages.js turns between them on the Echo),
  * each: under-overlays, the page image, over-overlays, its touch layer.
  * Display-wide effects fly above all pages, the busy spinner above that.
  * `overrides` are presses the screen sent back that a render may not
  * reflect yet (touch.js); `current` is the page the screen was on. */
-function displayScreen(vp, display, paired, overrides, busy, current, resume, lite = 0) {
+function displayScreen(vp, display, paired, overrides, busy, current, resume) {
   const view = displayView(vp, display);
   const { manifest, assetBase, pages, place, canvas } = view;
   // each slideshow's photo number lives on the root and rides every
@@ -311,8 +282,7 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume, li
     const held = touch.applyOverrides(page, pending);
     const layerItems = [...ov.under];
     if (page && page.image) layerItems.push(...pageImages(view, i));
-    // LITE.STILL: the moving parts go, the page pictures stay
-    if (lite < LITE.STILL) layerItems.push(...ov.over, ...calSlots.build(page, i, place));
+    layerItems.push(...ov.over, ...calSlots.build(page, i, place));
     const tctx = {
       page, pageIndex: i, place, assetBase, states: held.states, gestures: manifest.gestures,
       refreshArgs, major: paired.major, minor: paired.minor, listIndex: (item) => L.index(i, item),
@@ -322,7 +292,7 @@ function displayScreen(vp, display, paired, overrides, busy, current, resume, li
     items.push(pagesMod.layer(i, cur, vp, layerItems, { ...g, binds: (g.binds || []).concat(touch.pageBinds(tctx)) }));
   });
   const held = allHeld(pages, overrides);
-  if (lite < LITE.NO_EFFECTS) items.push(...effects.displayEffects(manifest.effects || [], { place, canvas, assetBase, vp }));
+  items.push(...effects.displayEffects(manifest.effects || [], { place, canvas, assetBase, vp }));
   // busy spinner on top of everything, centred on the screen; a swipe
   // shows the calendar's own instead (touch.js), never both
   items.push(spinnerRef(vp.w / 2, vp.h / 2, place.len(SPINNER_PX), "${mmBusy && mmSwiping == '' ? 1 : 0}"));
@@ -498,4 +468,4 @@ function busyCommands(on) {
 }
 
 module.exports = {
-  fittedScreen, MAX_SCREEN_BYTES, LITE, LITE_NAMES, viewportDp, placement, pairingScreen, displayScreen, busyCommands, inPlaceUpdate, displayView, photoFiles };
+  viewportDp, placement, pairingScreen, displayScreen, busyCommands, inPlaceUpdate, displayView, photoFiles };

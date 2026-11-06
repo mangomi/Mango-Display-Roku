@@ -49,7 +49,7 @@
         "CA"
       ],
       "category": "ORGANIZERS_AND_ASSISTANTS",
-      "testingInstructions": "Requires an Echo Show 15 or Echo Show 21 and a Mango Display account (login below). 1) Say \"Alexa, open Mango Display\": the screen shows a device code. 2) In any browser, sign in at app.mangodisplay.com with the test login, add a display and enter the code. Within about 10 seconds the display appears on the Echo. 3) Tap a task's checkbox: it ticks and stays ticked. Swipe up or down on the calendar: the month changes. 4) The display stays on the screen by design, as an always-on family display, until you say \"Alexa, stop\". Saying \"Alexa, open Mango Display\" brings it back without a new code."
+      "testingInstructions": "Requires an Echo Show 15 or Echo Show 21 and a Mango Display account (login below). 1) Say \"Alexa, open Mango Display\": the screen shows a device code. 2) In any browser, sign in at app.mangodisplay.com with the test login, add a display and enter the code. Within about 10 seconds the display appears on the Echo. 3) Tap a task's checkbox: it ticks and stays ticked. Swipe up or down on the calendar: the month changes. 4) The display stays on the screen by design, as an always-on family display, until you say \"Alexa, stop\". Saying \"Alexa, open Mango Display\" brings it back without a new code. Test login email: az-review@mangodisplay.com"
     },
     "apis": {
       "custom": {
@@ -92,7 +92,12 @@
           "privacyPolicyUrl": "https://mangodisplay.com/mango-display-privacy-policy/",
           "termsOfUseUrl": "https://mangodisplay.com/terms-and-conditions/"
         }
-      }
+      },
+      "allowsPurchases": false,
+      "usesPersonalInfo": true,
+      "isChildDirected": false,
+      "isExportCompliant": true,
+      "containsAds": false
     }
   }
 }

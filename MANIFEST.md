@@ -166,7 +166,7 @@ once as a tall transparent strip and the device does the motion.
 
 Emitted only to devices whose client understands it
 (`NATIVE_SCROLL_PREFIXES` in `render-service/capture.js`: RK, ATV, and
-ET since 2026-10-28, test); every other device receives the same cell as
+ET since 2026-10-28 on test, 2026-11-05 on prod); every other device receives the same cell as
 a `gif` sprite sheet. The sheet is a poor substitute for a tall list: a
 673 px to-do list came out as 15 frames at 16 s each (308 px a step).
 
@@ -178,7 +178,7 @@ The icon's SVG moves its parts with three primitives and the server ships
 each moving part ONCE as a transparent PNG plus exactly that motion, so
 the device animates it every refresh instead of stepping a filmed sheet.
 Emitted only to platforms in `NATIVE_WEATHER_PREFIXES` (capture.js: RK,
-ATV, and ET since 2026-10-28, test) and
+ATV, and ET since 2026-10-28 on test, 2026-11-05 on prod) and
 only for icons that decompose; everything else stays a `gif` sheet.
 - `rect` — the icon box, canvas px. Every layer PNG is the whole box,
   rendered at exactly the output size; draw them all at `rect`, bottom

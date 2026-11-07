@@ -36,7 +36,7 @@ Golden rules:
 |---|---|---|
 | Control endpoint | `roku-control-test.mangodisplay.com` | `roku-control.mangodisplay.com` |
 | ECS service (cluster `roku-render`) | `roku-render` | `roku-render-prod` |
-| Task definition | `roku-render` (1 vCPU / 2 GB, image `latest`) | `roku-render-prod` (2 vCPU / 8 GB, image `prod-<sha>`) |
+| Task definition | `roku-render` (1 vCPU / 2 GB, image `latest`) | `roku-render-prod` (2 vCPU / **16 GB** since 2026-10-21 rev 12, image `prod-<sha>`) |
 | API / portal / socket | `testapi` / `testportal` / `testsocket` (v1.0.5) | `api` / `portal` / `socket` (v1.0.5) |
 | Assets | `mango-roku-assets/test/` | `mango-roku-assets/prod/` — both via `rokuassets.mangodisplay.com` |
 | Ownership table | `roku-display-owner-test` | `roku-display-owner-prod` |
@@ -178,15 +178,28 @@ Quick triage:
   refusing (memory ≥ 85 %, CPU ≥ 70 % for 30 s, 4+ portals booting, or
   20 claims in the last minute). Clean shutdowns release rows; sudden
   deaths recover within a lease.
-- ECS scales on real memory/CPU. **Capacity is CPU-bound: about 20
-  watched displays per 2 vCPU task** (measured 2026-09-07); 14 tasks ≈
-  250. The idle-repaint guard in the service and portal PR #74 lower
-  idle CPU per portal, which is the lever — re-measure with the
-  simulator after each such change.
+- ECS scales out on memory (target 70 %) and CPU (65 %), and scales
+  **in on CPU only** (30 min cooldown; memory scale-in disabled
+  2026-10-21). Why: a scale-out adds an empty task, nothing rebalances,
+  the average drops and a memory scale-in then killed a LOADED task
+  (28-39 portals) every hour or two - a reopen storm each time.
+- **Capacity is memory-bound: ~200 MB per portal, steady state** (the
+  12 h recycle keeps it there). An 8 GB task held ~35 portals before the
+  85 % refusal line; the 16 GB task (2026-10-21) holds ~70. CPU runs at
+  30-40 % except during reopen storms. 14 tasks ≈ 1,000 displays.
 - Simulator: `SIM_DISPLAYS=1` on a **test** task accepts `SIM*` device
   ids; `render-service/sim-devices.js` polls as N devices (task
   definition `roku-sim` runs it on the cluster). Exit code 2 = a double
   owner was seen.
+- Static files the service publishes once per task under the asset root:
+  `fonts/` (Google Fonts for the clients) and, since 2026-10-27,
+  `celebrations/` (the burst art, for the Echo Show). Both come from the
+  image; adding a file = add it to the repo folder and deploy.
+- Which displays run the live portal is `PAINTED_DISPLAYS` on the task
+  definition (prefix list; test `RK,ATV,ET` since 2026-10-27, prod
+  `RK,ATV,ET` since 2026-11-05, revision 15). The native scroll / weather overlay lists are separate and
+  in code (`capture.js` NATIVE_*_PREFIXES): a new platform joins those
+  only once its client draws `scroll` and `motion` overlays.
 - Knobs (env): `OWNERSHIP`, `OWNERSHIP_TABLE`, `RENDER_CONCURRENCY`,
   `REFUSE_*`, `MAX_BOOTING`, `MAX_CLAIMS_PER_MIN`, `HEALTH_STALE_MS`.
 
@@ -194,19 +207,88 @@ Full design, drill results and numbers: `OPS_RUNBOOK_DETAIL.md` §9.
 
 ---
 
-## 5a. Channel changes waiting for the next release (build 5)
+## 5a. Channel releases
 
-Code is on all three branches; households still run **1.0 build 4**
-(uploaded 2026-09-07). Dave's own Roku runs the newer code sideloaded.
+**1.0 build 6** signed 2026-10-23 on Dave's Express
+(`signing/MangoDisplay_1_0_build6_prod.pkg`), SUBMITTED by Dave to the
+PUBLIC channel (880780) on 2026-10-23; LIVE on the Channel Store since 2026-10-28 (Dave). Contents: `c305f78` Connected / Loading your
+display... after pairing; `42e9379` night mode clears the day page's
+checkboxes + a display reset clears effects. Verified by Dave on his
+Express (sideloaded dev channel) the same day. Beta channel (880499,
+still build 4, expires 2027-01-01) left alone per Dave.
+Store state read from the Roku dashboard 2026-10-21: public = 1.0
+build 5 published 2026-09-19.
 
-| Commit | Change | Verified |
+Still queued for build 7:
+
+| Item | What | Notes |
 |---|---|---|
-| `3069143` (2026-09-15) | Checkboxes re-aimed on every in-place refresh, not only on a rebuild (todo dragged / task added elsewhere / backend confirming a tick left boxes where an older render put them; tvOS `0215c47`) | Dave, on his production display: dragged the widget, ticked a task — boxes followed, tick held |
-| (2026-09-16) | Page rotation holds while the remote pointer is on screen, then gives the page one more full dwell before turning (tvOS `690210d`/`170bc4b`) | Compiles and runs on Dave's Roku; behaviour needs a rotating display with the pointer up |
+| Bug: clock/countdown vanish with some Google Fonts | Cabin Sketch downloads fine but the Roku font engine refuses it; a Label whose Font fails to load draws NOTHING, and the channel only falls back to Source Sans Pro when the DOWNLOAD fails, not the load. Dave's RK118583937 lost time and date (2026-09-20); RK332246865 and RK872142153 also use Cabin Sketch. Workaround: pick another font. Fix: load all 60 `fonts/gf` files once on a real Roku via a dev build, list the failures, and make the channel treat those families as unknown (fallback) instead of silent. Dave wants to do this together. | found 2026-09-20 |
+| Accept a ONE-image slideshow/background list | SlideshowOverlay.onConfig returns when images.Count() < 2, so the service (since 2026-09-21) sends a lone photo as a pair of itself with a one-day interval. Build 6 should accept one image and skip the timer; the service can then drop the pair (nativeWidgets lonePhotoAsPair). tvOS has the same guard. | service workaround live first |
+| "Connected. Loading your display..." after pairing | The code screen stayed up for the 10-15 s between the backend claim and the first page (Apple review rejection, 2026-09-25). onPaired now swaps the heading/code for Connected + Loading your display... with the spinner below; startPairing restores the code screen for a re-pair. No fallback text (Dave). | verified on Dave's Express 2026-09-25 (sideloaded c305f78): claim 15:14:15Z, Connected screen up at once, first page 8 s later |
+| Bug: night mode shows the day page's checkboxes | InteractionLayer's `targets` field is an assocarray; the night page sends `targets: []` (an array) which Roku refuses silently, so onTargets never cleared the boxes. applyPageTargets now clears on anything that is not an assocarray. | fixed on live-portal 2026-10-21, to verify on a Roku |
+| Bug: Santa / leaves keep falling after a display reset | startPairing hid the page slots but left the effect layer (and targets/regions/night) in place, above the pairing screen. It now clears effects, interaction state and night mode. | fixed on live-portal 2026-10-21, to verify on a Roku |
+| Bug: calendar scrolling needs an app restart after enabling it | Under investigation: the render service only films cells the portal's scroll directive has published (`window.mmScrollCells`, pushed when a marquee starts); a settings save re-compiles the directive, so either the capture lands before the marquee starts and nothing re-captures, or a directive gate blocks the live case. Needs a reproduction on test. | open |
+| Poll backoff with jitter + launch delay | planned | |
+| Memory guard | skip new scroll strips when the Roku reports low memory, report the level | planned |
 
-Planned for the same build (not written yet): poll backoff with jitter
-and a launch delay; the memory guard (skip new scroll strips when the
-Roku reports low memory, report the level).
+### Backgrounds: device-drawn, one photo or many (2026-09-21)
+
+Production runs `prod-d4029690` (prod branch d402969 = test 0a61b81;
+approved by Dave 2026-09-21 ~18:50Z after tests on ATV224657483). Every
+page background is a `background` overlay from one image up; the render
+no longer bakes any background; a lone photo (background or image
+widget) is sent as `[url, url]`, `intervalSeconds` 86400, `transition`
+fade, because build 5 / current tvOS start nothing below two images
+(build-6 item: accept one image). The slideshow extractor also carries
+the photo the portal is currently showing (`lastRenderedImage`). Test
+matrix passed on test: multi-photo bg + widget (unchanged), single My
+Files bg, single My Files widget, single URL bg + widget. Roku check:
+Dave's RK118583937 after the deploy.
+
+### Portal recycle (2026-09-28)
+
+A live portal older than `PORTAL_MAX_AGE_MS` (default 12 h) is closed and
+reopened by its worker (paintedWorker `recycleIfOld`): one at a time per
+task, `RECYCLE_SPACING_MS` (2 min) apart, never mid-render or mid-gesture,
+only while a TV is watching. Log line `portal is N.Nh old - recycling it`;
+the re-render is reason `portal recycle` (rank 1: no spinner, no page
+steering). Why: the week-old base task's portals had grown to ~380 MB
+each (fresh: ~170 MB), pinning it at 89% memory and refusing new
+displays. Verified on test 2026-09-28 with a 20 min age: two recycles,
+3 s each, invisible on the tvOS simulator, memory flat.
+Production: `prod-640d6d54` (prod branch 640d6d5 = test 98f812e), rolled
+2026-09-28 ~20:15Z on Dave's conditional go; both tasks fresh at 13-25%
+memory afterwards. First prod recycles due ~08:15Z 2026-09-29.
+To shorten it for a test, register a test task-definition revision with
+`PORTAL_MAX_AGE_MS` and revert afterwards (rev 21 -> 22 that day). The
+staging job deploys the family's NEWEST revision, so never leave a
+revision that names an immutable image at the top of `roku-render`
+(rev 20 named `prod-25b07a5c`; deregistered 2026-09-28).
+
+### Echo Show on production (2026-11-05)
+
+Production runs `prod-61faf53d` (prod branch 61faf53 = PR #7: test
+5080d0c, 3023c35, 515d2b7, 6618bb8 cherry-picked; approved by Dave
+2026-11-05 ahead of the Echo skill's first Amazon submission). Two
+rollouts, each approved on its own: revision 14 (the image, 19:34-19:40Z)
+and revision 15 (`PAINTED_DISPLAYS=RK,ATV,ET`, hand-registered copy of
+14, 19:49-19:56Z). Both re-homed ~167 displays in about six minutes with
+zero refusals afterwards; the 2026-10-23 deploy had taken ~30 minutes to
+settle, so check the refusal rate before rolling. Roku / Apple TV
+unchanged. Rollback: revision 14 keeps the code but drops ET from the
+painted list; revision 13 is the pre-ET image.
+First prod Echo (ET213776685, 2026-11-06 15:33Z): three 503s in 11 s
+(tasks at memory 89% / cpu 100%), then claimed, painted, both pages
+published in 13 s. It stayed on "loading" because display.json was
+275 KB: three iCloud slideshows with `images[200]` of ~450-byte signed
+URLs (the service never caps the list; Roku / tvOS fetch display.json
+directly). Fixed on the Echo side (the Lambda sends a daily window of
+each list); no service change. A Google Calendar whose authorisation
+had expired looked like a stale display: the socket still carried
+weather and quotes, but no `socket/calendar` arrived until Dave
+re-authorised, then three signals landed and were published within a
+second each.
 
 ## 5. Post-production to-do
 
@@ -221,6 +303,7 @@ production; none blocked launch.
 | 4 | Canary display after every portal/service deploy, with an alarm | infra + portal | a portal change that breaks painted mode should page, not wait for a customer |
 | 5 | Portrait "never signalled ready" | portal/service | reproducible with a portrait layout in designer mode; same error a tester's portrait Roku logged — root cause before selling portrait |
 | 6 | ~~Promote portal PR #74~~ merged 2026-09-08, live on test and prod. Next: portal PR #77 (no GIF animation, no photo downloads in painted mode) — team to merge | portal | removes the idle sticker burn and the photo memory balloon at the source |
+| 6b | Portal live-resize gap — **PR opened** (`weather-widget-live-resize`, base test): a live geometry patch never refreshed `renderWidth/renderHeight`, which the sizing passes read first, and the weather icon was sized before its row and without units. Enlarging a weather widget kept a small icon and drew its H/L line below the box until a reload (ATV862575515 v57→v58, 2026-09-16) | portal | team to review/merge; verify by enlarging a weather widget on a live painted display and watching the next manifest |
 | 7 | Shared weather-icon library filmed once | service + channel | removes per-display icon filming and the idle SVG repainting for good |
 | 8 | Confirm the idle-repaint guard's effect on Fargate | test | measured 2× on a Mac; a 20-minute simulator run settles it |
 | 9 | Move the signing password out of git history | repo | Dave deferred; do before the repo is shared more widely |

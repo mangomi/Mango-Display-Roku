@@ -1,0 +1,103 @@
+{
+  "manifest": {
+    "publishingInformation": {
+      "locales": {
+        "en-US": {
+          "name": "Mango Display",
+          "summary": "Keeps your Mango Display calendar, lists and photos on your Echo Show 15 or 21.",
+          "description": "Mango Display turns your Echo Show 15 or Echo Show 21 into an always-on family display showing your calendar, to-do lists, chores, photos, weather and clock.\n\nYou need a Mango Display account. To set up, say \"Alexa, open Mango Display\". The screen shows a code; sign in at app.mangodisplay.com, enter the code, and your display appears. Tick off tasks and swipe through calendar months right on the screen.\n\nYour display stays on the screen until you say \"Alexa, stop\". To have it come back on its own, add \"open Mango Display\" to an Alexa Routine.",
+          "examplePhrases": [
+            "Alexa, open Mango Display",
+            "Alexa, ask Mango Display to show my display",
+            "Alexa, ask Mango Display for help"
+          ],
+          "keywords": [
+            "display",
+            "calendar",
+            "clock",
+            "dashboard",
+            "family",
+            "chores"
+          ],
+          "smallIconUri": "file://assets/images/icon-108.png",
+          "largeIconUri": "file://assets/images/icon-512.png"
+        },
+        "en-CA": {
+          "name": "Mango Display",
+          "summary": "Keeps your Mango Display calendar, lists and photos on your Echo Show 15 or 21.",
+          "description": "Mango Display turns your Echo Show 15 or Echo Show 21 into an always-on family display showing your calendar, to-do lists, chores, photos, weather and clock.\n\nYou need a Mango Display account. To set up, say \"Alexa, open Mango Display\". The screen shows a code; sign in at app.mangodisplay.com, enter the code, and your display appears. Tick off tasks and swipe through calendar months right on the screen.\n\nYour display stays on the screen until you say \"Alexa, stop\". To have it come back on its own, add \"open Mango Display\" to an Alexa Routine.",
+          "examplePhrases": [
+            "Alexa, open Mango Display",
+            "Alexa, ask Mango Display to show my display",
+            "Alexa, ask Mango Display for help"
+          ],
+          "keywords": [
+            "display",
+            "calendar",
+            "clock",
+            "dashboard",
+            "family",
+            "chores"
+          ],
+          "smallIconUri": "file://assets/images/icon-108.png",
+          "largeIconUri": "file://assets/images/icon-512.png"
+        }
+      },
+      "isAvailableWorldwide": false,
+      "distributionCountries": [
+        "US",
+        "CA"
+      ],
+      "category": "ORGANIZERS_AND_ASSISTANTS",
+      "testingInstructions": "Requires an Echo Show 15 or Echo Show 21 and a Mango Display account (login below). 1) Say \"Alexa, open Mango Display\": the screen shows a device code. 2) In any browser, sign in at app.mangodisplay.com with the test login, add a display and enter the code. Within about 10 seconds the display appears on the Echo. 3) Tap a task's checkbox: it ticks and stays ticked. Swipe up or down on the calendar: the month changes. 4) The display stays on the screen by design, as an always-on family display, until you say \"Alexa, stop\". Saying \"Alexa, open Mango Display\" brings it back without a new code. Test login email: az-review@mangodisplay.com"
+    },
+    "apis": {
+      "custom": {
+        "endpoint": {
+          "uri": "arn:aws:lambda:us-east-1:945710099949:function:echo-show-app-prod"
+        },
+        "interfaces": [
+          {
+            "type": "ALEXA_PRESENTATION_APL",
+            "supportedViewports": [
+              {
+                "mode": "HUB",
+                "shape": "RECTANGLE",
+                "minWidth": 1920,
+                "maxWidth": 2560,
+                "minHeight": 1080,
+                "maxHeight": 1440
+              },
+              {
+                "mode": "HUB",
+                "shape": "RECTANGLE",
+                "minWidth": 1080,
+                "maxWidth": 1440,
+                "minHeight": 1920,
+                "maxHeight": 2560
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "manifestVersion": "1.0",
+    "privacyAndCompliance": {
+      "locales": {
+        "en-US": {
+          "privacyPolicyUrl": "https://mangodisplay.com/mango-display-privacy-policy/",
+          "termsOfUseUrl": "https://mangodisplay.com/terms-and-conditions/"
+        },
+        "en-CA": {
+          "privacyPolicyUrl": "https://mangodisplay.com/mango-display-privacy-policy/",
+          "termsOfUseUrl": "https://mangodisplay.com/terms-and-conditions/"
+        }
+      },
+      "allowsPurchases": false,
+      "usesPersonalInfo": true,
+      "isChildDirected": false,
+      "isExportCompliant": true,
+      "containsAds": false
+    }
+  }
+}

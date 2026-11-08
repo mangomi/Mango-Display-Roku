@@ -18,6 +18,8 @@ const ENVS = {
     apiBase: "https://testapi.mangomirror.com/v1.0.5/",
     // shown on the pairing screen - where the user claims the code
     setupHost: "testapp.mangodisplay.com",
+    // spoken in help and fallback - the same site for both environments
+    helpHost: "help.mangodisplay.com",
     // the render service control endpoint (render-service/fleet.js)
     controlBase: "https://roku-control-test.mangodisplay.com",
     // the screen's code package (apl-package.js)
@@ -40,6 +42,7 @@ const ENVS = {
     name: "production",
     apiBase: "https://api.mangomirror.com/v1.0.5/",
     setupHost: "app.mangodisplay.com",
+    helpHost: "help.mangodisplay.com",
     controlBase: "https://roku-control.mangodisplay.com",
     aplPackageBase: "https://rokuassets.mangodisplay.com/prod/echo/apl/",
     // where whole screens go as files (screen-file.js)

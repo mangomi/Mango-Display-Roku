@@ -19,17 +19,41 @@ test("a request for another skill is refused", async () => {
   await assert.rejects(handler(req({ type: "LaunchRequest" }, "amzn1.ask.skill.other")));
 });
 
-test("help explains, asks a question and keeps the session open", async () => {
+const backendSays = (t, body) => {
+  const real = global.fetch;
+  t.after(() => { global.fetch = real; });
+  global.fetch = async () => ({ status: 200, text: async () => body });
+};
+const host = (h) => h.replace(/\./g, " dot ");
+
+test("help on a connected Echo explains, points to the help site, asks a question and keeps listening", async (t) => {
+  backendSays(t, '{"object":{"isActive":true,"major":2,"minor":1}}');
   const { response: r } = await handler(intent("AMAZON.HelpIntent"));
-  assert.match(r.outputSpeech.text, /until you say stop/);
-  assert.match(r.outputSpeech.text, /\?$/);
-  assert.match(r.reprompt.outputSpeech.text, /\?$/);
+  assert.strictEqual(r.outputSpeech.text,
+    "Mango Display keeps your calendar, lists and photos on this screen until you say stop. " +
+    "To change what's on it, sign in at " + host(env.setupHost) + ". " +
+    "For more help, visit help dot mangodisplay dot com. What would you like to do?");
+  assert.strictEqual(r.reprompt.outputSpeech.text, "What would you like to do?");
+  assert.strictEqual(r.shouldEndSession, false);
+  assert.deepStrictEqual(r.directives, []); // the screen stays as it is
+});
+
+test("help while the code shows gives the setup steps", async (t) => {
+  backendSays(t, '{"error":"Mirror not registered"}');
+  const { response: r } = await handler(intent("AMAZON.HelpIntent"));
+  assert.strictEqual(r.outputSpeech.text,
+    "To connect this screen, sign in at " + host(env.setupHost) +
+    " on your phone, tablet, or computer, choose Add New Display, and enter the code you see here. " +
+    "For more help, visit help dot mangodisplay dot com. What would you like to do?");
   assert.strictEqual(r.shouldEndSession, false);
 });
 
-test("fallback says what the skill can do and keeps the session open", async () => {
+test("fallback says what the skill can do, points to the help site and keeps listening", async () => {
   const { response: r } = await handler(intent("AMAZON.FallbackIntent"));
-  assert.match(r.outputSpeech.text, /show my display/);
+  assert.strictEqual(r.outputSpeech.text,
+    "Sorry, Mango Display can't help with that. You can say show my display, or stop to close it. " +
+    "For more help, visit help dot mangodisplay dot com. What would you like to do?");
+  assert.strictEqual(r.reprompt.outputSpeech.text, "You can say show my display, or stop to close it. What would you like to do?");
   assert.strictEqual(r.shouldEndSession, false);
 });
 
@@ -44,7 +68,9 @@ test("launching on an unclaimed Echo says what the code is for; the 5s check sta
   t.after(() => { global.fetch = real; });
   global.fetch = async () => ({ status: 200, text: async () => '{"error":"Mirror not registered"}' });
   const launch = await handler(req({ type: "LaunchRequest" }));
-  assert.match(launch.response.outputSpeech.text, /enter the code/);
+  assert.strictEqual(launch.response.outputSpeech.text,
+    "Welcome to Mango Display. To connect this screen, sign in at " + host(env.setupHost) +
+    " on your phone, tablet, or computer, choose Add New Display, and enter the code you see here.");
   assert.strictEqual(launch.response.directives[0].token, "pairing");
   const tick = await handler(req({ type: "Alexa.Presentation.APL.UserEvent", arguments: ["pair"] }));
   assert.strictEqual(tick.response.outputSpeech, undefined);

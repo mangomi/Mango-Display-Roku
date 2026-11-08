@@ -88,6 +88,17 @@ async function pairingStep(code, screenW, screenH) {
   return { state: "error" };
 }
 
+/** Is this code claimed by a display? Read-only (no saveMirror), for
+ * help, which says different things before and after setup.
+ * true | false | null (could not ask). */
+async function isLinked(code) {
+  const r = await request(env.apiBase + "mirrors/deviceId/" + code);
+  if (!r || !r.json) return null;
+  const obj = r.json.object;
+  if (!obj) return r.json.error ? false : null;
+  return truthy(obj.isActive);
+}
+
 /** Is this Echo still claimed as major/minor? Asked only when the render
  * service says 404 "unknown display", which it also answers for a moment
  * while the fleet hands a display between tasks (fleet.js) - so a 404 is
@@ -185,4 +196,4 @@ async function currentVersion(d) {
   return r && r.status === 200 && r.json ? { version: r.json.version, busy: r.json.busy === true } : null;
 }
 
-module.exports = { stillClaimed, pairingStep, fetchDisplay, currentVersion, interact, waitForNewVersion };
+module.exports = { isLinked, stillClaimed, pairingStep, fetchDisplay, currentVersion, interact, waitForNewVersion };

@@ -106,11 +106,15 @@ async function pairStep(e, onScreen, welcome) {
   if (onScreen) return respond();
   return respond({
     directives: [apl.pairingScreen(e.vp, e.code, false)],
-    ...(welcome ? { speech: "Welcome to Mango Display. To connect this screen, go to " + spokenHost() + " and enter the code you see here." } : {}),
+    ...(welcome ? { speech: "Welcome to Mango Display. " + connectSteps() } : {}),
   });
 }
 
-const spokenHost = () => env.setupHost.replace(/\./g, " dot ");
+const spoken = (host) => host.replace(/\./g, " dot ");
+// the setup steps, as the webapp names them (Dave, 2026-11-08)
+const connectSteps = () => "To connect this screen, sign in at " + spoken(env.setupHost) +
+  " on your phone, tablet, or computer, choose Add New Display, and enter the code you see here.";
+const moreHelp = () => "For more help, visit " + spoken(env.helpHost) + ".";
 
 async function onLaunch(envelope) {
   if (!supportsApl(envelope)) {
@@ -215,16 +219,22 @@ exports.handler = async (envelope) => {
         if (name === "AMAZON.StopIntent" || name === "AMAZON.CancelIntent" || name === "AMAZON.NavigateHomeIntent" ||
             name === "AMAZON.NoIntent") return respond({ end: true });
         if (name === "AMAZON.HelpIntent") {
-          const ask = "Would you like to see your display?";
-          return respond({
-            speech: "Mango Display keeps your calendar, lists and photos on this screen until you say stop. " +
-              "To connect a new screen, enter the code it shows at " + spokenHost() + ". " + ask,
-            reprompt: ask, end: false,
-          });
+          // help ends on a question and keeps listening (certification);
+          // whatever the answer, the screen stays as it is
+          const ask = "What would you like to do?";
+          const linked = await backend.isLinked(echoOf(envelope).code);
+          const about = linked === false ? connectSteps() :
+            "Mango Display keeps your calendar, lists and photos on this screen until you say stop. " +
+            "To change what's on it, sign in at " + spoken(env.setupHost) + ".";
+          return respond({ speech: about + " " + moreHelp() + " " + ask, reprompt: ask, end: false });
         }
         if (name === "AMAZON.FallbackIntent") {
-          const ask = "You can say show my display, or say stop to close it. What would you like to do?";
-          return respond({ speech: "Sorry, Mango Display can't help with that. " + ask, reprompt: ask, end: false });
+          const ask = "You can say show my display, or stop to close it. What would you like to do?";
+          return respond({
+            speech: "Sorry, Mango Display can't help with that. You can say show my display, or stop to close it. " +
+              moreHelp() + " What would you like to do?",
+            reprompt: ask, end: false,
+          });
         }
         return await onLaunch(envelope);
       }

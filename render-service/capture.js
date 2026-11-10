@@ -866,6 +866,7 @@ async function capturePageInner(page, opts) {
 module.exports = {
   openHarness,
   capturePage,
+  portalFrameOf,
   extractPageMeta,
   wireDiagnostics,
   installIdleProbe,

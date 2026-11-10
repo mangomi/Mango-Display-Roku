@@ -26,7 +26,8 @@ const fs = require("fs");
 const path = require("path");
 const { DisplayWorker } = require("./displayWorker");
 const { LivePortal } = require("./livePortal");
-const { capturePage } = require("./capture");
+const { capturePage, portalFrameOf } = require("./capture");
+const nativeWidgets = require("./nativeWidgets");
 
 /* Widgets the DEVICE animates natively from the manifest. A portal clock
  * ticking once a second must never cost a screenshot; the same goes for
@@ -67,6 +68,26 @@ const IDLE_SWEEP_MS = 30000;
 const PORTAL_MAX_AGE_MS = parseInt(process.env.PORTAL_MAX_AGE_MS || String(12 * 3600 * 1000), 10);
 const RECYCLE_SPACING_MS = parseInt(process.env.RECYCLE_SPACING_MS || "120000", 10);
 const recycle = { inFlight: false, lastAt: 0 };
+
+/* iCloud shared-album links are signed for exactly 20 minutes. The portal
+ * refetches an album once its links are 18 minutes old - but only for a
+ * widget on the page being shown, and this portal is parked on whichever
+ * page was captured last. So the worker applies the portal's own rule to
+ * every Apple widget on every page (appleAlbumTick), and publishes the
+ * new links when they arrive. APPLE_ALBUM_WATCH=off is the lever. */
+const APPLE_WATCH = process.env.APPLE_ALBUM_WATCH !== "off";
+const APPLE_REFRESH_MS = 18 * 60 * 1000; /* mainController: minutesDifference >= 18 */
+const APPLE_WATCH_MS = 30000;
+/* a refetch that changed nothing (token being renewed, a failed call) is
+ * not asked for again sooner than this */
+const APPLE_RETRY_MS = 3 * 60 * 1000;
+/* the portal has already emptied the list itself and refetches one slide
+ * later: give it this long before stepping in */
+const APPLE_PORTAL_GRACE_MS = 30000;
+/* one look may not run longer than this: a page that has died can leave
+ * an evaluate() hanging, and the check must come back for the next portal */
+const APPLE_TICK_CAP_MS = 25000;
+const isIcloud = (u) => typeof u === "string" && /^https:\/\/[^/]*icloud-content\.com\//i.test(u);
 
 /* one-shot JSON GET; resolves null on transport failure, like fleet's */
 function getJson(url) {
@@ -111,6 +132,143 @@ class PaintedWorker extends DisplayWorker {
       this.closeIfUnwatched();
       this.recycleIfOld();
     }, IDLE_SWEEP_MS);
+    if (APPLE_WATCH) {
+      this.appleAsked = new Map(); /* widgetSettingId -> when a refetch was last asked for */
+      this.appleWatchTimer = setInterval(() => this.appleAlbumTick(), APPLE_WATCH_MS + (this.hash() % 5000));
+    }
+  }
+
+  /* One look at the portal's Apple albums: ask for a refetch where the
+   * links are 18 minutes old, and publish any list that differs from the
+   * one on disk. Never while a render, a gesture or a queued capture is
+   * in flight - a capture reads the album itself. */
+  appleQuiet() {
+    if (this.stopped || !this.portal || !this.portal.ready || !this.portal.page) return false;
+    if (this.rendering || this.interacting || this.pendingRender) return false;
+    if (this.captureQueue.size || this.captureTimer) return false;
+    return true;
+  }
+
+  async appleAlbumTick() {
+    if (!this.appleQuiet() || this.appleTicking) return;
+    this.appleTicking = true;
+    let cap = null;
+    try {
+      await Promise.race([
+        this.appleAlbumLook(),
+        new Promise((_, reject) => {
+          cap = setTimeout(() => reject(new Error("no answer from the portal in " + APPLE_TICK_CAP_MS / 1000 + "s")), APPLE_TICK_CAP_MS);
+        }),
+      ]);
+    } catch (e) {
+      /* a portal closing under the look is ordinary; say anything else,
+       * but not every 30 seconds */
+      const quiet = /Target closed|has been closed|Target crashed|Execution context was destroyed|browser has disconnected/i.test(e.message || "");
+      if (!quiet && Date.now() - (this.appleComplainedAt || 0) > 10 * 60 * 1000) {
+        this.appleComplainedAt = Date.now();
+        this.log("apple album check failed:", e.message);
+      }
+    } finally {
+      clearTimeout(cap);
+      this.appleTicking = false;
+    }
+  }
+
+  async appleAlbumLook() {
+    const page = this.portal.page;
+    const frame = portalFrameOf(page);
+    if (!frame) return;
+    /* the portal this look began on: a reopened one starts over */
+    const same = () => this.appleQuiet() && this.portal.page === page;
+    const read = async () => {
+      const all = await frame.evaluate(nativeWidgets.readSlideshowsInPage, {
+        maxImages: nativeWidgets.MAX_ROTATION_IMAGES,
+        appleOnly: true,
+      });
+      const byId = new Map();
+      (all || []).forEach((o) => {
+        if (o && o.apple && !byId.has(o.widgetSettingId)) byId.set(o.widgetSettingId, o);
+      });
+      return byId;
+    };
+    let albums = await read();
+    if (!albums.size) return;
+    const now = Date.now();
+    const due = [];
+    albums.forEach((o, id) => {
+      const a = o.apple;
+      if (!a.valid || !a.at) return;
+      if (a.ageMs < APPLE_REFRESH_MS + (a.pending ? APPLE_PORTAL_GRACE_MS : 0)) return;
+      if (now - (this.appleAsked.get(id) || 0) < APPLE_RETRY_MS) return;
+      due.push(id);
+    });
+    if (due.length) {
+      const before = new Map(due.map((id) => [id, albums.get(id).apple.at]));
+      due.forEach((id) => this.appleAsked.set(id, now));
+      const asked = await frame.evaluate(nativeWidgets.refreshAppleAlbumsInPage, due);
+      this.log(
+        "apple album: links are " +
+          Math.round(Math.max(...due.map((id) => albums.get(id).apple.ageMs)) / 60000) +
+          " min old - asked the portal to refetch widget(s) " + (asked || []).join(","),
+      );
+      /* the refetch took about a second when watched on production */
+      for (let i = 0; i < 15; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (!same()) return;
+        albums = await read();
+        const waiting = (asked || []).filter((id) => albums.has(id) && albums.get(id).apple.at === before.get(id));
+        if (!waiting.length) break;
+        if (i === 14) this.log("apple album: no new list after 15s for widget(s) " + waiting.join(","));
+      }
+    }
+    if (!same()) return;
+    await this.publishAppleAlbums(albums);
+  }
+
+  /* Swap the photo list of each Apple slideshow overlay in the page
+   * manifests on disk and publish. The photos are drawn by the device,
+   * so nothing has to be rendered: this is a manifest and nothing else. */
+  async publishAppleAlbums(albums) {
+    let man0;
+    try {
+      man0 = JSON.parse(fs.readFileSync(this.manifestFor(this.pageFile(0)), "utf8"));
+    } catch (e) {
+      return; /* nothing published yet: the first capture carries the album */
+    }
+    const pageCount = (man0.pageMeta && man0.pageMeta.pageCount) || 1;
+    const changed = [];
+    for (let i = 0; i < pageCount; i++) {
+      const file = this.manifestFor(this.pageFile(i));
+      let m;
+      try {
+        m = JSON.parse(fs.readFileSync(file, "utf8"));
+      } catch (e) {
+        continue;
+      }
+      let touched = false;
+      m.overlays = (m.overlays || []).map((o) => {
+        const fresh = o && o.type === "slideshow" ? albums.get(o.widgetSettingId) : null;
+        if (!fresh || !fresh.images || !fresh.images.length) return o;
+        const next = nativeWidgets.lonePhotoAsPair({
+          ...o,
+          images: fresh.images,
+          intervalSeconds: fresh.intervalSeconds,
+          transition: fresh.transition,
+        });
+        /* judged on the iCloud links alone: a widget that also draws
+         * from another source has a queue that changes with every slide,
+         * and that is the scheduled capture's business, not this one's */
+        const links = (l) => JSON.stringify((l || []).filter(isIcloud));
+        if (links(next.images) === links(o.images)) return o;
+        touched = true;
+        changed.push(o.widgetSettingId + " (" + fresh.images.length + " photos, page " + i + ")");
+        return next;
+      });
+      if (touched) fs.writeFileSync(file, JSON.stringify(m, null, 1));
+    }
+    if (!changed.length) return;
+    this.log("apple album: new links for widget " + changed.join(", ") + " - publishing the manifest");
+    await this.publishFromDisk("data update");
   }
 
   /* A live portal is a browser tab kept open for as long as a TV is
@@ -997,6 +1155,7 @@ class PaintedWorker extends DisplayWorker {
   async stop(why) {
     if (this.portalIdleSweep) clearInterval(this.portalIdleSweep);
     if (this.captureTimer) clearTimeout(this.captureTimer);
+    if (this.appleWatchTimer) clearInterval(this.appleWatchTimer);
     if (this.portal) await this.portal.close(why).catch(() => {});
     this.portal = null;
     return super.stop(why);

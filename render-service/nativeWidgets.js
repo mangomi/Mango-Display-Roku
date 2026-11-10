@@ -3704,6 +3704,201 @@ function lonePhotoAsPair(o) {
   return o;
 }
 
+/* ---- iCloud shared albums -------------------------------------------------
+ * The portal keeps TWO lists per image widget: `images`, a shuffled QUEUE
+ * it splices a photo out of each time one is shown, and - for Apple
+ * widgets - `appleImage`, the whole album as last fetched. iCloud links
+ * are signed for exactly 20 minutes, so the portal empties the queue once
+ * the fetch is 18 minutes old and refetches one slide later
+ * (mainController changeImageWidget, `minutesDifference >= 18`).
+ *
+ * Until 2026-11-09 this handler shipped the QUEUE. The 18-minute check
+ * only runs for a widget on the page being SHOWN, and a painted portal
+ * is parked on whichever page was captured last - so on a two-page
+ * display the scheduled capture turned to page 0 twenty minutes after
+ * the last fetch, the portal emptied the queue in that instant, and the
+ * extractor read it empty: one expired photo, every capture, for hours
+ * (ET213776685, production; the refetch landed seconds later, after the
+ * shutter, and was thrown away the same way twenty minutes on).
+ *
+ * Now an Apple widget ships its ALBUM. The order is shuffled with a seed
+ * taken from the fetch time, so one fetch always produces the same list
+ * (a capture between two fetches republishes an unchanged overlay) and a
+ * new fetch produces a new order. The painted worker runs the portal's
+ * 18-minute rule for every Apple widget on every page (appleAlbumTick)
+ * and publishes the new links as they arrive.
+ *
+ * Both functions below run INSIDE the page: they are serialized by
+ * evaluate(), so they must not reference anything outside themselves.
+ *
+ * appleOnly is the worker's 30-second look: Apple widgets only, MainCtrl's
+ * scope looked up directly and nothing measured - a scope walk plus a
+ * forced layout in every portal on a short timer is what tripled the
+ * fleet's idle CPU on 2026-09-11 (see livePortal's photo collector). */
+function readSlideshowsInPage(opts) {
+  const maxImages = opts.maxImages;
+  const appleOnly = opts.appleOnly === true;
+  if (!window.angular) return [];
+  const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
+  let list = null;
+  if (appleOnly) {
+    const ctl = document.querySelector('[ng-controller="MainCtrl"]');
+    const sc = ctl ? window.angular.element(ctl).scope() : null;
+    if (!sc || !sc.imageWidgetList) return [];
+    list = sc.imageWidgetList;
+  }
+  for (const r of roots) {
+    if (list) break;
+    if (!r) continue;
+    const inj = window.angular.element(r).injector();
+    if (!inj) continue;
+    const walk = (s) => {
+      if (!s || list) return;
+      if (s.imageWidgetList) {
+        list = s.imageWidgetList;
+        return;
+      }
+      walk(s.$$childHead);
+      walk(s.$$nextSibling);
+    };
+    walk(inj.get("$rootScope"));
+    break;
+  }
+  const isIcloud = (u) => {
+    try {
+      return /(^|\.)icloud-content\.com$/i.test(new URL(u).hostname);
+    } catch (e) {
+      return false;
+    }
+  };
+  /* Fisher-Yates over a small seeded generator (mulberry32) */
+  const shuffled = (arr, seed) => {
+    const a = arr.slice();
+    let t = seed >>> 0;
+    const rnd = () => {
+      t = (t + 0x6d2b79f5) >>> 0;
+      let x = Math.imul(t ^ (t >>> 15), t | 1);
+      x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+    };
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      const v = a[i];
+      a[i] = a[j];
+      a[j] = v;
+    }
+    return a;
+  };
+  const out = [];
+  (list || []).forEach((d) => {
+    try {
+      const ws = d.widgetSetting || {};
+      const iws = (ws.data && ws.data.imageWidgetSetting) || {};
+      if (appleOnly && !(iws.isAppleImage && Array.isArray(d.appleImage) && d.appleImage.length)) return;
+      /* The portal SPLICES a photo out of d.images as it shows it
+       * and keeps it in lastRenderedImage; a one-photo widget
+       * therefore has an EMPTY list once shown (My Files widget on
+       * the Apple TV Spike, 2026-09-21: no overlay at all). Put the
+       * shown photo first, as the background handler does. */
+      const queue = (() => {
+        const list = (d.images || []).slice();
+        const shown = d.lastRenderedImage;
+        if (typeof shown === "string" && shown && !list.includes(shown)) list.unshift(shown);
+        return list;
+      })();
+      let images = queue.slice(0, maxImages);
+      let apple = null;
+      const album = (Array.isArray(d.appleImage) ? d.appleImage : []).filter((u) => typeof u === "string" && u);
+      if (iws.isAppleImage && iws.appleAccessToken != null && album.length) {
+        const stamp = d.appleImageLastAccessTime;
+        const at = stamp && typeof stamp.valueOf === "function" ? Number(stamp.valueOf()) || 0 : 0;
+        /* a widget may mix sources: keep what is not Apple's from the
+         * queue, drop iCloud links left over from an earlier fetch */
+        const others = queue.filter((u) => typeof u === "string" && u && !isIcloud(u) && !album.includes(u));
+        images = shuffled(album.concat(others), (at % 4294967296) ^ (parseInt(d.widgetId, 10) || 0)).slice(0, maxImages);
+        apple = {
+          at,
+          ageMs: at ? Date.now() - at : 0,
+          count: album.length,
+          valid: d.isAppleAccessStillValid !== false,
+          /* the portal has already emptied the queue and its own
+           * refetch is on a timer */
+          pending: d.isInitialCallHappened === false && (d.images || []).length === 0,
+        };
+      }
+      (d.pagenumber || []).forEach((pg) => {
+        const el = appleOnly ? null : document.getElementById("img_" + d.widgetId + "_" + pg + "_1");
+        let rect = null;
+        if (el) {
+          const r = el.getBoundingClientRect();
+          if (r.width >= 20 && r.height >= 20) rect = { x: r.x, y: r.y, w: r.width, h: r.height };
+        }
+        out.push({
+          type: "slideshow",
+          widgetSettingId: d.widgetId,
+          page: parseInt(pg, 10),
+          rect,
+          images,
+          intervalSeconds: parseInt(iws.imageDelayTime, 10) || 60,
+          cropToFill: iws.isCropToFill === true,
+          transition: iws.transition || "fade",
+          /* the portal draws the layer with filter: brightness(n); the
+           * device dims the same way (Roku: SlideshowOverlay blend).
+           * Never shipped for image widgets until 2026-09-16 - every
+           * slideshow arrived at full brightness (Apple TV Spike page
+           * 2, set to 0.4). Backgrounds already carried it. */
+          brightness: typeof iws.imageBrightness === "number" ? iws.imageBrightness : 1,
+          apple,
+        });
+      });
+    } catch (e) {}
+  });
+  return out;
+}
+
+/* The portal's own >= 18-minute branch of changeImageWidget, for the
+ * widgets named, without its one-slide wait before the refetch (a slide
+ * longer than two minutes would let the links lapse first). Returns the
+ * ids it asked for. */
+function refreshAppleAlbumsInPage(ids) {
+  const asked = [];
+  if (!window.angular) return asked;
+  const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
+  let sc = null;
+  let inj = null;
+  for (const r of roots) {
+    if (!r) continue;
+    inj = window.angular.element(r).injector();
+    if (!inj) continue;
+    const walk = (s) => {
+      if (!s || sc) return;
+      if (s.imageWidgetList) {
+        sc = s;
+        return;
+      }
+      walk(s.$$childHead);
+      walk(s.$$nextSibling);
+    };
+    walk(inj.get("$rootScope"));
+    break;
+  }
+  if (!sc || !inj || typeof sc.refreshImageWidgetDataInternally !== "function") return asked;
+  const $interval = inj.get("$interval");
+  const $timeout = inj.get("$timeout");
+  (sc.imageWidgetList || []).forEach((d) => {
+    if (!d || ids.indexOf(d.widgetId) < 0) return;
+    if (d.isAppleAccessStillValid === false) return;
+    if (Array.isArray(d.images)) d.images.length = 0;
+    if (d.intervalObject != null) $interval.cancel(d.intervalObject);
+    d.isInitialCallHappened = false;
+    d.pageCheck = false;
+    d.intervalObject = null;
+    $timeout(() => sc.refreshImageWidgetDataInternally(d), 0);
+    asked.push(d.widgetId);
+  });
+  return asked;
+}
+
 const slideshowHandler = {
   type: "slideshow",
 
@@ -3712,67 +3907,15 @@ const slideshowHandler = {
      * inside the page (2026-09-02: referencing it threw
      * "MAX_ROTATION_IMAGES is not defined" in the browser and killed
      * the whole handler) */
-    const raw = await frame.evaluate((maxImages) => {
-      if (!window.angular) return [];
-      const roots = [document.querySelector("[ng-app]"), document.body, document.documentElement];
-      let list = null;
-      for (const r of roots) {
-        if (!r) continue;
-        const inj = window.angular.element(r).injector();
-        if (!inj) continue;
-        const walk = (s) => {
-          if (!s || list) return;
-          if (s.imageWidgetList) {
-            list = s.imageWidgetList;
-            return;
-          }
-          walk(s.$$childHead);
-          walk(s.$$nextSibling);
-        };
-        walk(inj.get("$rootScope"));
-        break;
-      }
-      const out = [];
-      (list || []).forEach((d) => {
-        try {
-          const ws = d.widgetSetting || {};
-          const iws = (ws.data && ws.data.imageWidgetSetting) || {};
-          (d.pagenumber || []).forEach((pg) => {
-            const el = document.getElementById("img_" + d.widgetId + "_" + pg + "_1");
-            if (!el) return;
-            const r = el.getBoundingClientRect();
-            if (r.width < 20 || r.height < 20) return;
-            out.push({
-              type: "slideshow",
-              widgetSettingId: d.widgetId,
-              page: parseInt(pg, 10),
-              rect: { x: r.x, y: r.y, w: r.width, h: r.height },
-              /* The portal SPLICES a photo out of d.images as it shows it
-               * and keeps it in lastRenderedImage; a one-photo widget
-               * therefore has an EMPTY list once shown (My Files widget on
-               * the Apple TV Spike, 2026-09-21: no overlay at all). Put the
-               * shown photo first, as the background handler does. */
-              images: (() => {
-                const list = (d.images || []).slice();
-                const shown = d.lastRenderedImage;
-                if (typeof shown === "string" && shown && !list.includes(shown)) list.unshift(shown);
-                return list.slice(0, maxImages);
-              })(),
-              intervalSeconds: parseInt(iws.imageDelayTime, 10) || 60,
-              cropToFill: iws.isCropToFill === true,
-              transition: iws.transition || "fade",
-              /* the portal draws the layer with filter: brightness(n); the
-               * device dims the same way (Roku: SlideshowOverlay blend).
-               * Never shipped for image widgets until 2026-09-16 - every
-               * slideshow arrived at full brightness (Apple TV Spike page
-               * 2, set to 0.4). Backgrounds already carried it. */
-              brightness: typeof iws.imageBrightness === "number" ? iws.imageBrightness : 1,
-            });
-          });
-        } catch (e) {}
+    const all = await frame.evaluate(readSlideshowsInPage, { maxImages: MAX_ROTATION_IMAGES });
+    /* only what is drawn on a page becomes an overlay; `apple` is the
+     * painted worker's bookkeeping and never ships */
+    const raw = (all || [])
+      .filter((o) => o.rect)
+      .map((o) => {
+        const { apple, ...overlay } = o;
+        return overlay;
       });
-      return out;
-    }, MAX_ROTATION_IMAGES);
     /* One photo counts. BLOCKED_MEDIA stops the portal loading ANY
      * user photo, so a widget skipped here is not "left baked" - it is
      * left EMPTY on the TV. Single-image widgets used to fall through
@@ -4994,6 +5137,11 @@ module.exports = {
   extractTargets,
   extractRegions,
   hideTargets,
+  /* iCloud albums: the painted worker's 18-minute refresh (appleAlbumTick) */
+  readSlideshowsInPage,
+  refreshAppleAlbumsInPage,
+  lonePhotoAsPair,
+  MAX_ROTATION_IMAGES,
   handlers: [
     cellScrollHandler,
     clockHandler,

@@ -81,9 +81,21 @@ const APPLE_WATCH_MS = 30000;
 /* a refetch that changed nothing (token being renewed, a failed call) is
  * not asked for again sooner than this */
 const APPLE_RETRY_MS = 3 * 60 * 1000;
-/* the portal has already emptied the list itself and refetches one slide
- * later: give it this long before stepping in */
-const APPLE_PORTAL_GRACE_MS = 30000;
+/* The portal has already emptied the list itself and refetches one slide
+ * later. A slide this short or shorter: leave it to the portal - its own
+ * call is at most this far away, and asking as well means two fetches and
+ * two manifests seconds apart. A longer slide: ask now. Until 2026-11-10
+ * this was a flat 30s wait before stepping in, which on an album whose
+ * fetch takes ~50s (RK268288529) delivered the new links 10 seconds
+ * before the old ones lapsed. */
+const APPLE_PORTAL_OWN_MAX_S = 30;
+/* ...and if the portal's own call has still not landed by now, ask anyway */
+const APPLE_PORTAL_LATE_MS = 19 * 60 * 1000;
+/* An album that arrived after the capture was taken has no overlay to
+ * put its links in. One capture of that page is asked for, and not again
+ * for the same widget and page sooner than this (the scheduled capture
+ * comes round by then anyway). */
+const APPLE_CAPTURE_RETRY_MS = 20 * 60 * 1000;
 /* one look may not run longer than this: a page that has died can leave
  * an evaluate() hanging, and the check must come back for the next portal */
 const APPLE_TICK_CAP_MS = 25000;
@@ -134,6 +146,7 @@ class PaintedWorker extends DisplayWorker {
     }, IDLE_SWEEP_MS);
     if (APPLE_WATCH) {
       this.appleAsked = new Map(); /* widgetSettingId -> when a refetch was last asked for */
+      this.appleCaptureAsked = new Map(); /* "widgetSettingId:page" -> when a capture was last asked for */
       this.appleWatchTimer = setInterval(() => this.appleAlbumTick(), APPLE_WATCH_MS + (this.hash() % 5000));
     }
   }
@@ -180,6 +193,7 @@ class PaintedWorker extends DisplayWorker {
     if (!frame) return;
     /* the portal this look began on: a reopened one starts over */
     const same = () => this.appleQuiet() && this.portal.page === page;
+    let entries = []; /* one per Apple widget and page, from the last read */
     const read = async () => {
       const all = await frame.evaluate(nativeWidgets.readSlideshowsInPage, {
         maxImages: nativeWidgets.MAX_ROTATION_IMAGES,
@@ -189,6 +203,7 @@ class PaintedWorker extends DisplayWorker {
       (all || []).forEach((o) => {
         if (o && o.apple && !byId.has(o.widgetSettingId)) byId.set(o.widgetSettingId, o);
       });
+      entries = (all || []).filter((o) => o && o.apple);
       return byId;
     };
     let albums = await read();
@@ -198,7 +213,8 @@ class PaintedWorker extends DisplayWorker {
     albums.forEach((o, id) => {
       const a = o.apple;
       if (!a.valid || !a.at) return;
-      if (a.ageMs < APPLE_REFRESH_MS + (a.pending ? APPLE_PORTAL_GRACE_MS : 0)) return;
+      if (a.ageMs < APPLE_REFRESH_MS) return;
+      if (a.pending && o.intervalSeconds <= APPLE_PORTAL_OWN_MAX_S && a.ageMs < APPLE_PORTAL_LATE_MS) return;
       if (now - (this.appleAsked.get(id) || 0) < APPLE_RETRY_MS) return;
       due.push(id);
     });
@@ -223,6 +239,67 @@ class PaintedWorker extends DisplayWorker {
     }
     if (!same()) return;
     await this.publishAppleAlbums(albums);
+    if (!same()) return;
+    await this.captureUndrawnAlbums(frame, entries);
+  }
+
+  /* The startup gap: a portal's first capture is taken a few seconds
+   * after it is ready, and an album whose fetch is slower than that is
+   * not there yet - no photos, so no overlay, and nothing asked for
+   * another capture until the scheduled one twenty minutes later
+   * (RK741124525, production, 2026-11-10: no slideshow from 20:10 to
+   * 20:30Z after a scale-in moved it). So: an album the portal now holds,
+   * a drawn widget for it on a page, and no slideshow overlay for it in
+   * that page's manifest - capture that page. Background work: no
+   * spinner, no page steering. */
+  async captureUndrawnAlbums(frame, entries) {
+    let pageCount = 0;
+    try {
+      const man0 = JSON.parse(fs.readFileSync(this.manifestFor(this.pageFile(0)), "utf8"));
+      pageCount = (man0.pageMeta && man0.pageMeta.pageCount) || 1;
+    } catch (e) {
+      return; /* nothing published yet */
+    }
+    const shown = new Map(); /* page -> ids with a slideshow overlay, or null if the page has no manifest */
+    const overlaysOf = (i) => {
+      if (!shown.has(i)) {
+        try {
+          const m = JSON.parse(fs.readFileSync(this.manifestFor(this.pageFile(i)), "utf8"));
+          shown.set(i, new Set((m.overlays || []).filter((o) => o && o.type === "slideshow").map((o) => o.widgetSettingId)));
+        } catch (e) {
+          shown.set(i, null);
+        }
+      }
+      return shown.get(i);
+    };
+    const now = Date.now();
+    const cands = [];
+    (entries || []).forEach((o) => {
+      if (!o.images || !o.images.length) return;
+      if (!(o.page >= 0 && o.page < pageCount)) return;
+      const on = overlaysOf(o.page);
+      if (!on || on.has(o.widgetSettingId)) return;
+      const key = o.widgetSettingId + ":" + o.page;
+      if (now - (this.appleCaptureAsked.get(key) || 0) < APPLE_CAPTURE_RETRY_MS) return;
+      cands.push({ id: o.widgetSettingId, page: o.page });
+    });
+    if (!cands.length) return;
+    const drawn = await frame.evaluate(nativeWidgets.slideshowDrawnInPage, cands);
+    const key = (c) => c.id + ":" + c.page;
+    const drawnKeys = new Set((drawn || []).map(key));
+    /* a widget with no box on its page never gets an overlay: do not
+     * measure it again on every look */
+    cands.forEach((c) => {
+      if (!drawnKeys.has(key(c))) this.appleCaptureAsked.set(key(c), now);
+    });
+    if (!drawnKeys.size || !this.appleQuiet()) return;
+    drawn.forEach((c) => this.appleCaptureAsked.set(key(c), now));
+    const pages = [...new Set(drawn.map((c) => c.page))];
+    this.log(
+      "apple album: widget(s) " + drawn.map((c) => c.id).join(",") +
+        " have their album but no slideshow on page(s) " + pages.join(",") + " - capturing",
+    );
+    for (const pg of pages) this.queueCapture(pg, "data update");
   }
 
   /* Swap the photo list of each Apple slideshow overlay in the page

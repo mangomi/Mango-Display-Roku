@@ -3899,6 +3899,18 @@ function refreshAppleAlbumsInPage(ids) {
   return asked;
 }
 
+/* Which of these { id, page } image widgets have a drawn box on their
+ * page - the same test the extractor applies before it makes an overlay.
+ * Runs inside the page, for the few candidates the worker names. */
+function slideshowDrawnInPage(cands) {
+  return (cands || []).filter((c) => {
+    const el = document.getElementById("img_" + c.id + "_" + c.page + "_1");
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return r.width >= 20 && r.height >= 20;
+  });
+}
+
 const slideshowHandler = {
   type: "slideshow",
 
@@ -5140,6 +5152,7 @@ module.exports = {
   /* iCloud albums: the painted worker's 18-minute refresh (appleAlbumTick) */
   readSlideshowsInPage,
   refreshAppleAlbumsInPage,
+  slideshowDrawnInPage,
   lonePhotoAsPair,
   MAX_ROTATION_IMAGES,
   handlers: [

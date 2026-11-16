@@ -216,6 +216,7 @@ exports.handler = async (envelope) => {
         return await onUserEvent(envelope);
       case "IntentRequest": {
         const name = req.intent.name;
+        console.log("[Mango] voice " + name + " " + echoOf(envelope).code + " session=" + String(envelope.session && envelope.session.new ? "new" : "open"));
         if (name === "AMAZON.StopIntent" || name === "AMAZON.CancelIntent" || name === "AMAZON.NavigateHomeIntent" ||
             name === "AMAZON.NoIntent") return respond({ end: true });
         if (name === "AMAZON.HelpIntent") {

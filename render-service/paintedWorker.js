@@ -383,6 +383,23 @@ class PaintedWorker extends DisplayWorker {
       });
   }
 
+  /* Is this worker's portal on its way up? The fleet's admission check
+   * asks, so a task takes few new displays while browsers are booting.
+   * A parked worker is NOT booting: closeIfUnwatched shut its portal
+   * because the TV went quiet, and the worker then lingers for half an
+   * hour with no portal at all. Counted as booting, four switched-off
+   * TVs closed a task to every new display - three of five production
+   * tasks refused for a quarter of an hour that way while nothing was
+   * booting (2026-11-20). So: an open in flight counts, and so does a
+   * worker whose TV is polling but has no ready portal yet (just
+   * claimed, between a close and its reopen, or backed off). */
+  booting() {
+    if (this.stopped) return false;
+    if (this.portal && this.portal.ready) return false;
+    if (this.portalOpening) return true;
+    return Date.now() - this.lastSeen < PORTAL_IDLE_MS;
+  }
+
   /* The app stopped polling: close the portal, which also hands the
    * display's socket back. Cheap to reopen, and it means a powered-off TV
    * costs nothing. */

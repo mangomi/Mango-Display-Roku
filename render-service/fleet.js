@@ -454,9 +454,10 @@ function bootingCount() {
   let n = 0;
   for (const w of workers.values()) {
     if (w.stopped) continue;
-    /* a painted worker with no ready portal is still booting; the old
+    /* a painted worker says whether its portal is on its way up (a
+     * parked one, its TV off and its portal closed, is not); the old
      * pipeline's workers have no portal at all and never count */
-    if ("portal" in w && (!w.portal || !w.portal.ready)) n++;
+    if (typeof w.booting === "function" && w.booting()) n++;
   }
   return n;
 }

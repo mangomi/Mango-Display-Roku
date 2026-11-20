@@ -1131,6 +1131,19 @@ class PaintedWorker extends DisplayWorker {
   /* the scheduled catch-up: cheap insurance against a signal we never got */
   async doRender(reason) {
     if (!this.portal || !this.portal.ready) {
+      /* Nobody is watching: the portal stays closed. closeIfUnwatched
+       * shut it because the TV went quiet, and the twenty-minute and
+       * midnight timers used to boot a browser here only for the idle
+       * sweep to close it again half a minute later - about 800 of
+       * production's 3,300 portal boots a day (2026-11-20), each one CPU
+       * and a booting slot that the task's admission check then held
+       * against displays somebody was actually waiting on. Nothing is
+       * owed to a TV that is off: its next poll opens the portal
+       * (handleWait), and a fresh portal captures every page. */
+      const quiet = Date.now() - this.lastSeen;
+      if (quiet >= PORTAL_IDLE_MS) {
+        return this.log("catch-up (" + reason + ") skipped - no device contact for " + Math.round(quiet / 1000) + "s, the portal stays closed");
+      }
       try {
         await this.openPortal();
         return;

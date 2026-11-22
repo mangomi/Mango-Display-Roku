@@ -63,6 +63,9 @@ const CAPTURE_HOLD_MS = 240000;
  * go with it. It reopens on the next poll. */
 const PORTAL_IDLE_MS = parseInt(process.env.PORTAL_IDLE_MS || "180000", 10);
 const IDLE_SWEEP_MS = 30000;
+/* a display's canvas follows the screen size its device reports, at most
+ * this often - see noteDeviceSize */
+const SIZE_CHANGE_GAP_MS = parseInt(process.env.SIZE_CHANGE_GAP_MS || "60000", 10);
 /* how long a live portal may run before it is reopened fresh - see
  * recycleIfOld. Per task: one reopen at a time, spaced. */
 const PORTAL_MAX_AGE_MS = parseInt(process.env.PORTAL_MAX_AGE_MS || String(12 * 3600 * 1000), 10);
@@ -492,6 +495,48 @@ class PaintedWorker extends DisplayWorker {
     return this.portalReopen;
   }
 
+  /* The device says how big its screen is on every poll, and that used
+   * to be read once, when the worker was built. An Echo Show that was
+   * upright at its first launch and landscape at the next kept its
+   * portrait canvas - a strip down the middle of the screen - until the
+   * worker happened to be rebuilt by half an hour of silence or a deploy
+   * (ET975358393, production, 2026-11-22). So a poll that reports a
+   * different screen changes the working geometry here, through the same
+   * applyOrientation the orientation setting uses, and says whether the
+   * canvas changed; handleWait then reopens the portal at it.
+   *
+   * Not while a portal is booting (closing a browser under its own boot
+   * is a failed open and a back-off) and, unless the app just launched
+   * and is reloading the portal anyway, not while a capture is in flight:
+   * the next poll carries the size again. At most one change per
+   * SIZE_CHANGE_GAP_MS, so a device that cannot make up its mind costs
+   * one portal boot a minute, not one per poll. Roku and Apple TV send
+   * one size for a whole session, so for them this never fires. */
+  noteDeviceSize(w, h, launching) {
+    if (this.stopped || !(w >= 200 && h >= 200 && w <= 8192 && h <= 8192)) return false;
+    const dev = this.deviceOut;
+    if (w === dev.w && h === dev.h) return false;
+    if (this.portalOpening || (this.portal && !this.portal.ready)) return false;
+    if (!launching && (this.rendering || this.pendingRender)) return false;
+    const now = Date.now();
+    if (now - (this.sizeChangedAt || 0) < SIZE_CHANGE_GAP_MS) {
+      if (now - (this.sizeHeldLogAt || 0) >= SIZE_CHANGE_GAP_MS) {
+        this.sizeHeldLogAt = now;
+        this.log("device reports " + w + "x" + h + " but its size changed " + Math.round((now - this.sizeChangedAt) / 1000) + "s ago - holding " + dev.w + "x" + dev.h + " for now");
+      }
+      return false;
+    }
+    this.sizeChangedAt = now;
+    this.deviceOut = { w, h };
+    const changed = this.applyOrientation(this.orientation);
+    const d = this.display;
+    this.log(
+      "device now reports " + w + "x" + h + " (was " + dev.w + "x" + dev.h + ") - canvas " + d.canvasW + "x" + d.canvasH +
+        ", rotation " + d.rotation + (changed ? "" : " (geometry unchanged)"),
+    );
+    return changed;
+  }
+
   /* Any device contact means a TV is watching: make sure the portal is
    * up. handleWait runs on every poll, so this is the reopen path too. */
   handleWait(u, res, req) {
@@ -527,6 +572,13 @@ class PaintedWorker extends DisplayWorker {
         this.interacting = true;
       }
     }
+    /* before the portal is looked at: one opened below must be opened at
+     * the screen the device has now */
+    const resized = this.noteDeviceSize(
+      parseInt(u.searchParams.get("w") || "0", 10),
+      parseInt(u.searchParams.get("h") || "0", 10),
+      launchFresh,
+    );
     if (!this.portal) {
       /* cold launch: the portal was closed (app off for more than a few
        * minutes). The reload it is about to announce IS this launch, so
@@ -543,6 +595,17 @@ class PaintedWorker extends DisplayWorker {
           }
         });
       }
+    } else if (resized) {
+      /* a ready portal at the old size (noteDeviceSize refuses while one
+       * is booting): reopen it at the new one, and a fresh portal captures
+       * every page. On a launch poll this IS the launch's reload. */
+      if (launchFresh) this.launchReload = true;
+      this.log("reopening the portal at the device's new size");
+      this.reopenPortal("device size change").catch((e) => {
+        this.log("reopen for the new device size failed:", e.message);
+        this.launchReload = false;
+        this.queueCapture(null, launchFresh ? "app launch" : "device size change");
+      });
     } else if (launchFresh && (this.portalOpening || !this.portal.ready)) {
       /* the portal is still booting for an earlier poll: reloading it
        * now would close the browser under that boot ("Target page,

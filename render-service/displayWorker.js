@@ -74,6 +74,7 @@ class DisplayWorker {
    * geometry changed, so a live portal knows to reopen. */
   applyOrientation(orientation) {
     const o = parseInt(orientation, 10) || 0;
+    this.orientation = o; /* kept: a new device size is applied to the same setting (noteDeviceSize) */
     const rotation = o === 1 || o === 90 ? 90 : o === 2 || o === 270 ? 270 : 0;
     const turned = rotation !== 0;
     /* The canvas is the screen the device reports, AS REPORTED, so the
